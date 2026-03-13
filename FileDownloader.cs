@@ -63,7 +63,7 @@ internal partial class FileDownloader : IDisposable
 
     private void LoadFilesMapping()
     {
-        var file = Path.Combine(AppContext.BaseDirectory, "files.json");
+        var file = "files.json";
         var files = JsonSerializer.Deserialize(File.ReadAllText(file), FileDownloaderContext.Default.DictionaryUInt32ListString);
         Debug.Assert(files != null);
 
