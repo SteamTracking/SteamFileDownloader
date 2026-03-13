@@ -1,7 +1,7 @@
 using System;
 using System.Buffers;
-using System.Collections.Frozen;
 using System.Collections.Concurrent;
+using System.Collections.Frozen;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -25,6 +25,7 @@ internal partial class FileDownloader : IDisposable
     {
         SomethingWentWrong,
         Success,
+        AlreadyValid,
         DownloadFailed,
     }
 
@@ -96,9 +97,6 @@ internal partial class FileDownloader : IDisposable
 
     public bool IsImportantDepot(uint depotID) => Files.ContainsKey(depotID);
 
-    /*
-     * Here be dragons.
-     */
     public async Task<EResult> DownloadFilesFromDepot(ManifestJob job, DepotManifest depotManifest)
     {
         Debug.Assert(depotManifest.Files != null);
@@ -124,11 +122,12 @@ internal partial class FileDownloader : IDisposable
         {
             var (fileState, finalPath) = await DownloadFile(job, file);
 
-            if (fileState is DownloadResult.Success)
+            if (fileState is DownloadResult.Success or DownloadResult.AlreadyValid)
             {
                 var done = Interlocked.Increment(ref downloadedFiles);
                 var remaining = totalFileCount - done;
-                Console.WriteLine($"[Depot {job.DepotID}] Downloaded {file.FileName} ({remaining} files left)");
+                var action = fileState is DownloadResult.AlreadyValid ? "Validated" : "Downloaded";
+                Console.WriteLine($"[Depot {job.DepotID}] {action} {file.FileName} ({remaining} files left)");
 
                 if (pakExtensions != default && finalPath.Name == PAK01_DIR)
                 {
@@ -140,7 +139,7 @@ internal partial class FileDownloader : IDisposable
                     }
                     catch (Exception e)
                     {
-                        Console.WriteLine($"[ERROR] Failed to parse VPK: {e.Message}");
+                        Program.LogWarn($"Failed to parse VPK: {e.Message}");
                         return;
                     }
 
@@ -153,7 +152,7 @@ internal partial class FileDownloader : IDisposable
 
                         if (archiveFile == default)
                         {
-                            Console.WriteLine($"[WARN] [Depot {job.DepotID}] Failed to find {archiveFileName}");
+                            Program.LogWarn($"[Depot {job.DepotID}] Failed to find {archiveFileName}");
                             continue;
                         }
 
@@ -178,7 +177,7 @@ internal partial class FileDownloader : IDisposable
             {
                 Interlocked.Exchange(ref downloadState, (int)DownloadResult.DownloadFailed);
             }
-            else if (fileState is DownloadResult.Success)
+            else if (fileState is DownloadResult.Success or DownloadResult.AlreadyValid)
             {
                 Interlocked.CompareExchange(ref downloadState, (int)DownloadResult.Success, (int)DownloadResult.SomethingWentWrong);
             }
@@ -237,6 +236,18 @@ internal partial class FileDownloader : IDisposable
             return (DownloadResult.Success, finalPath);
         }
 
+        // Skip download if existing file already matches expected hash
+        if (finalPath.Exists && finalPath.Length == (long)file.TotalSize)
+        {
+            await using var existingFs = finalPath.Open(FileMode.Open, FileAccess.Read);
+            var existingHash = await SHA1.HashDataAsync(existingFs, CancellationToken);
+
+            if (file.FileHash.SequenceEqual(existingHash))
+            {
+                return (DownloadResult.AlreadyValid, finalPath);
+            }
+        }
+
         var chunks = file.Chunks;
 
         await using (var fs = downloadPath.Open(FileMode.OpenOrCreate, FileAccess.ReadWrite))
@@ -260,7 +271,7 @@ internal partial class FileDownloader : IDisposable
 
                     if (!result)
                     {
-                        Console.WriteLine($"[WARN] [Depot {job.DepotID}] Failed to download chunk for {file.FileName} ({chunk.Offset})");
+                        Program.LogWarn($"[Depot {job.DepotID}] Failed to download chunk for {file.FileName} ({chunk.Offset})");
 
                         await chunkCancellation.CancelAsync();
                     }
@@ -284,7 +295,7 @@ internal partial class FileDownloader : IDisposable
 
         if (!file.FileHash.SequenceEqual(checksum))
         {
-            Console.WriteLine($"[ERROR] [Depot {job.DepotID}] Hash check failed for {file.FileName} ({job.Server})");
+            Program.LogWarn($"[Depot {job.DepotID}] Hash check failed for {file.FileName} ({job.Server})");
 
             downloadPath.Delete();
 
@@ -330,7 +341,7 @@ internal partial class FileDownloader : IDisposable
             }
             catch (Exception e)
             {
-                Console.WriteLine($"[WARN] [Depot {job.DepotID}] Chunk download error: {e.Message}");
+                Program.LogWarn($"[Depot {job.DepotID}] Chunk download error: {e.Message}");
 
                 if (i > 1 && e is SteamKitWebRequestException webRequestException && (int)webRequestException.StatusCode >= 500)
                 {

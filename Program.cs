@@ -14,8 +14,21 @@ namespace SteamFileDownloader;
 
 internal static partial class Program
 {
+    private static readonly bool IsCI = Environment.GetEnvironmentVariable("CI") != null;
     private static readonly List<Server> CDNServers = [];
     private static int NextCdnServer;
+
+    internal static void LogWarn(string message)
+    {
+        if (IsCI)
+        {
+            Console.Error.WriteLine($"::warning::{message}");
+        }
+        else
+        {
+            Console.Error.WriteLine($"[WARN] {message}");
+        }
+    }
 
     private static Server GetContentServer()
     {
@@ -33,7 +46,7 @@ internal static partial class Program
             }
         }
 
-        Console.WriteLine($"[WARN] Download failed from server {server}");
+        LogWarn($"Download failed from server {server}");
     }
 
     private static void Main(string[] args)
@@ -111,7 +124,7 @@ internal static partial class Program
 
         if (!await connectedTcs.Task)
         {
-            Console.WriteLine("[ERROR] Failed to connect to Steam.");
+            LogWarn("Failed to connect to Steam.");
             return 1;
         }
 
@@ -144,7 +157,7 @@ internal static partial class Program
             }
             catch (Exception e)
             {
-                Console.WriteLine($"[ERROR] Authentication failed: {e.Message}");
+                LogWarn($"Authentication failed: {e.Message}");
                 client.Disconnect();
                 return 1;
             }
@@ -163,7 +176,7 @@ internal static partial class Program
 
         if (logOnResult?.Result != EResult.OK)
         {
-            Console.WriteLine($"[ERROR] Failed to log on: {logOnResult?.Result}");
+            LogWarn($"Failed to log on: {logOnResult?.Result}");
             client.Disconnect();
             return 1;
         }
@@ -192,14 +205,14 @@ internal static partial class Program
         }
         catch (Exception e)
         {
-            Console.WriteLine($"[ERROR] Failed to get CDN servers: {e.Message}");
+            LogWarn($"Failed to get CDN servers: {e.Message}");
             client.Disconnect();
             return 1;
         }
 
         if (CDNServers.Count == 0)
         {
-            Console.WriteLine("[ERROR] No CDN servers available.");
+            LogWarn("No CDN servers available.");
             client.Disconnect();
             return 1;
         }
@@ -219,7 +232,7 @@ internal static partial class Program
 
         if (productInfo.Results == null || productInfo.Results.Count == 0 || !productInfo.Results[0].Apps.TryGetValue(appid, out var appInfo))
         {
-            Console.WriteLine("[ERROR] Failed to get app info.");
+            LogWarn("Failed to get app info.");
             client.Disconnect();
             return 1;
         }
@@ -228,7 +241,7 @@ internal static partial class Program
 
         if (depots == KeyValue.Invalid || depots.Children.Count == 0)
         {
-            Console.WriteLine("[ERROR] App has no depots.");
+            LogWarn("App has no depots.");
             client.Disconnect();
             return 1;
         }
@@ -292,7 +305,7 @@ internal static partial class Program
 
             if (manifestID == 0)
             {
-                Console.WriteLine($"[WARN] No manifest found for depot {depotID} on branch \"{branch}\"");
+                LogWarn($"No manifest found for depot {depotID} on branch \"{branch}\"");
                 continue;
             }
 
@@ -329,7 +342,7 @@ internal static partial class Program
 
                 if (keyResult.Result != EResult.OK)
                 {
-                    Console.WriteLine($"[WARN] No access to depot {job.DepotID} ({keyResult.Result})");
+                    LogWarn($"No access to depot {job.DepotID} ({keyResult.Result})");
                     continue;
                 }
 
@@ -337,7 +350,7 @@ internal static partial class Program
             }
             catch (TaskCanceledException)
             {
-                Console.WriteLine($"[WARN] Depot key request timed out for {job.DepotID}");
+                LogWarn($"Depot key request timed out for {job.DepotID}");
                 continue;
             }
 
@@ -359,14 +372,14 @@ internal static partial class Program
                 }
                 catch
                 {
-                    Console.WriteLine($"[WARN] Manifest request code timed out for depot {job.DepotID}");
+                    LogWarn($"Manifest request code timed out for depot {job.DepotID}");
                     continue;
                 }
             }
 
             if (manifestRequestCode == 0)
             {
-                Console.WriteLine($"[WARN] No manifest request code for depot {job.DepotID}");
+                LogWarn($"No manifest request code for depot {job.DepotID}");
                 continue;
             }
 
@@ -384,7 +397,7 @@ internal static partial class Program
                 }
                 catch (Exception e)
                 {
-                    Console.WriteLine($"[ERROR] Failed to download manifest for depot {job.DepotID} ({job.Server}: {e.Message}) (#{i})");
+                    LogWarn($"Failed to download manifest for depot {job.DepotID} ({job.Server}: {e.Message}) (#{i})");
 
                     MarkContentServerAsBad(job.Server);
 
@@ -398,7 +411,7 @@ internal static partial class Program
 
             if (depotManifest == null)
             {
-                Console.WriteLine($"[ERROR] Failed to download manifest for depot {job.DepotID} after all retries.");
+                LogWarn($"Failed to download manifest for depot {job.DepotID} after all retries.");
                 continue;
             }
 
@@ -429,7 +442,7 @@ internal static partial class Program
             }
             else
             {
-                Console.WriteLine($"[WARN] Depot {entry.Job.DepotID} download result: {result}");
+                LogWarn($"Depot {entry.Job.DepotID} download result: {result}");
             }
 
             return result;
