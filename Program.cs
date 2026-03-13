@@ -234,15 +234,17 @@ internal static partial class Program
         }
 
         // Log build ID for this branch
+        int? buildId = null;
         var branchesKv = depots["branches"];
 
         if (branchesKv != KeyValue.Invalid)
         {
             var branchInfoKv = branchesKv[branch];
 
-            if (branchInfoKv != KeyValue.Invalid && int.TryParse(branchInfoKv["buildid"].Value, out var buildID))
+            if (branchInfoKv != KeyValue.Invalid && int.TryParse(branchInfoKv["buildid"].Value, out var parsedBuildId))
             {
-                Console.WriteLine($"Branch \"{branch}\": build {buildID}");
+                buildId = parsedBuildId;
+                Console.WriteLine($"Branch \"{branch}\": build {parsedBuildId}");
             }
         }
 
@@ -435,6 +437,11 @@ internal static partial class Program
 
         var results = await Task.WhenAll(downloadTasks);
         var allSucceeded = results.All(r => r == EResult.OK);
+
+        if (allSucceeded && buildId.HasValue)
+        {
+            await File.WriteAllTextAsync(Path.Combine(outputPath, "steam_buildid.txt"), buildId.Value.ToString());
+        }
 
         Console.WriteLine();
         Console.WriteLine("Done.");
