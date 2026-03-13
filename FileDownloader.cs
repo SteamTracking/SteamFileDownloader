@@ -348,9 +348,18 @@ internal partial class FileDownloader : IDisposable
             {
                 Program.LogWarn($"[Depot {job.DepotID}] Chunk download error: {e.Message}");
 
-                if (i > 1 && e is SteamKitWebRequestException webRequestException && (int)webRequestException.StatusCode >= 500)
+                if (e is SteamKitWebRequestException webRequestException)
                 {
-                    MarkContentServerAsBad(job.Server!);
+                    if (webRequestException.StatusCode is System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden)
+                    {
+                        Program.LogWarn($"[Depot {job.DepotID}] Received {(int)webRequestException.StatusCode} from CDN, aborting");
+                        return false;
+                    }
+
+                    if (i > 1 && (int)webRequestException.StatusCode >= 500)
+                    {
+                        MarkContentServerAsBad(job.Server!);
+                    }
                 }
             }
 

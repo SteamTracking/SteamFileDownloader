@@ -400,6 +400,12 @@ internal static partial class Program
                 {
                     LogWarn($"Failed to download manifest for depot {job.DepotID} ({job.Server}: {e.Message}) (#{i})");
 
+                    if (e is SteamKitWebRequestException { StatusCode: System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden })
+                    {
+                        LogWarn($"Received 401/403 for depot {job.DepotID} manifest, skipping");
+                        break;
+                    }
+
                     MarkContentServerAsBad(job.Server);
 
                     if (i < 5)
