@@ -112,6 +112,11 @@ internal partial class FileDownloader : IDisposable
 
         Console.WriteLine($"[Depot {job.DepotID}] Will download {files.Count} files");
 
+        if (files.Count == 0 && pakExtensions == null)
+        {
+            return EResult.OK;
+        }
+
         var downloadedFiles = 0;
         var totalFileCount = files.Count;
         var fileTasks = new Task[files.Count];
