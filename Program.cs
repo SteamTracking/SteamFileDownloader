@@ -439,6 +439,7 @@ internal static partial class Program
         client.Disconnect();
 
         // Download files from all depots concurrently
+        var downloadTimer = Stopwatch.StartNew();
         var downloadTasks = depotManifests.Select(async entry =>
         {
             var result = await fileDownloader.DownloadFilesFromDepot(entry.Job, entry.Manifest);
@@ -464,7 +465,7 @@ internal static partial class Program
         }
 
         Console.WriteLine();
-        Console.WriteLine("Done.");
+        Console.WriteLine($"Done in {downloadTimer.Elapsed:hh\\:mm\\:ss}.");
 
         return allSucceeded ? 0 : 1;
     }
