@@ -284,21 +284,21 @@ internal static partial class Program
 
             var manifests = depot["manifests"];
             var manifestID = 0UL;
+            var manifestBranch = branch;
 
             if (manifests != KeyValue.Invalid)
             {
-                var branchKv = manifests[branch];
+                manifestID = GetManifestIdForBranch(manifests, branch);
 
-                if (branchKv != KeyValue.Invalid)
+                // If the requested branch has no manifest, fall back to public
+                if (manifestID == 0 && !string.Equals(branch, "public", StringComparison.OrdinalIgnoreCase))
                 {
-                    // Can be either direct value or have a "gid" child
-                    if (branchKv.Value != null)
+                    manifestID = GetManifestIdForBranch(manifests, "public");
+
+                    if (manifestID != 0)
                     {
-                        _ = ulong.TryParse(branchKv.Value, out manifestID);
-                    }
-                    else
-                    {
-                        _ = ulong.TryParse(branchKv["gid"].Value, out manifestID);
+                        manifestBranch = "public";
+                        Console.WriteLine($"Depot {depotID}: branch \"{branch}\" has no manifest, falling back to \"public\"");
                     }
                 }
             }
@@ -313,6 +313,7 @@ internal static partial class Program
             {
                 DepotID = depotID,
                 ManifestID = manifestID,
+                Branch = manifestBranch,
             });
 
             Console.WriteLine($"Found depot {depotID}: manifest {manifestID}");
@@ -359,7 +360,7 @@ internal static partial class Program
 
             try
             {
-                manifestRequestCode = await content.GetManifestRequestCode(job.DepotID, appid, job.ManifestID, branch);
+                manifestRequestCode = await content.GetManifestRequestCode(job.DepotID, appid, job.ManifestID, job.Branch);
             }
             catch
             {
@@ -368,7 +369,7 @@ internal static partial class Program
 
                 try
                 {
-                    manifestRequestCode = await content.GetManifestRequestCode(job.DepotID, appid, job.ManifestID, branch);
+                    manifestRequestCode = await content.GetManifestRequestCode(job.DepotID, appid, job.ManifestID, job.Branch);
                 }
                 catch
                 {
@@ -460,6 +461,22 @@ internal static partial class Program
         Console.WriteLine("Done.");
 
         return allSucceeded ? 0 : 1;
+    }
+
+    static ulong GetManifestIdForBranch(KeyValue manifests, string branch)
+    {
+        var branchKv = manifests[branch];
+
+        if (branchKv == KeyValue.Invalid)
+            return 0;
+
+        // Can be either direct value or have a "gid" child
+        if (branchKv.Value != null)
+        {
+            return ulong.TryParse(branchKv.Value, out var id) ? id : 0;
+        }
+
+        return ulong.TryParse(branchKv["gid"].Value, out var gid) ? gid : 0;
     }
 
     static void DumpManifestToTextFile(string outputPath, ManifestJob job, DepotManifest manifest)
