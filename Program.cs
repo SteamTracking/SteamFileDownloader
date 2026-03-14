@@ -89,7 +89,11 @@ internal static partial class Program
         using var fileDownloader = new FileDownloader(cdnClient, outputPath, GetContentServer, MarkContentServerAsBad, cts.Token);
 
         // Connect
-        Console.WriteLine("Connecting to Steam...");
+        const int maxRetries = 7;
+        SteamUser.LoggedOnCallback? logOnResult = null;
+
+        // Run callback pump in background
+        using var pumpCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
 
         var connectedTcs = new TaskCompletionSource<bool>();
         var loggedOnTcs = new TaskCompletionSource<SteamUser.LoggedOnCallback>();
@@ -101,11 +105,6 @@ internal static partial class Program
             loggedOnTcs.TrySetResult(null!);
         });
         using var sub3 = manager.Subscribe<SteamUser.LoggedOnCallback>(cb => loggedOnTcs.TrySetResult(cb));
-
-        client.Connect();
-
-        // Run callback pump in background
-        using var pumpCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
 
         _ = Task.Run(async () =>
         {
@@ -122,92 +121,125 @@ internal static partial class Program
             }
         });
 
-        if (!await connectedTcs.Task)
+        for (var attempt = 0; attempt <= maxRetries; attempt++)
         {
-            LogWarn("Failed to connect to Steam.");
-            return 1;
-        }
-
-        if (username == "anonymous")
-        {
-            Console.WriteLine("Connected. Logging in anonymously...");
-
-            user.LogOnAnonymous();
-        }
-        else
-        {
-            Console.WriteLine("Connected. Authenticating...");
-
-            // Authenticate
-            string refreshToken;
-
-            try
+            if (attempt > 0)
             {
-                var authSession = await client.Authentication.BeginAuthSessionViaCredentialsAsync(new AuthSessionDetails
+                var delay = FileDownloader.ExponentialBackoff(attempt);
+                Console.WriteLine($"Retrying connection in {delay / 1000.0:F1}s (attempt {attempt + 1}/{maxRetries + 1})...");
+                await Task.Delay(delay, cts.Token);
+
+                connectedTcs = new TaskCompletionSource<bool>();
+                loggedOnTcs = new TaskCompletionSource<SteamUser.LoggedOnCallback>();
+            }
+
+            Console.WriteLine("Connecting to Steam...");
+            client.Connect();
+
+            if (!await connectedTcs.Task)
+            {
+                LogWarn("Failed to connect to Steam.");
+                continue;
+            }
+
+            if (username == "anonymous")
+            {
+                Console.WriteLine("Connected. Logging in anonymously...");
+
+                user.LogOnAnonymous();
+            }
+            else
+            {
+                Console.WriteLine("Connected. Authenticating...");
+
+                // Authenticate
+                string refreshToken;
+
+                try
+                {
+                    var authSession = await client.Authentication.BeginAuthSessionViaCredentialsAsync(new AuthSessionDetails
+                    {
+                        Username = username,
+                        Password = password,
+                        IsPersistentSession = false,
+                        DeviceFriendlyName = nameof(SteamFileDownloader),
+                        Authenticator = !Console.IsOutputRedirected ? new UserConsoleAuthenticator() : null,
+                    });
+
+                    var pollResult = await authSession.PollingWaitForResultAsync();
+                    refreshToken = pollResult.RefreshToken;
+                }
+                catch (Exception e)
+                {
+                    LogWarn($"Authentication failed: {e.Message}");
+                    client.Disconnect();
+                    continue;
+                }
+
+                Console.WriteLine("Authenticated. Logging in...");
+
+                user.LogOn(new SteamUser.LogOnDetails
                 {
                     Username = username,
-                    Password = password,
-                    IsPersistentSession = false,
-                    DeviceFriendlyName = nameof(SteamFileDownloader),
-                    Authenticator = !Console.IsOutputRedirected ? new UserConsoleAuthenticator() : null,
+                    AccessToken = refreshToken,
+                    ShouldRememberPassword = false,
                 });
-
-                var pollResult = await authSession.PollingWaitForResultAsync();
-                refreshToken = pollResult.RefreshToken;
-            }
-            catch (Exception e)
-            {
-                LogWarn($"Authentication failed: {e.Message}");
-                client.Disconnect();
-                return 1;
             }
 
-            Console.WriteLine("Authenticated. Logging in...");
+            logOnResult = await loggedOnTcs.Task;
 
-            user.LogOn(new SteamUser.LogOnDetails
+            if (logOnResult?.Result == EResult.OK)
             {
-                Username = username,
-                AccessToken = refreshToken,
-                ShouldRememberPassword = false,
-            });
+                break;
+            }
+
+            LogWarn($"Failed to log on: {logOnResult?.Result}");
+            client.Disconnect();
         }
-
-        var logOnResult = await loggedOnTcs.Task;
 
         if (logOnResult?.Result != EResult.OK)
         {
-            LogWarn($"Failed to log on: {logOnResult?.Result}");
-            client.Disconnect();
+            LogWarn("Failed to connect/log in after all retries.");
             return 1;
         }
 
         Console.WriteLine($"Logged in. Cell ID: {logOnResult.CellID}");
 
         // Fetch CDN servers
-        try
+        for (var attempt = 0; attempt <= maxRetries; attempt++)
         {
-            var servers = await content.GetServersForSteamPipe(cellId: logOnResult.CellID, maxNumServers: 100);
-
-            foreach (var server in servers)
+            if (attempt > 0)
             {
-                if (server.AllowedAppIds.Length > 0 || server.UseAsProxy || server.SteamChinaOnly)
-                {
-                    continue;
-                }
-
-                if (server.Type is not "SteamCache" and not "CDN")
-                {
-                    continue;
-                }
-
-                CDNServers.Add(server);
+                var delay = FileDownloader.ExponentialBackoff(attempt);
+                Console.WriteLine($"Retrying CDN server fetch in {delay / 1000.0:F1}s (attempt {attempt + 1}/{maxRetries + 1})...");
+                await Task.Delay(delay, cts.Token);
             }
-        }
-        catch (Exception e)
-        {
-            LogWarn($"Failed to get CDN servers: {e.Message}");
-            client.Disconnect();
-            return 1;
+
+            try
+            {
+                var servers = await content.GetServersForSteamPipe(cellId: logOnResult.CellID, maxNumServers: 100);
+
+                foreach (var server in servers)
+                {
+                    if (server.AllowedAppIds.Length > 0 || server.UseAsProxy || server.SteamChinaOnly)
+                    {
+                        continue;
+                    }
+
+                    if (server.Type is not "SteamCache" and not "CDN")
+                    {
+                        continue;
+                    }
+
+                    CDNServers.Add(server);
+                }
+
+                break;
+            }
+            catch (Exception e)
+            {
+                LogWarn($"Failed to get CDN servers: {e.Message}");
+            }
         }
 
         if (CDNServers.Count == 0)
