@@ -41,8 +41,8 @@ internal partial class FileDownloader : IDisposable
     {
     }
 
-    private readonly SemaphoreSlim SemaphorePerFile = new(6, 6);
-    private readonly SemaphoreSlim SemaphorePerDownloadChunk = new(20, 20);
+    private readonly SemaphoreSlim SemaphorePerFile = new(16, 16);
+    private readonly SemaphoreSlim SemaphorePerDownloadChunk = new(32, 32);
     private FrozenDictionary<uint, Regex> Files = FrozenDictionary<uint, Regex>.Empty;
     private FrozenDictionary<uint, string[]> DownloadFromPaks = FrozenDictionary<uint, string[]>.Empty;
     private readonly string OutputFolder;
