@@ -17,6 +17,12 @@ using SteamKit2.CDN;
 
 namespace SteamFileDownloader;
 
+internal record struct FileJob(
+    ManifestJob Job,
+    DepotManifest.FileData File,
+    DepotManifest DepotManifest
+);
+
 internal partial class FileDownloader : IDisposable
 {
     private const string PAK01_DIR = "pak01_dir.vpk";
@@ -97,44 +103,69 @@ internal partial class FileDownloader : IDisposable
 
     public bool IsImportantDepot(uint depotID) => Files.ContainsKey(depotID);
 
-    public async Task<EResult> DownloadFilesFromDepot(ManifestJob job, DepotManifest depotManifest)
+    public List<FileJob> CollectFiles(List<(ManifestJob Job, DepotManifest Manifest)> depotManifests)
     {
-        Debug.Assert(depotManifest.Files != null);
+        var fileJobs = new List<FileJob>();
 
-        var filesRegex = Files[job.DepotID];
-        var files = depotManifest.Files
-            .Where(static x => (x.Flags & EDepotFileFlag.Directory) == 0)
-            .Where(x => filesRegex.IsMatch(x.FileName.Replace('\\', '/')))
-            .ToList();
-        var downloadState = (int)DownloadResult.SomethingWentWrong;
+        foreach (var (job, manifest) in depotManifests)
+        {
+            Debug.Assert(manifest.Files != null);
 
-        DownloadFromPaks.TryGetValue(job.DepotID, out var pakExtensions);
+            var filesRegex = Files[job.DepotID];
+            var files = manifest.Files
+                .Where(static x => (x.Flags & EDepotFileFlag.Directory) == 0)
+                .Where(x => filesRegex.IsMatch(x.FileName.Replace('\\', '/')));
 
-        Console.WriteLine($"[Depot {job.DepotID}] Will download {files.Count} files");
+            foreach (var file in files)
+            {
+                fileJobs.Add(new FileJob(job, file, manifest));
+            }
+        }
 
-        if (files.Count == 0 && pakExtensions == null)
+        return fileJobs;
+    }
+
+    public async Task<EResult> DownloadAllFiles(List<FileJob> fileJobs)
+    {
+        if (fileJobs.Count == 0)
         {
             return EResult.OK;
         }
 
-        var downloadedFiles = 0;
-        var totalFileCount = files.Count;
-        var fileTasks = new Task[files.Count];
+        Console.WriteLine($"Downloading {fileJobs.Count} files...");
 
+        var downloadState = (int)DownloadResult.SomethingWentWrong;
+        var downloadedFiles = 0;
+        var totalFileCount = fileJobs.Count;
+        var fileTasks = new Task[fileJobs.Count];
         var additionalTasks = new ConcurrentBag<Task>();
 
-        async Task DownloadFileLocal(DepotManifest.FileData file)
+        Task RunFileTask(FileJob fj) => Task.Run(async () =>
         {
-            var (fileState, finalPath) = await DownloadFile(job, file);
+            await SemaphorePerFile.WaitAsync(CancellationToken);
+
+            try
+            {
+                await DownloadFileLocal(fj);
+            }
+            finally
+            {
+                SemaphorePerFile.Release();
+            }
+        });
+
+        async Task DownloadFileLocal(FileJob fileJob)
+        {
+            var (fileState, finalPath) = await DownloadFile(fileJob.Job, fileJob.File);
 
             if (fileState is DownloadResult.Success or DownloadResult.AlreadyValid)
             {
                 var done = Interlocked.Increment(ref downloadedFiles);
                 var remaining = totalFileCount - done;
                 var action = fileState is DownloadResult.AlreadyValid ? "Validated" : "Downloaded";
-                Console.WriteLine($"[Depot {job.DepotID}] {action} {file.FileName} ({remaining} files left)");
+                Console.WriteLine($"[Depot {fileJob.Job.DepotID}] {action} {fileJob.File.FileName} ({remaining} files left)");
 
-                if (pakExtensions != default && finalPath.Name == PAK01_DIR)
+                if (finalPath.Name == PAK01_DIR && DownloadFromPaks.TryGetValue(fileJob.Job.DepotID, out var pakExtensions))
                 {
                     HashSet<int> archives;
 
@@ -150,30 +181,24 @@ internal partial class FileDownloader : IDisposable
 
                     Interlocked.Add(ref totalFileCount, archives.Count);
 
+                    var filesByName = new Dictionary<string, DepotManifest.FileData>(fileJob.DepotManifest.Files!.Count);
+
+                    foreach (var f in fileJob.DepotManifest.Files)
+                    {
+                        filesByName[f.FileName.Replace('\\', '/')] = f;
+                    }
+
                     foreach (var archiveIndex in archives.Order())
                     {
-                        var archiveFileName = Path.Join(Path.GetDirectoryName(file.FileName), $"pak01_{archiveIndex:D3}.vpk").Replace('\\', '/');
-                        var archiveFile = depotManifest.Files.Find(f => f.FileName.Replace('\\', '/') == archiveFileName);
+                        var archiveFileName = Path.Join(Path.GetDirectoryName(fileJob.File.FileName), $"pak01_{archiveIndex:D3}.vpk").Replace('\\', '/');
 
-                        if (archiveFile == default)
+                        if (!filesByName.TryGetValue(archiveFileName, out var archiveFile))
                         {
-                            Program.LogWarn($"[Depot {job.DepotID}] Failed to find {archiveFileName}");
+                            Program.LogWarn($"[Depot {fileJob.Job.DepotID}] Failed to find {archiveFileName}");
                             continue;
                         }
 
-                        additionalTasks.Add(Task.Run(async () =>
-                        {
-                            await SemaphorePerFile.WaitAsync(CancellationToken);
-
-                            try
-                            {
-                                await DownloadFileLocal(archiveFile);
-                            }
-                            finally
-                            {
-                                SemaphorePerFile.Release();
-                            }
-                        }));
+                        additionalTasks.Add(RunFileTask(new FileJob(fileJob.Job, archiveFile, fileJob.DepotManifest)));
                     }
                 }
             }
@@ -190,20 +215,7 @@ internal partial class FileDownloader : IDisposable
 
         for (var i = 0; i < fileTasks.Length; i++)
         {
-            var file = files[i];
-            fileTasks[i] = Task.Run(async () =>
-            {
-                await SemaphorePerFile.WaitAsync(CancellationToken);
-
-                try
-                {
-                    await DownloadFileLocal(file);
-                }
-                finally
-                {
-                    SemaphorePerFile.Release();
-                }
-            });
+            fileTasks[i] = RunFileTask(fileJobs[i]);
         }
 
         await Task.WhenAll(fileTasks);

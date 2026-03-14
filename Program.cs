@@ -440,24 +440,9 @@ internal static partial class Program
 
         // Download files from all depots concurrently
         var downloadTimer = Stopwatch.StartNew();
-        var downloadTasks = depotManifests.Select(async entry =>
-        {
-            var result = await fileDownloader.DownloadFilesFromDepot(entry.Job, entry.Manifest);
-
-            if (result == EResult.OK)
-            {
-                Console.WriteLine($"Depot {entry.Job.DepotID} downloaded successfully.");
-            }
-            else
-            {
-                LogWarn($"Depot {entry.Job.DepotID} download result: {result}");
-            }
-
-            return result;
-        }).ToArray();
-
-        var results = await Task.WhenAll(downloadTasks);
-        var allSucceeded = results.All(r => r == EResult.OK);
+        var allFiles = fileDownloader.CollectFiles(depotManifests);
+        var downloadResult = await fileDownloader.DownloadAllFiles(allFiles);
+        var allSucceeded = downloadResult == EResult.OK;
 
         if (allSucceeded && buildId.HasValue)
         {
