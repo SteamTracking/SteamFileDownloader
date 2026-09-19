@@ -19,6 +19,6 @@
   <ItemGroup>
     <PackageReference Include="ConsoleAppFramework" Version="5.7.13" />
     <PackageReference Include="SteamKit2" Version="3.4.0" />
-    <PackageReference Include="ValvePak" Version="4.0.0.142" />
+    <PackageReference Include="ValvePak" Version="6.0.0.182" />
   </ItemGroup>
 </Project>

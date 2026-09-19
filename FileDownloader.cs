@@ -240,7 +240,7 @@ internal partial class FileDownloader : IDisposable
     private async Task<(DownloadResult Result, FileInfo Path)> DownloadFile(ManifestJob job, DepotManifest.FileData file)
     {
         var finalPath = GetFinalPath(file.FileName);
-        var downloadPath = new FileInfo(Path.Combine(Path.GetTempPath(), Path.ChangeExtension(Path.GetRandomFileName(), ".steamdb_tmp")));
+        var downloadPath = new FileInfo(Path.Combine(Path.GetTempPath(), Path.GetRandomFileName()));
 
         Directory.CreateDirectory(finalPath.Directory!.FullName);
 
@@ -391,7 +391,7 @@ internal partial class FileDownloader : IDisposable
 
     private static HashSet<int> ParsePak(string filePath, string[] extensions)
     {
-        using var package = new SteamDatabase.ValvePak.Package();
+        using var package = new ValvePak.Package();
         package.Read(filePath);
 
         Debug.Assert(package.Entries != null);
