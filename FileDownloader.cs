@@ -101,7 +101,7 @@ internal partial class FileDownloader : IDisposable
         DownloadFromPaks = paksMapping.ToFrozenDictionary();
     }
 
-    public bool IsImportantDepot(uint depotID) => Files.ContainsKey(depotID);
+    public bool IsTrackedDepot(uint depotID) => Files.ContainsKey(depotID);
 
     public List<FileJob> CollectFiles(List<(ManifestJob Job, DepotManifest Manifest)> depotManifests)
     {

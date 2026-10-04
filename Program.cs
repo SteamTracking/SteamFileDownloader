@@ -62,9 +62,12 @@ internal static partial class Program
     /// <param name="password">Steam password.</param>
     /// <param name="output">Output directory for downloaded files.</param>
     /// <param name="branch">Depot branch to download from.</param>
-    /// <param name="saveManifest">Save manifest text files to the output directory.</param>
-    private static async Task<int> Run(uint appid, string username, string password, string output, string branch = "public", bool saveManifest = false)
+    /// <param name="saveManifest">Save manifest text files of the depots in files.json to the output directory.</param>
+    /// <param name="saveAllManifests">Save manifest text files of every depot of the app to the output directory.</param>
+    private static async Task<int> Run(uint appid, string username, string password, string output, string branch = "public", bool saveManifest = false, bool saveAllManifests = false)
     {
+        saveManifest |= saveAllManifests;
+
         using var cts = new CancellationTokenSource();
 
         Console.CancelKeyPress += (_, e) =>
@@ -293,7 +296,7 @@ internal static partial class Program
             }
         }
 
-        // Parse depots and find important ones
+        // Parse depots and find the tracked ones (in files.json), or all of them when saving all manifests
         var manifestJobs = new List<ManifestJob>();
 
         foreach (var depot in depots.Children)
@@ -303,7 +306,9 @@ internal static partial class Program
                 continue;
             }
 
-            if (!fileDownloader.IsImportantDepot(depotID))
+            var isTracked = fileDownloader.IsTrackedDepot(depotID);
+
+            if (!isTracked && !saveAllManifests)
             {
                 continue;
             }
@@ -335,9 +340,14 @@ internal static partial class Program
                 }
             }
 
+            // Depots like DLC and other branches often have no manifest, which is only a problem for tracked ones
             if (manifestID == 0)
             {
-                LogWarn($"No manifest found for depot {depotID} on branch \"{branch}\"");
+                if (isTracked)
+                {
+                    LogWarn($"No manifest found for depot {depotID} on branch \"{branch}\"");
+                }
+
                 continue;
             }
 
@@ -346,12 +356,13 @@ internal static partial class Program
                 DepotID = depotID,
                 ManifestID = manifestID,
                 Branch = manifestBranch,
+                IsTracked = isTracked,
             });
 
-            Console.WriteLine($"Found depot {depotID}: manifest {manifestID}");
+            Console.WriteLine($"Found depot {depotID}: manifest {manifestID}{(isTracked ? "" : " (manifest only)")}");
         }
 
-        if (manifestJobs.Count == 0)
+        if (!manifestJobs.Any(job => job.IsTracked))
         {
             Console.WriteLine("No depots to download found. Check your files.json configuration.");
             client.Disconnect();
@@ -360,6 +371,19 @@ internal static partial class Program
 
         // Fetch depot keys, manifest request codes, and manifests
         var depotManifests = new List<(ManifestJob Job, DepotManifest Manifest)>();
+
+        // Depots that are only fetched for their manifest can fail without it being a problem, like ones the account has no access to
+        void Warn(ManifestJob job, string message)
+        {
+            if (job.IsTracked)
+            {
+                LogWarn(message);
+            }
+            else
+            {
+                Console.WriteLine(message);
+            }
+        }
 
         foreach (var job in manifestJobs)
         {
@@ -375,7 +399,7 @@ internal static partial class Program
 
                 if (keyResult.Result != EResult.OK)
                 {
-                    LogWarn($"No access to depot {job.DepotID} ({keyResult.Result})");
+                    Warn(job, $"No access to depot {job.DepotID} ({keyResult.Result})");
                     continue;
                 }
 
@@ -383,7 +407,7 @@ internal static partial class Program
             }
             catch (TaskCanceledException)
             {
-                LogWarn($"Depot key request timed out for {job.DepotID}");
+                Warn(job, $"Depot key request timed out for {job.DepotID}");
                 continue;
             }
 
@@ -405,14 +429,14 @@ internal static partial class Program
                 }
                 catch
                 {
-                    LogWarn($"Manifest request code timed out for depot {job.DepotID}");
+                    Warn(job, $"Manifest request code timed out for depot {job.DepotID}");
                     continue;
                 }
             }
 
             if (manifestRequestCode == 0)
             {
-                LogWarn($"No manifest request code for depot {job.DepotID}");
+                Warn(job, $"No manifest request code for depot {job.DepotID}");
                 continue;
             }
 
@@ -430,11 +454,11 @@ internal static partial class Program
                 }
                 catch (Exception e)
                 {
-                    LogWarn($"Failed to download manifest for depot {job.DepotID} ({job.Server}: {e.Message}) (#{i})");
+                    Warn(job, $"Failed to download manifest for depot {job.DepotID} ({job.Server}: {e.Message}) (#{i})");
 
                     if (e is SteamKitWebRequestException { StatusCode: System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden })
                     {
-                        LogWarn($"Received 401/403 for depot {job.DepotID} manifest, skipping");
+                        Warn(job, $"Received 401/403 for depot {job.DepotID} manifest, skipping");
                         break;
                     }
 
@@ -450,7 +474,7 @@ internal static partial class Program
 
             if (depotManifest == null)
             {
-                LogWarn($"Failed to download manifest for depot {job.DepotID} after all retries.");
+                Warn(job, $"Failed to download manifest for depot {job.DepotID} after all retries.");
                 continue;
             }
 
@@ -461,7 +485,10 @@ internal static partial class Program
                 DumpManifestToTextFile(outputPath, job, depotManifest);
             }
 
-            depotManifests.Add((job, depotManifest));
+            if (job.IsTracked)
+            {
+                depotManifests.Add((job, depotManifest));
+            }
         }
 
         // Done with Steam, disconnect before downloading files from CDN

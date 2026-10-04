@@ -17,7 +17,8 @@ SteamFileDownloader --appid 730 --username anonymous --password x --output csgo
 | `--password` | Steam password (ignored for anonymous) | Required |
 | `--output` | Output directory for downloaded files | Required |
 | `--branch` | Depot branch to download from | `public` |
-| `--save-manifest` | Save manifest text files to `<output>/manifests/` | `false` |
+| `--save-manifest` | Save manifest text files of the depots in `files.json` to `<output>/manifests/` | `false` |
+| `--save-all-manifests` | Save manifest text files of every depot of the app to `<output>/manifests/` | `false` |
 
 ## Configuration
 
@@ -62,7 +63,7 @@ This tool is designed for fresh checkouts. It does not diff against a previously
 ### App Info & Depot Discovery
 
 - Requests a PICS access token for the app, then fetches the full product info (app metadata) via PICS.
-- Iterates over the app's depots and keeps only those present in `files.json`. Depots with `depotfromapp` (shared/redirected depots) are skipped.
+- Iterates over the app's depots and keeps only those present in `files.json`, or all of them with `--save-all-manifests`, whose other depots are only used for their manifest. Depots with `depotfromapp` (shared/redirected depots) are skipped.
 - For each depot, looks up the manifest ID for the requested branch. If the branch has no manifest and isn't `public`, falls back to the `public` branch.
 
 ### Manifest Download
@@ -71,7 +72,7 @@ This tool is designed for fresh checkouts. It does not diff against a previously
     - Requests the depot decryption key (needed to decrypt chunk data).
     - Requests a manifest request code (an authorization token for downloading the manifest).
     - Downloads and decrypts the depot manifest from the CDN, with retries and exponential backoff on failure. 401/403 errors cause an immediate skip.
-- Optionally dumps each manifest to a human-readable text file (`--save-manifest`).
+- Optionally dumps each manifest to a human-readable text file (`--save-manifest`, `--save-all-manifests`). Depots that are not in `files.json` only log their failures, like depots the account has no access to.
 
 ### Disconnection
 
