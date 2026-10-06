@@ -1,0 +1,31 @@
+root = true
+
+[*]
+indent_style = space
+insert_final_newline = true
+
+[*.cs]
+indent_size = 4
+
+csharp_style_namespace_declarations = file_scoped:warning
+csharp_style_var_elsewhere = true:warning
+csharp_style_var_for_built_in_types = true:warning
+csharp_style_var_when_type_is_apparent = true:warning
+
+# Style choices of this codebase
+dotnet_diagnostic.IDE0022.severity = none # expression bodied methods
+dotnet_diagnostic.IDE0046.severity = none # if to conditional expression
+dotnet_diagnostic.IDE0058.severity = none # unused expression values
+dotnet_diagnostic.IDE0061.severity = none # expression bodied local functions
+dotnet_diagnostic.IDE0072.severity = none # populate switch, EResult has hundreds of values
+dotnet_diagnostic.IDE0130.severity = none # sources are in src/ without a matching namespace
+dotnet_diagnostic.IDE0210.severity = none # top-level statements
+
+# Not applicable to a command line tool
+dotnet_diagnostic.CA1031.severity = none # catching every exception at boundaries that report it
+dotnet_diagnostic.CA1508.severity = none # false positives for variables assigned in lambdas
+dotnet_diagnostic.CA1849.severity = none # synchronous console writes
+dotnet_diagnostic.CA2007.severity = none # ConfigureAwait, there is no synchronization context
+dotnet_diagnostic.CA5350.severity = none # SHA-1 is what Steam manifests use
+dotnet_diagnostic.CA5394.severity = none # Random for login ids and backoff jitter, not security
+dotnet_diagnostic.CS1591.severity = none # documentation comments are not required
