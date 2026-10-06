@@ -19,7 +19,8 @@ internal sealed record DepotOptions(
     string? Output = null,
     string Branch = "public",
     bool Anonymous = false,
-    string? Username = null);
+    string? Username = null,
+    bool AllFiles = false);
 
 /// <summary>
 /// A parsed get, ls or depots command line.
@@ -65,6 +66,9 @@ internal static partial class DepotCommands
         public int Rows;
         public bool Failed;
 
+        // Whole depots are thousands of files, which nobody asked to see one by one
+        public bool HideRows;
+
         public void Fail(string? target = null)
         {
             if (target != null)
@@ -78,7 +82,11 @@ internal static partial class DepotCommands
         public void WriteRow(ManifestJob job, params string[] columns)
         {
             Rows++;
-            Log.Result($"{job.DepotID}\t{job.ManifestID}\t{string.Join('\t', columns)}");
+
+            if (!HideRows)
+            {
+                Log.Result($"{job.DepotID}\t{job.ManifestID}\t{string.Join('\t', columns)}");
+            }
         }
     }
 
@@ -93,7 +101,8 @@ internal static partial class DepotCommands
     {
         var allowsTargets = command != "depots";
         string[] valueOptions = allowsTargets ? ["output", "branch", "username"] : ["branch", "username"];
-        var parsed = ArgumentParser.Parse(command, args, valueOptions, ["anonymous"]);
+        string[] flags = command == "get" ? ["anonymous", "all-files"] : ["anonymous"];
+        var parsed = ArgumentParser.Parse(command, args, valueOptions, flags);
 
         if (parsed == null)
         {
@@ -125,16 +134,24 @@ internal static partial class DepotCommands
             parsed.Options.GetValueOrDefault("output"),
             parsed.Options.GetValueOrDefault("branch") ?? "public",
             parsed.Options.ContainsKey("anonymous"),
-            parsed.Options.GetValueOrDefault("username"));
+            parsed.Options.GetValueOrDefault("username"),
+            parsed.Options.ContainsKey("all-files"));
 
         return new DepotArguments(options, parsed.Positionals[1..], parsed.Patterns);
     }
 
     public static async Task<int> GetAsync(DepotArguments arguments, CancellationToken cancellationToken)
     {
-        if (arguments.Patterns.Count == 0)
+        // Whole depots can be tens of gigabytes, so downloading every file has to be asked for
+        if (arguments.Patterns.Count == 0 && !arguments.Options.AllFiles)
         {
-            Log.Error($"get needs patterns after --, like: {Help.ExeName} get 730 2347771:latest -- server.dll. Use ls to see a manifest's files.");
+            Log.Error($"get needs patterns after --, like: {Help.ExeName} get 730 2347771:latest -- server.dll. Use ls to see a manifest's files, or --all-files to download every file.");
+            return ExitCodes.Failed;
+        }
+
+        if (arguments.Patterns.Count > 0 && arguments.Options.AllFiles)
+        {
+            Log.Error("--all-files downloads every file, so it can't be combined with patterns.");
             return ExitCodes.Failed;
         }
 
@@ -159,12 +176,20 @@ internal static partial class DepotCommands
             run.Fail();
         }
 
-        var requested = run.Matches.SelectMany(static m => m.Value.Where(static f => f.Requested).Select(static f => f.File)).ToHashSet();
-
-        // Directory files that were only fetched for VPK patterns are not printed. Rows follow the targets, like in ls
-        foreach (var file in files.Where(f => requested.Contains(f.File)).OrderBy(f => run.Jobs.IndexOf(f.Job)).ThenBy(static f => f.Path, StringComparer.Ordinal))
+        if (run.HideRows)
         {
-            run.WriteRow(file.Job, file.Path);
+            // Every file was asked for, and there is no VPK pattern to fetch directory files for
+            run.Rows += files.Count;
+        }
+        else
+        {
+            var requested = run.Matches.SelectMany(static m => m.Value.Where(static f => f.Requested).Select(static f => f.File)).ToHashSet();
+
+            // Directory files that were only fetched for VPK patterns are not printed. Rows follow the targets, like in ls
+            foreach (var file in files.Where(f => requested.Contains(f.File)).OrderBy(f => run.Jobs.IndexOf(f.Job)).ThenBy(static f => f.Path, StringComparer.Ordinal))
+            {
+                run.WriteRow(file.Job, file.Path);
+            }
         }
 
         var directories = OpenVpkDirectories(run, files).ToList();
@@ -371,6 +396,7 @@ internal static partial class DepotCommands
             Filter = filter,
             Session = session,
             OutputRoot = Path.GetFullPath(options.Output ?? "depots"),
+            HideRows = options.AllFiles,
         };
 
         // Manifests come from the CDN too, so its server list loads while the app info does
@@ -664,7 +690,7 @@ internal static partial class DepotCommands
         // One closing line, so the outcome is clear without reading the whole log
         var skipped = run.Jobs.Count(static j => j.Optional && j.NoAccess);
 
-        Log.Info($"Done: {run.Rows} results from {run.Matches.Count} of {run.Jobs.Count} manifests{(skipped > 0 ? $" ({skipped} depots without access skipped)" : "")}.{(downloads ? $" Files are in {run.OutputRoot}" : "")}");
+        Log.Info($"Done: {run.Rows} {(run.HideRows ? "files" : "results")} from {run.Matches.Count} of {run.Jobs.Count} manifests{(skipped > 0 ? $" ({skipped} depots without access skipped)" : "")}.{(downloads ? $" Files are in {run.OutputRoot}" : "")}");
 
         if (run.FailedTargets.Count > 0)
         {

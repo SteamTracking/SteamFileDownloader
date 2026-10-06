@@ -40,6 +40,9 @@ SteamFileDownloader get 730 2347771:8344780363095656278 2347771:latest 2347770 5
 SteamFileDownloader ls 730 2347770 -- "game/core/pak01_dir.vpk:regex:^scripts/"
 SteamFileDownloader get 730 2347770 -- "game/core/pak01_dir.vpk:scripts/scenes.vdata_c"
 
+# A whole depot, or every depot the account can access with "all" (can be tens of gigabytes)
+SteamFileDownloader get 730 2347771:8344780363095656278 --all-files
+
 # Find which depot has a file
 SteamFileDownloader ls 570 all -- hammer.dll
 

@@ -128,15 +128,11 @@ internal static class DepotDownloaderArguments
 
         var command = manifestOnly ? "ls" : "get";
 
-        // Without a file list DepotDownloader downloads every file, an empty regex matches them all
-        if (!manifestOnly && patterns.Count == 0)
-        {
-            patterns.Add("regex:");
-        }
+        // Without a file list DepotDownloader downloads every file
+        var allFiles = !manifestOnly && patterns.Count == 0;
+        var arguments = new DepotArguments(options with { App = app.Value, AllFiles = allFiles }, targets, patterns);
 
-        var arguments = new DepotArguments(options with { App = app.Value }, targets, patterns);
-
-        Log.Info($"Equivalent command, which takes many targets in one run: {Help.ExeName} {command} {app}{(options.Output != null ? $" --output \"{options.Output}\"" : "")}{(options.Branch != "public" ? $" --branch {options.Branch}" : "")} {string.Join(' ', targets)}{(patterns.Count > 0 ? " -- " + string.Join(' ', patterns.Select(static p => $"'{p}'")) : "")}");
+        Log.Info($"Equivalent command, which takes many targets in one run: {Help.ExeName} {command} {app}{(options.Output != null ? $" --output \"{options.Output}\"" : "")}{(options.Branch != "public" ? $" --branch {options.Branch}" : "")}{(allFiles ? " --all-files" : "")} {string.Join(' ', targets)}{(patterns.Count > 0 ? " -- " + string.Join(' ', patterns.Select(static p => $"'{p}'")) : "")}");
 
         return (command, arguments);
     }

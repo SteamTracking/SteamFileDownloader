@@ -66,7 +66,7 @@ internal static class Help
           {ExeName} login                                     save a Steam login (QR code)
           {ExeName} depots <app>                              list an app's depots and branches
           {ExeName} ls <app> <target>... [-- <pattern>...]    list files without downloading
-          {ExeName} get <app> <target>... -- <pattern>...     download matching files
+          {ExeName} get <app> <target>... -- <pattern>...     download matching files (or --all-files)
           {ExeName} dd <DepotDownloader arguments>            run a DepotDownloader command line
           {ExeName} <command> --help                          details and examples
           {ExeName} --version                                 print the version
@@ -135,13 +135,14 @@ internal static class Help
 
         Usage:
           {ExeName} get <app> <target>... -- <pattern>...
+          {ExeName} get <app> <target>... --all-files       every file, which can be tens of gigabytes per depot
 
         Files go to <output>/<depot>/<manifest>/<path>. VPK entries go to a folder named after
         the _dir.vpk without .vpk, like 2347770/7820179980365915207/game/core/pak01_dir/scripts/scenes.vdata_c,
         and only the archive chunks they are in are downloaded. Files already on disk with the right hash
         are kept, and ones with the same hash in another target or downloaded manifest of the depot are copied.
 
-        stdout has one tab-separated line per file:
+        stdout has one tab-separated line per file, except with --all-files:
           depot  manifest  absolute path
 
         {Targets}
@@ -160,6 +161,8 @@ internal static class Help
             {ExeName} get 730 2347771:latest 570/373303:latest -- game/bin/win64/resourcecompiler.dll
           Linux shared libraries of the latest build:
             {ExeName} get 730 2347773 -- "regex:\.so$"
+          A whole depot:
+            {ExeName} get 730 2347771:8344780363095656278 --all-files
         """;
 
     public static string Depots => $"""
