@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -31,6 +32,9 @@ internal static class Program
             e.Cancel = !cts.IsCancellationRequested;
             cts.Cancel();
         };
+
+        // Paths and the progress bar can have characters that the default Windows console code page lacks
+        Console.OutputEncoding = Encoding.UTF8;
 
         try
         {

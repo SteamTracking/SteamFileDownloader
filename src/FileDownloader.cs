@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -35,6 +36,9 @@ internal sealed class FileDownloader(SteamSession session, CancellationToken can
     // Most files are one chunk, so files can't be what limits downloads, only chunks are
     private readonly SemaphoreSlim SemaphorePerFile = new(64, 64);
     private readonly SemaphoreSlim SemaphorePerDownloadChunk = new(32, 32);
+
+    // Chunk bytes downloaded from the CDN, for the progress line
+    private long DownloadedBytes;
 
     public void Dispose()
     {
@@ -77,6 +81,12 @@ internal sealed class FileDownloader(SteamSession session, CancellationToken can
         var queuedFiles = new ConcurrentDictionary<DepotManifest.FileData, byte>(fileJobs.Select(static f => KeyValuePair.Create(f.File, (byte)0)));
         var totalFileCount = fileJobs.Count;
 
+        // Bytes of files that were already on disk or copied count as done, without being downloaded
+        var totalBytes = fileJobs.Sum(static f => (long)f.File.TotalSize);
+        var skippedBytes = 0L;
+        var startBytes = Interlocked.Read(ref DownloadedBytes);
+        var stopwatch = Stopwatch.StartNew();
+
         // Returns the file's path, or null when it failed
         Task<string?> RunFileTask(FileJob fileJob, string? copyFrom = null) => Task.Run(async () =>
         {
@@ -116,6 +126,11 @@ internal sealed class FileDownloader(SteamSession session, CancellationToken can
 
             downloaded.Add(new DownloadedFile(fileJob.Job, fileJob.File, finalPath));
             Interlocked.Increment(ref resultCounts[(int)fileState]);
+
+            if (fileState is not DownloadResult.Success)
+            {
+                Interlocked.Add(ref skippedBytes, (long)fileJob.File.TotalSize);
+            }
 
             var remaining = totalFileCount - resultCounts.Sum();
             var action = fileState switch
@@ -170,8 +185,22 @@ internal sealed class FileDownloader(SteamSession session, CancellationToken can
                 }
 
                 Interlocked.Increment(ref totalFileCount);
+                Interlocked.Add(ref totalBytes, (long)archiveFile.TotalSize);
                 additionalTasks.Add(RunFileTask(new FileJob(fileJob.Job, archiveFile)));
             }
+        }
+
+        (double, string) RenderProgress()
+        {
+            const string Separator = " \u00B7 ";
+
+            var downloadedBytes = Interlocked.Read(ref DownloadedBytes) - startBytes;
+            var doneBytes = downloadedBytes + Interlocked.Read(ref skippedBytes);
+            var total = Math.Max(Interlocked.Read(ref totalBytes), 1);
+            var speed = downloadedBytes / Math.Max(stopwatch.Elapsed.TotalSeconds, 0.001);
+            var left = speed > 0 ? $"{Separator}{FormatDuration((total - doneBytes) / speed)} left" : "";
+
+            return ((double)doneBytes / total, $"{FormatSize(doneBytes)} / {FormatSize(total)}{Separator}{FormatSize((long)speed)}/s{Separator}{resultCounts.Sum()} / {Volatile.Read(ref totalFileCount)} files{left}");
         }
 
         // The first file of each hash is downloaded, the rest are copied from it once it's done
@@ -185,9 +214,12 @@ internal sealed class FileDownloader(SteamSession session, CancellationToken can
         var groups = fileJobs.GroupBy(static f => GetHashKey(f.File)).ToList();
         Log.Info($"Downloading {fileJobs.Count} files ({FormatSize(groups.Sum(static g => (long)g.First().File.TotalSize))})...");
 
-        // Archive downloads are queued by the directory file tasks, so they are all known once those finish
-        await Task.WhenAll(groups.Select(RunHashGroup));
-        await Task.WhenAll(additionalTasks);
+        await using (Log.StartProgress(RenderProgress))
+        {
+            // Archive downloads are queued by the directory file tasks, so they are all known once those finish
+            await Task.WhenAll(groups.Select(RunHashGroup));
+            await Task.WhenAll(additionalTasks);
+        }
 
         Log.Info($"Files: {resultCounts[(int)DownloadResult.Success]} downloaded, {resultCounts[(int)DownloadResult.Copied]} copied from identical files, {resultCounts[(int)DownloadResult.AlreadyValid]} already present.");
 
@@ -199,6 +231,13 @@ internal sealed class FileDownloader(SteamSession session, CancellationToken can
 
         return (failedFiles.IsEmpty, [.. downloaded]);
     }
+
+    private static string FormatDuration(double seconds) => TimeSpan.FromSeconds(Math.Min(seconds, TimeSpan.MaxValue.TotalSeconds / 2)) switch
+    {
+        { TotalHours: >= 1 } t => $"{(int)t.TotalHours}h {t.Minutes}m",
+        { TotalMinutes: >= 1 } t => $"{t.Minutes}m {t.Seconds}s",
+        var t => $"{t.Seconds}s",
+    };
 
     public static string FormatSize(long bytes) => bytes switch
     {
@@ -415,6 +454,7 @@ internal sealed class FileDownloader(SteamSession session, CancellationToken can
 
                 // Disk errors are not the server's fault, so they fail the file
                 await RandomAccess.WriteAsync(handle, buffer.AsMemory(0, written), placement.Position, cancellationToken);
+                Interlocked.Add(ref DownloadedBytes, written);
 
                 return true;
             }

@@ -6,6 +6,7 @@
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <PublishDocumentationFile>false</PublishDocumentationFile>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <DebugType>embedded</DebugType>
     <Deterministic>true</Deterministic>
