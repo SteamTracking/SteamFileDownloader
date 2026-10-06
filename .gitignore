@@ -40,6 +40,9 @@ x64/
 # NuGet Packages Directory
 packages
 
+# Default download folder of the tool itself
+/depots/
+
 # Others
 [Bb]in
 [Oo]bj
