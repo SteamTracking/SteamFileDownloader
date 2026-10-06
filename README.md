@@ -21,8 +21,11 @@ Typical uses are datamining and reverse engineering Source 2 games like Counter-
 # Save a login by scanning a QR code in the Steam mobile app (or: login --username <name>)
 SteamFileDownloader login
 
-# List an app's depots and branches
+# List an app's depots and branches: app, depot, manifest, max size, notes
 SteamFileDownloader depots 730
+
+# Everything Steam has on the depots and branches of several apps, as JSON to filter with jq
+SteamFileDownloader depots 730 570 --json
 
 # List files of several builds without downloading: depot, manifest, sha1, size, path
 SteamFileDownloader ls 730 2347779:4784444484596788209 2347779:2356538687884552308 -- source1import.exe

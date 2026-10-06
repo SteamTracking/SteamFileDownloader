@@ -86,7 +86,7 @@ internal static class Program
 
     private static async Task<int> RunLoginAsync(string[] args, CancellationToken cancellationToken)
     {
-        var parsed = ArgumentParser.Parse("login", args, ["username"], []);
+        var parsed = ArgumentParser.Parse("login", args);
 
         if (parsed == null || !NoPositionals(parsed, "login"))
         {
@@ -99,7 +99,7 @@ internal static class Program
     // The GameTracking command, which has no command name
     private static async Task<int> RunTrackAsync(string[] args, CancellationToken cancellationToken)
     {
-        var parsed = ArgumentParser.Parse("", args, ["appid", "output", "username", "password", "branch"], ["save-manifest", "save-all-manifests"]);
+        var parsed = ArgumentParser.Parse("", args);
 
         if (parsed == null || !NoPositionals(parsed, ""))
         {

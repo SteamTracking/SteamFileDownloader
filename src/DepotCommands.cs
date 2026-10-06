@@ -3,6 +3,9 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -20,7 +23,8 @@ internal sealed record DepotOptions(
     string Branch = "public",
     bool Anonymous = false,
     string? Username = null,
-    bool AllFiles = false);
+    bool AllFiles = false,
+    bool Json = false);
 
 /// <summary>
 /// A parsed get, ls or depots command line.
@@ -99,10 +103,7 @@ internal static partial class DepotCommands
     /// </summary>
     public static DepotArguments? ParseArguments(string command, string[] args)
     {
-        var allowsTargets = command != "depots";
-        string[] valueOptions = allowsTargets ? ["output", "branch", "username"] : ["branch", "username"];
-        string[] flags = command == "get" ? ["anonymous", "all-files"] : ["anonymous"];
-        var parsed = ArgumentParser.Parse(command, args, valueOptions, flags);
+        var parsed = ArgumentParser.Parse(command, args);
 
         if (parsed == null)
         {
@@ -115,9 +116,9 @@ internal static partial class DepotCommands
             return null;
         }
 
-        if (!allowsTargets && parsed.Positionals.Count > 1)
+        if (parsed.Options.ContainsKey("json") && parsed.Options.ContainsKey("branch"))
         {
-            Log.Error($"Unexpected argument \"{parsed.Positionals[1]}\". {Help.UsageHint(command)}");
+            Log.Error("--json prints every branch, so it can't be combined with --branch.");
             return null;
         }
 
@@ -135,7 +136,8 @@ internal static partial class DepotCommands
             parsed.Options.GetValueOrDefault("branch") ?? "public",
             parsed.Options.ContainsKey("anonymous"),
             parsed.Options.GetValueOrDefault("username"),
-            parsed.Options.ContainsKey("all-files"));
+            parsed.Options.ContainsKey("all-files"),
+            parsed.Options.ContainsKey("json"));
 
         return new DepotArguments(options, parsed.Positionals[1..], parsed.Patterns);
     }
@@ -270,11 +272,29 @@ internal static partial class DepotCommands
     }
 
     /// <summary>
-    /// Lists the depots of an app with their manifest on a branch, and the app's branches on stderr.
+    /// Lists the depots of apps with their manifest on a branch, and the apps' branches on stderr.
+    /// With --json, prints everything Steam has on the apps' depots and branches instead.
     /// </summary>
     public static async Task<int> ListDepotsAsync(DepotArguments arguments, CancellationToken cancellationToken)
     {
         var options = arguments.Options;
+        var appIDs = new List<uint> { options.App };
+
+        // The other arguments are more apps
+        foreach (var arg in arguments.Targets)
+        {
+            if (!uint.TryParse(arg, NumberStyles.None, CultureInfo.InvariantCulture, out var appID))
+            {
+                Log.Error($"Unexpected argument \"{arg}\", depots takes app ids. {Help.UsageHint("depots")}");
+                return ExitCodes.Failed;
+            }
+
+            if (!appIDs.Contains(appID))
+            {
+                appIDs.Add(appID);
+            }
+        }
+
         var (loggedOn, logOnExitCode) = await LogOnAsync(options, cancellationToken);
 
         if (loggedOn == null)
@@ -284,35 +304,51 @@ internal static partial class DepotCommands
 
         using var session = loggedOn;
 
-        var appInfo = await session.GetAppInfoAsync(options.App);
+        var appInfos = await session.GetAppInfosAsync(appIDs);
         session.Disconnect();
 
-        if (appInfo == null)
+        // Apps without info were already reported
+        var depotsByApp = appIDs.Where(appInfos.ContainsKey).Select(appID => (AppID: appID, Depots: appInfos[appID]["depots"])).ToList();
+        var success = depotsByApp.Count == appIDs.Count;
+
+        if (options.Json)
         {
-            return ExitCodes.Failed;
+            Log.Result(ToJson(depotsByApp));
+        }
+        else
+        {
+            foreach (var (appID, depots) in depotsByApp)
+            {
+                success &= ListAppDepots(appID, depots, options.Branch);
+            }
         }
 
-        var depots = appInfo["depots"];
+        return success ? ExitCodes.Ok : ExitCodes.Failed;
+    }
 
-        if (!SteamSession.CheckBranch(depots, options.App, options.Branch))
+    // Returns false after an error
+    private static bool ListAppDepots(uint appID, KeyValue depots, string branchName)
+    {
+        if (!SteamSession.CheckBranch(depots, appID, branchName))
         {
-            return ExitCodes.Failed;
+            return false;
         }
 
         var branches = depots["branches"].Children
             .Select(static b => $"{b.Name} (build {b["buildid"].Value}{(b["pwdrequired"].AsBoolean() ? ", password" : "")}{FormatTime(b["timeupdated"].AsLong())})");
 
-        Log.Info($"Branches: {string.Join(", ", branches)}");
+        Log.Info("");
+        Log.Info($"App {appID} branches: {string.Join(", ", branches)}");
 
         if (!SteamSession.GetDepots(depots).Any())
         {
-            Log.Error($"App {options.App} has no depots. DLC and tools often keep their files in depots of their parent app.");
-            return ExitCodes.Failed;
+            Log.Error($"App {appID} has no depots. DLC and tools often keep their files in depots of their parent app.");
+            return false;
         }
 
         foreach (var (depotID, depot) in SteamSession.GetDepots(depots))
         {
-            var branch = options.Branch;
+            var branch = branchName;
             var manifestID = SteamSession.GetManifestIdForBranch(depot, ref branch);
             var config = depot["config"];
             var notes = new List<string>();
@@ -324,12 +360,12 @@ internal static partial class DepotCommands
             AddNote("dlc", depot["dlcappid"].Value);
             AddNote("shared from app", depot["depotfromapp"].Value);
 
-            if (branch != options.Branch)
+            if (branch != branchName)
             {
                 notes.Add($"manifest from {branch}");
             }
 
-            Log.Result($"{depotID}\t{(manifestID == 0 ? "-" : manifestID.ToString(CultureInfo.InvariantCulture))}\t{depot["maxsize"].Value ?? "-"}\t{string.Join(", ", notes)}");
+            Log.Result($"{appID}\t{depotID}\t{(manifestID == 0 ? "-" : manifestID.ToString(CultureInfo.InvariantCulture))}\t{depot["maxsize"].Value ?? "-"}\t{string.Join(", ", notes)}");
 
             void AddNote(string name, string? value)
             {
@@ -340,9 +376,50 @@ internal static partial class DepotCommands
             }
         }
 
-        return ExitCodes.Ok;
+        return true;
 
         static string FormatTime(long unixTime) => unixTime > 0 ? $", {DateTimeOffset.FromUnixTimeSeconds(unixTime):yyyy-MM-dd}" : "";
+    }
+
+    // An object per app with its whole depots section. Values are strings as Steam sends them, keys with children are objects
+    private static string ToJson(List<(uint AppID, KeyValue Depots)> depotsByApp)
+    {
+        using var stream = new MemoryStream();
+
+        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+        {
+            writer.WriteStartObject();
+
+            foreach (var (appID, depots) in depotsByApp)
+            {
+                writer.WritePropertyName(appID.ToString(CultureInfo.InvariantCulture));
+                WriteObject(writer, depots);
+            }
+
+            writer.WriteEndObject();
+        }
+
+        return Encoding.UTF8.GetString(stream.ToArray());
+
+        static void WriteObject(Utf8JsonWriter writer, KeyValue keyValue)
+        {
+            writer.WriteStartObject();
+
+            foreach (var child in keyValue.Children)
+            {
+                if (child.Value == null)
+                {
+                    writer.WritePropertyName(child.Name ?? "");
+                    WriteObject(writer, child);
+                }
+                else
+                {
+                    writer.WriteString(child.Name ?? "", child.Value);
+                }
+            }
+
+            writer.WriteEndObject();
+        }
     }
 
     /// <summary>

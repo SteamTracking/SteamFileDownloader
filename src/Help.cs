@@ -64,7 +64,7 @@ internal static class Help
 
         Usage:
           {ExeName} login                                     save a Steam login (QR code)
-          {ExeName} depots <app>                              list an app's depots and branches
+          {ExeName} depots <app>... [--json]                  list apps' depots and branches
           {ExeName} ls <app> <target>... [-- <pattern>...]    list files without downloading
           {ExeName} get <app> <target>... -- <pattern>...     download matching files (or --all-files)
           {ExeName} dd <DepotDownloader arguments>            run a DepotDownloader command line
@@ -166,22 +166,30 @@ internal static class Help
         """;
 
     public static string Depots => $"""
-        Lists an app's depots, to find which one holds what. Needs a Steam login.
+        Lists apps' depots, to find which one holds what. Needs a Steam login.
 
         Usage:
-          {ExeName} depots <app> [--branch <name>]
+          {ExeName} depots <app>... [--branch <name>]
+          {ExeName} depots <app>... --json
 
         stdout has one tab-separated line per depot:
-          depot  manifest on the branch (- if none)  max size  notes (name, os, arch, language, dlc, shared from app)
+          app  depot  manifest on the branch (- if none)  max size  notes (name, os, arch, language, dlc, shared from app)
         Branches, with build ids and dates, are on stderr. A depot shared from another app is
         downloaded with <that app>/<depot> as the target.
 
+        With --json, stdout is one JSON object with each app's whole "depots" section from Steam, for
+        filtering with jq or a script: every depot with all its keys (config like oslist, osarch and
+        language, maxsize, dlcappid, depotfromapp, ...) and its manifest on every branch, and every branch
+        under "branches" (buildid, timeupdated, pwdrequired, ...). Values are strings, as Steam sends them.
+
         Options:
           --branch <name>     branch whose manifests are listed (default: public)
+          --json              everything about the depots and branches as JSON
         {LoginOptions}
 
-        Example:
+        Examples:
           {ExeName} depots 570
+          {ExeName} depots 730 570 --json
         """;
 
     public static string DepotDownloader => $"""
