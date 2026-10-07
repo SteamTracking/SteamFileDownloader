@@ -91,12 +91,12 @@ It uses `-app`, `-depot`, `-manifest`, `-filelist`, `-dir`, `-branch`, `-usernam
 | `3` | No saved login, or Steam rejected it (run `login` again) |
 | `4` | Steam is rate limiting logins, wait about 15 minutes |
 
-## GameTracking mode
+## GameTracking
 
-[GameTracking](https://github.com/SteamTracking/GameTracking) runs it with a `files.json` to download the tracked files of the latest build:
+[GameTracking](https://github.com/SteamTracking/GameTracking) runs the `track` command with a `files.json` to download the tracked files of the latest build:
 
 ```bash
-SteamFileDownloader --appid 730 --username anonymous --password x --output csgo
+SteamFileDownloader track --appid 730 --output csgo --save-all-manifests
 ```
 
 | Option | Description | Default |
@@ -133,7 +133,7 @@ Each entry is one of:
 
 ### How it works
 
-This mode is meant for fresh checkouts. It doesn't diff against earlier downloads or delete files removed from the manifest, but skips files already on disk with the right hash.
+This command is meant for fresh checkouts. It doesn't diff against earlier downloads or delete files removed from the manifest, but skips files already on disk with the right hash.
 
 - **Startup**: `files.json` is loaded before connecting, so a broken one fails fast.
 - **Login**: anonymous, with the username and password, or with a saved login. Steam Guard prompts don't work headless.

@@ -15,14 +15,14 @@ internal sealed record ParsedArguments(
 /// </summary>
 internal static class ArgumentParser
 {
-    // Options of each command: ones followed by a value, and flags. GameTracking mode has no command name
+    // Options of each command: ones followed by a value, and flags
     private static readonly Dictionary<string, (string[] Values, string[] Flags)> CommandOptions = new()
     {
         ["get"] = (["output", "branch", "username"], ["anonymous", "all-files"]),
         ["ls"] = (["output", "branch", "username"], ["anonymous"]),
         ["depots"] = (["branch", "username"], ["anonymous", "json"]),
         ["login"] = (["username"], []),
-        [""] = (["appid", "output", "username", "password", "branch"], ["save-manifest", "save-all-manifests"]),
+        ["track"] = (["appid", "output", "username", "password", "branch"], ["save-manifest", "save-all-manifests"]),
     };
 
     public static ParsedArguments? Parse(string command, string[] args)

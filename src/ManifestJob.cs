@@ -14,7 +14,7 @@ internal sealed class ManifestJob
     public byte[]? DepotKey;
     public DepotManifest? Manifest;
 
-    // The files.json filter of GameTracking mode; depots without one are only fetched to save their manifest
+    // The files.json filter of the track command; depots without one are only fetched for their manifest
     public FileFilter? Filter;
 
     // Lacking access is expected and only informational, like for a depot from an "all" target

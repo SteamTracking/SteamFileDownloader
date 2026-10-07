@@ -68,6 +68,7 @@ internal static class Help
           {ExeName} ls <app> <target>... [-- <pattern>...]    list files without downloading
           {ExeName} get <app> <target>... -- <pattern>...     download matching files (or --all-files)
           {ExeName} dd <DepotDownloader arguments>            run a DepotDownloader command line
+          {ExeName} track --appid <app> --output <dir>        download the files in ./files.json (GameTracking)
           {ExeName} <command> --help                          details and examples
           {ExeName} --version                                 print the version
 
@@ -91,12 +92,38 @@ internal static class Help
           {ExeName} get 730 2347770 -- "game/core/pak01_dir.vpk:scripts/scenes.vdata_c"
 
         Saved logins: {AccountStore.FilePath}
+        """;
 
-        GameTracking mode (downloads the files listed in ./files.json, latest build only):
-          {ExeName} --appid <app> --output <dir> [--username <name> --password <password>]
+    public static string Track => $"""
+        Downloads the files listed in ./files.json from the latest manifests of a branch, for GameTracking.
+
+        Usage:
+          {ExeName} track --appid <app> --output <dir> [--username <name> --password <password>]
             [--branch <name>] [--save-manifest] [--save-all-manifests]
-          Without --password a saved login is used, without --username the last one. --username anonymous
-          logs in anonymously.
+
+        Files go to <dir>/<path>, without depot and manifest folders. Files already on disk with the
+        right hash are kept. When everything succeeded, <dir>/steam_buildid.txt gets the build id.
+
+        files.json maps depot ids to lists of patterns (comments and trailing commas are allowed, and
+        backslashes are doubled in JSON strings):
+          game/csgo/steam.inf                        exact path
+          regex:.+?\.(dll|exe)                       .NET regex for the whole path
+          vpk:vsndevts_c,vxml_c                      archives of the listed pak01_dir.vpk holding those extensions
+
+        Options:
+          --appid <app>          Steam app id
+          --output <dir>         output folder
+          --username <name>      Steam username, or anonymous; without --password a saved login
+                                 (default: the last saved login)
+          --password <password>  Steam password, needs --username
+          --branch <name>        branch to download (default: public)
+          --save-manifest        save the manifests of the depots in files.json as text to <dir>/manifests/
+          --save-all-manifests   save the manifests of every depot as text to <dir>/manifests/
+
+        {ExitCodesText}
+
+        Example:
+          {ExeName} track --appid 570 --output . --save-all-manifests
         """;
 
     public static string Ls => $"""
@@ -247,8 +274,7 @@ internal static class Help
 
         var commandHelp = GetCommandHelp(args[0]);
 
-        // A bare command, or --help anywhere before the patterns, like in GameTracking mode which has no command name.
-        // A bare login is the QR code login, not a request for help
+        // A bare command, or --help anywhere before the patterns. A bare login is the QR code login, not a request for help
         if ((commandHelp != null && args.Length == 1 && args[0] != "login") || Array.Exists(ArgumentParser.SplitPatterns(args).Options, IsHelp))
         {
             Console.WriteLine(commandHelp ?? Overview);
@@ -258,8 +284,6 @@ internal static class Help
         return false;
     }
 
-    public static bool IsCommand(string arg) => GetCommandHelp(arg) != null;
-
     private static string? GetCommandHelp(string? command) => command switch
     {
         "get" => Get,
@@ -267,6 +291,7 @@ internal static class Help
         "depots" => Depots,
         "dd" => DepotDownloader,
         "login" => Login,
+        "track" => Track,
         _ => null,
     };
 

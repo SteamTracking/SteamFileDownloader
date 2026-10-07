@@ -42,7 +42,8 @@ internal static class Program
             {
                 "get" or "ls" or "depots" or "dd" => await RunDepotCommandAsync(args[0], args[1..], cts.Token),
                 "login" => await RunLoginAsync(args[1..], cts.Token),
-                _ => await RunTrackAsync(args, cts.Token),
+                "track" => await RunTrackAsync(args[1..], cts.Token),
+                _ => UnknownCommand(args[0]),
             };
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
@@ -96,12 +97,12 @@ internal static class Program
         return await LoginCommand.RunAsync(parsed.Options.GetValueOrDefault("username"), cancellationToken);
     }
 
-    // The GameTracking command, which has no command name
+    // The GameTracking command, which downloads the files in files.json
     private static async Task<int> RunTrackAsync(string[] args, CancellationToken cancellationToken)
     {
-        var parsed = ArgumentParser.Parse("", args);
+        var parsed = ArgumentParser.Parse("track", args);
 
-        if (parsed == null || !NoPositionals(parsed, ""))
+        if (parsed == null || !NoPositionals(parsed, "track"))
         {
             return ExitCodes.Failed;
         }
@@ -110,13 +111,13 @@ internal static class Program
 
         if (!options.TryGetValue("appid", out var appText) || !uint.TryParse(appText, NumberStyles.None, CultureInfo.InvariantCulture, out var appID) || !options.TryGetValue("output", out var output))
         {
-            Log.Error($"GameTracking mode needs --appid <id> and --output <dir>. {Help.UsageHint()}");
+            Log.Error($"track needs --appid <id> and --output <dir>. {Help.UsageHint("track")}");
             return ExitCodes.Failed;
         }
 
         if (options.ContainsKey("password") && !options.ContainsKey("username"))
         {
-            Log.Error($"--password needs --username. Without both, the last saved login is used. {Help.UsageHint()}");
+            Log.Error($"--password needs --username. Without both, the last saved login is used. {Help.UsageHint("track")}");
             return ExitCodes.Failed;
         }
 
@@ -140,12 +141,18 @@ internal static class Program
 
         var argument = parsed.Positionals.Count > 0 ? parsed.Positionals[0] : "--";
 
-        // Without a command, the argument was likely a misspelled command, or one after its options
-        var hint = command.Length > 0 ? ""
-            : Help.IsCommand(argument) ? $" The command goes first, before its options: {Help.ExeName} {argument} ..."
-            : " Commands are get, ls, depots, dd and login.";
-
-        Log.Error($"Unexpected argument \"{argument}\".{hint} {Help.UsageHint(command)}");
+        Log.Error($"Unexpected argument \"{argument}\". {Help.UsageHint(command)}");
         return false;
+    }
+
+    private static int UnknownCommand(string argument)
+    {
+        // GameTracking mode used to be the command line without a command name
+        var hint = argument.StartsWith("--", StringComparison.Ordinal)
+            ? $" The command goes first, before its options. Downloading the files in files.json is now: {Help.ExeName} track --appid <app> --output <dir> ..."
+            : " Commands are get, ls, depots, dd, login and track.";
+
+        Log.Error($"Unknown command \"{argument}\".{hint} {Help.UsageHint()}");
+        return ExitCodes.Failed;
     }
 }
