@@ -279,8 +279,14 @@ internal sealed class FileDownloader(SteamSession session, CancellationToken can
 
         Directory.CreateDirectory(Path.GetDirectoryName(finalPath)!);
 
+        // Manifests list empty files with an all-zero hash, so only their size is checked
         if (file.TotalSize == 0)
         {
+            if (HasExpectedSize(finalPath, file))
+            {
+                return (DownloadResult.AlreadyValid, finalPath);
+            }
+
             await File.WriteAllBytesAsync(finalPath, [], cancellationToken);
 
             return (DownloadResult.Success, finalPath);
