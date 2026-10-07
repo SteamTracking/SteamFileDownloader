@@ -154,10 +154,11 @@ internal static class VpkReader
 
     /// <summary>
     /// Extracts entries into a folder named like the directory file without its extension (pak01_dir/).
-    /// Returns the extracted paths and whether all entries succeeded.
+    /// Archives are looked up in the other jobs too. Returns the extracted paths and whether all entries succeeded.
     /// </summary>
     public static async Task<(bool Success, List<string> Paths)> ExtractAsync(
         FileDownloader downloader,
+        IReadOnlyList<ManifestJob> jobs,
         ManifestJob job,
         string dirFileName,
         Package package,
@@ -200,13 +201,14 @@ internal static class VpkReader
         // Archives download in parallel, the shared chunk limit keeps the total in check
         var results = await Task.WhenAll(pending
             .GroupBy(static p => p.Entry.ArchiveIndex)
-            .Select(archive => ExtractArchiveAsync(downloader, job, dirFileName, package, archive)));
+            .Select(archive => ExtractArchiveAsync(downloader, jobs, job, dirFileName, package, archive)));
 
         return (success && results.All(static r => r.Success), [.. extracted, .. results.SelectMany(static r => r.Paths)]);
     }
 
     private static async Task<(bool Success, List<string> Paths)> ExtractArchiveAsync(
         FileDownloader downloader,
+        IReadOnlyList<ManifestJob> jobs,
         ManifestJob job,
         string dirFileName,
         Package package,
@@ -220,7 +222,7 @@ internal static class VpkReader
         {
             if (archive.Key != DirArchiveIndex && archive.Any(static p => p.Entry.Length > 0))
             {
-                ranges = await DownloadArchiveRanges(downloader, job, dirFileName, archive.Key, archive.Select(static p => p.Entry));
+                ranges = await DownloadArchiveRanges(downloader, jobs, job, dirFileName, archive.Key, archive.Select(static p => p.Entry));
 
                 if (ranges == null)
                 {
@@ -236,7 +238,8 @@ internal static class VpkReader
 
                 if (data == null)
                 {
-                    Log.Warn($"[{job}] CRC mismatch for {entry.GetFullPath()} in {dirFileName}");
+                    var otherBuild = ranges != null && ranges.Job != job ? $"; archive {archive.Key} came from {ranges.Job}, which may be another build" : "";
+                    Log.Warn($"[{job}] CRC mismatch for {entry.GetFullPath()} in {dirFileName}{otherBuild}");
                     success = false;
                     continue;
                 }
@@ -264,22 +267,21 @@ internal static class VpkReader
         return (success, paths);
     }
 
-    // The downloaded chunks of an archive, packed one after another in a temporary file, ordered by offset
-    private sealed record ArchiveRanges(string Path, ChunkPlacement[] Placements);
+    // The downloaded chunks of an archive from the job's manifest, packed one after another in a temporary file, ordered by offset
+    private sealed record ArchiveRanges(ManifestJob Job, string Path, ChunkPlacement[] Placements);
 
     // Downloads only the chunks of pak01_NNN.vpk that overlap the entries
     private static async Task<ArchiveRanges?> DownloadArchiveRanges(
         FileDownloader downloader,
+        IReadOnlyList<ManifestJob> jobs,
         ManifestJob job,
         string dirFileName,
         int archiveIndex,
         IEnumerable<PackageEntry> entries)
     {
-        var archiveFile = FindArchiveFile(job, dirFileName, archiveIndex);
-
-        if (archiveFile == null)
+        if (FindArchive(jobs, job, dirFileName, archiveIndex) is not var (archiveJob, archiveFile))
         {
-            Log.Warn($"[{job}] Failed to find archive {archiveIndex} of {dirFileName}");
+            Log.Warn($"[{job}] Archive {archiveIndex} of {dirFileName} is in none of the manifests of this run. It may be in another depot of app {job.AppID}: add \"all\" for the latest build, or that depot's manifest from the same build.");
             return null;
         }
 
@@ -293,8 +295,10 @@ internal static class VpkReader
             length += chunk.UncompressedLength;
         }
 
-        Log.Info($"[{job}] Downloading {needed.Count} of {archiveFile.Chunks.Count} chunks ({FileDownloader.FormatSize(length)}) of {archiveFile.FileName}");
+        var fromDepot = archiveJob != job ? $" from {archiveJob}" : "";
+        Log.Info($"[{job}] Downloading {needed.Count} of {archiveFile.Chunks.Count} chunks ({FileDownloader.FormatSize(length)}) of {archiveFile.FileName}{fromDepot}");
 
+        // Next to the directory file's job, since directory files of several builds can share an archive of another depot
         var path = downloader.GetPartialPath(FileDownloader.GetFinalPath(job, archiveFile.FileName));
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 
@@ -302,9 +306,9 @@ internal static class VpkReader
 
         try
         {
-            downloaded = await downloader.DownloadChunksToFile(job, archiveFile.FileName, placements, length, path);
+            downloaded = await downloader.DownloadChunksToFile(archiveJob, archiveFile.FileName, placements, length, path);
 
-            return downloaded ? new ArchiveRanges(path, [.. placements]) : null;
+            return downloaded ? new ArchiveRanges(archiveJob, path, [.. placements]) : null;
         }
         finally
         {

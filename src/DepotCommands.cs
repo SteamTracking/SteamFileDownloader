@@ -199,7 +199,7 @@ internal static partial class DepotCommands
         try
         {
             // Directories extract in parallel, the shared chunk limit keeps the total in check
-            var results = await Task.WhenAll(directories.Select(d => VpkReader.ExtractAsync(downloader, d.Job, d.DirFileName, d.Package, d.Matches)));
+            var results = await Task.WhenAll(directories.Select(d => VpkReader.ExtractAsync(downloader, run.Jobs, d.Job, d.DirFileName, d.Package, d.Matches)));
 
             for (var i = 0; i < directories.Count; i++)
             {
