@@ -20,34 +20,62 @@ internal static class VpkReader
     private const ushort DirArchiveIndex = 0x7FFF;
     private const int ParallelEntryChecks = 16;
 
-    public static HashSet<int> FindArchivesWithExtensions(string dirPath, string[] extensions)
+    /// <summary>
+    /// Reads a downloaded directory file. Returns null, with the error logged, when it isn't a valid VPK.
+    /// </summary>
+    public static Package? TryRead(ManifestJob job, string path, string dirFileName)
     {
-        using var package = new Package();
-        package.Read(dirPath);
+#pragma warning disable CA2000 // Disposed here on failure, otherwise by the caller
+        var package = new Package();
+#pragma warning restore CA2000
 
-        var archives = new HashSet<int>();
-
-        foreach (var ext in extensions)
+        try
         {
-            if (package.Entries!.TryGetValue(ext, out var entries))
-            {
-                foreach (var entry in entries)
-                {
-                    if (entry.ArchiveIndex != DirArchiveIndex)
-                    {
-                        archives.Add(entry.ArchiveIndex);
-                    }
-                }
-            }
+            package.Read(path);
+            return package;
         }
-
-        return archives;
+        catch (Exception e)
+        {
+            Log.Error($"[{job}] Failed to read {dirFileName} as a VPK: {e.Message}");
+            package.Dispose();
+            return null;
+        }
     }
 
     /// <summary>
-    /// Finds pak01_NNN.vpk next to pak01_dir.vpk in the job's manifest.
+    /// Finds pak01_NNN.vpk of a directory file in its own manifest, or in another depot of the app, like most of Dota 2's.
+    /// Of several manifests of that depot, the closest one not newer than the directory file's is likely from the same build,
+    /// since a build that changes an archive changes the directory file too. Entries from another build fail their CRC check.
     /// </summary>
-    public static DepotManifest.FileData? FindArchiveFile(ManifestJob job, string dirFileName, int archiveIndex)
+    public static (ManifestJob Job, DepotManifest.FileData File)? FindArchive(IEnumerable<ManifestJob> jobs, ManifestJob dirJob, string dirFileName, int archiveIndex)
+    {
+        if (FindArchiveFile(dirJob, dirFileName, archiveIndex) is { } file)
+        {
+            return (dirJob, file);
+        }
+
+        var dirTime = dirJob.Manifest!.CreationTime;
+
+        (ManifestJob Job, DepotManifest.FileData File)? closest = null;
+
+        foreach (var job in jobs.Where(j => j != dirJob && j.AppID == dirJob.AppID && j.Manifest != null))
+        {
+            if (FindArchiveFile(job, dirFileName, archiveIndex) is { } archiveFile && (closest == null || IsCloser(job, closest.Value.Job)))
+            {
+                closest = (job, archiveFile);
+            }
+        }
+
+        return closest;
+
+        // Not newer than the directory file first, then by time apart
+        bool IsCloser(ManifestJob job, ManifestJob other) =>
+            (job.Manifest!.CreationTime > dirTime, (job.Manifest.CreationTime - dirTime).Duration())
+                .CompareTo((other.Manifest!.CreationTime > dirTime, (other.Manifest.CreationTime - dirTime).Duration())) < 0;
+    }
+
+    // pak01_NNN.vpk next to pak01_dir.vpk in the job's manifest
+    private static DepotManifest.FileData? FindArchiveFile(ManifestJob job, string dirFileName, int archiveIndex)
     {
         var dirPath = FileFilter.NormalizePath(dirFileName);
         var archivePath = string.Concat(dirPath.AsSpan(0, dirPath.Length - "dir.vpk".Length), $"{archiveIndex:D3}.vpk");
@@ -76,6 +104,52 @@ internal static class VpkReader
         }
 
         return matches;
+    }
+
+    /// <summary>
+    /// The chunks of each archive that the entries are in, to download the archives partially next to the directory file
+    /// for VRF to read the entries from. Returns false when an archive is in none of the manifests.
+    /// </summary>
+    public static (bool Success, List<PartialFile> Archives) FindArchiveChunks(
+        IReadOnlyList<ManifestJob> jobs,
+        ManifestJob dirJob,
+        string dirFileName,
+        IEnumerable<PackageEntry> entries)
+    {
+        var success = true;
+        var archives = new List<PartialFile>();
+
+        foreach (var archive in entries.Where(static e => e.ArchiveIndex != DirArchiveIndex && e.Length > 0).GroupBy(static e => e.ArchiveIndex))
+        {
+            if (FindArchive(jobs, dirJob, dirFileName, archive.Key) is not { } found)
+            {
+                Log.Warn($"[{dirJob}] Failed to find archive {archive.Key} of {dirFileName} in any depot of app {dirJob.AppID}");
+                success = false;
+                continue;
+            }
+
+            // Only in a broken VPK, which would leave such an entry without chunks
+            var inArchive = new List<PackageEntry>();
+
+            foreach (var entry in archive)
+            {
+                if ((ulong)entry.Offset + entry.Length > found.File.TotalSize)
+                {
+                    Log.Warn($"[{dirJob}] {entry.GetFullPath()} in {dirFileName} is past the end of archive {archive.Key}");
+                    success = false;
+                    continue;
+                }
+
+                inArchive.Add(entry);
+            }
+
+            if (inArchive.Count > 0)
+            {
+                archives.Add(new PartialFile(found.Job, found.File, FindChunks(found.File, inArchive)));
+            }
+        }
+
+        return (success, archives);
     }
 
     /// <summary>
@@ -209,29 +283,17 @@ internal static class VpkReader
             return null;
         }
 
-        var chunks = archiveFile.Chunks.OrderBy(static c => c.Offset).ToArray();
-        var needed = new HashSet<DepotManifest.ChunkData>();
-
-        foreach (var entry in entries)
-        {
-            var end = (ulong)entry.Offset + entry.Length;
-
-            for (var i = FindFirstChunkEnding(chunks, entry.Offset, static c => c); i < chunks.Length && chunks[i].Offset < end; i++)
-            {
-                needed.Add(chunks[i]);
-            }
-        }
-
+        var needed = FindChunks(archiveFile, entries);
         var placements = new List<ChunkPlacement>(needed.Count);
         var length = 0L;
 
-        foreach (var chunk in needed.OrderBy(static c => c.Offset))
+        foreach (var chunk in needed)
         {
             placements.Add(new ChunkPlacement(chunk, length));
             length += chunk.UncompressedLength;
         }
 
-        Log.Info($"[{job}] Downloading {needed.Count} of {chunks.Length} chunks ({FileDownloader.FormatSize(length)}) of {archiveFile.FileName}");
+        Log.Info($"[{job}] Downloading {needed.Count} of {archiveFile.Chunks.Count} chunks ({FileDownloader.FormatSize(length)}) of {archiveFile.FileName}");
 
         var path = downloader.GetPartialPath(FileDownloader.GetFinalPath(job, archiveFile.FileName));
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -252,6 +314,25 @@ internal static class VpkReader
                 File.Delete(path);
             }
         }
+    }
+
+    // The chunks of an archive that overlap the entries, ordered by offset
+    private static List<DepotManifest.ChunkData> FindChunks(DepotManifest.FileData archiveFile, IEnumerable<PackageEntry> entries)
+    {
+        var chunks = archiveFile.Chunks.OrderBy(static c => c.Offset).ToArray();
+        var needed = new HashSet<DepotManifest.ChunkData>();
+
+        foreach (var entry in entries)
+        {
+            var end = (ulong)entry.Offset + entry.Length;
+
+            for (var i = FindFirstChunkEnding(chunks, entry.Offset, static c => c); i < chunks.Length && chunks[i].Offset < end; i++)
+            {
+                needed.Add(chunks[i]);
+            }
+        }
+
+        return [.. needed.OrderBy(static c => c.Offset)];
     }
 
     // Index of the first item, sorted by chunk offset, whose chunk ends after the given offset

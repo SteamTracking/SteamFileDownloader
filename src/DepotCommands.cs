@@ -674,7 +674,7 @@ internal static partial class DepotCommands
                     }
                 }
 
-                IReadOnlyList<VpkPattern> vpkPatterns = filter.VpkPatterns.Count == 0 ? [] : [.. filter.VpkPatterns.Where(p => p.Dir.IsMatch(path))];
+                var vpkPatterns = filter.GetVpkPatterns(path);
 
                 if (requested || vpkPatterns.Count > 0)
                 {
@@ -716,25 +716,16 @@ internal static partial class DepotCommands
             }
 
             var dirFileName = directory.Path;
-            var patterns = directory.VpkPatterns;
 
-#pragma warning disable CA2000 // Disposed here on failure, otherwise by the caller
-            var package = new Package();
+#pragma warning disable CA2000 // Disposed by the caller
+            if (VpkReader.TryRead(file.Job, file.Path, dirFileName) is not { } package)
 #pragma warning restore CA2000
-
-            try
             {
-                package.Read(file.Path);
-            }
-            catch (Exception e)
-            {
-                Log.Error($"[{file.Job}] Failed to read {dirFileName} as a VPK: {e.Message}");
-                package.Dispose();
                 run.Fail();
                 continue;
             }
 
-            var matches = VpkReader.ListEntries(package, patterns);
+            var matches = VpkReader.ListEntries(package, directory.VpkPatterns);
 
             foreach (var match in matches)
             {

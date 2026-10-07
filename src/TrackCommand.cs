@@ -37,7 +37,7 @@ internal static class TrackCommand
         {
             filters = FileFilter.LoadFilesJson("files.json");
         }
-        catch (Exception e) when (e is IOException or JsonException or ArgumentException)
+        catch (Exception e) when (e is IOException or InvalidDataException or JsonException or ArgumentException)
         {
             Log.Error($"Failed to load files.json from {Environment.CurrentDirectory}: {e.Message} The get and ls commands don't need it, see \"{Help.ExeName} --help\".");
             return ExitCodes.Failed;
@@ -91,14 +91,17 @@ internal static class TrackCommand
             Log.Info($"Branch \"{branch}\": build {parsedBuildId}");
         }
 
-        // Find the tracked depots (in files.json), or all of them when saving all manifests
+        // Archives of VPKs can be in other depots than their directory file, so VPK entries need every manifest
+        var allManifests = saveAllManifests || filters.Values.Any(static f => f.VpkPatterns.Count > 0);
+
+        // Find the tracked depots (in files.json), or all of them when saving all manifests or for VPK entries
         var manifestJobs = new List<ManifestJob>();
 
         foreach (var (depotID, depot) in SteamSession.GetDepots(depots))
         {
             var filter = filters.GetValueOrDefault(depotID);
 
-            if (filter == null && !saveAllManifests)
+            if (filter == null && !allManifests)
             {
                 continue;
             }
@@ -159,7 +162,7 @@ internal static class TrackCommand
 
         if (saveManifest)
         {
-            foreach (var job in manifestJobs.Where(static job => job.Manifest != null))
+            foreach (var job in manifestJobs.Where(job => job.Manifest != null && (job.Filter != null || saveAllManifests)))
             {
                 writeFailed |= !TryWrite($"manifest of depot {job.DepotID}", () => ManifestWriter.DumpToTextFile(outputPath, job));
             }
@@ -171,10 +174,12 @@ internal static class TrackCommand
         session.Disconnect();
 
         var downloadTimer = Stopwatch.StartNew();
-        // The output folder is a git repository, so partial files must not land in it
+        // Whole files download into the temp folder, since the output folder is a git repository. Partial VPK archives
+        // are written in the output folder on purpose: *.vpk is gitignored there, and a rerun checks their chunks again
         using var fileDownloader = new FileDownloader(session, cancellationToken) { TempFolder = Path.GetTempPath() };
-        var allFiles = CollectFiles(manifestJobs);
-        var (allSucceeded, _) = await fileDownloader.DownloadAllFiles(allFiles);
+        var (allFiles, vpkDirectories) = CollectFiles(manifestJobs);
+        var (allSucceeded, files) = await fileDownloader.DownloadAllFiles(allFiles);
+        allSucceeded &= await DownloadVpkEntries(fileDownloader, manifestJobs, files, vpkDirectories);
         allSucceeded &= !writeFailed;
 
         // A tracked depot without its manifest is missing all of its files
@@ -217,31 +222,102 @@ internal static class TrackCommand
         }
     }
 
-    private static List<FileJob> CollectFiles(List<ManifestJob> jobs)
+    // The files to download, and the VPK patterns of the directory files among them
+    private static (List<FileJob> Files, Dictionary<DepotManifest.FileData, IReadOnlyList<VpkPattern>> VpkDirectories) CollectFiles(List<ManifestJob> jobs)
     {
         var fileJobs = new List<FileJob>();
+        var vpkDirectories = new Dictionary<DepotManifest.FileData, IReadOnlyList<VpkPattern>>();
 
         foreach (var job in jobs.Where(static job => job.Filter != null && job.Manifest != null))
         {
-            var hasPakDir = false;
+            var filter = job.Filter!;
+            var matchedDirs = new HashSet<VpkPattern>();
 
             foreach (var file in job.Manifest!.Files!)
             {
-                if (!FileDownloader.IsDirectory(file) && job.Filter!.IsMatch(FileFilter.NormalizePath(file.FileName)))
+                if (FileDownloader.IsDirectory(file))
+                {
+                    continue;
+                }
+
+                var path = FileFilter.NormalizePath(file.FileName);
+                var vpkPatterns = filter.GetVpkPatterns(path);
+
+                // Directory files of VPK entries are downloaded whole, for VRF to read the entries with
+                if (vpkPatterns.Count > 0)
+                {
+                    vpkDirectories.Add(file, vpkPatterns);
+                    matchedDirs.UnionWith(vpkPatterns);
+                }
+
+                if (vpkPatterns.Count > 0 || filter.IsMatch(path))
                 {
                     fileJobs.Add(new FileJob(job, file));
-                    hasPakDir |= Path.GetFileName(file.FileName) == "pak01_dir.vpk";
                 }
             }
 
-            // The archives are found through the directory file
-            if (job.Filter!.PakExtensions.Length > 0 && !hasPakDir)
+            foreach (var pattern in filter.VpkPatterns.Except(matchedDirs))
             {
-                Log.Warn($"Depot {job.DepotID} in files.json has a \"vpk:\" entry but no pak01_dir.vpk, so no archives are downloaded. List the pak01_dir.vpk too.");
+                Log.Warn($"\"{pattern.Source}\" in files.json matched no _dir.vpk in depot {job.DepotID}.");
             }
         }
 
-        return fileJobs;
+        return (fileJobs, vpkDirectories);
+    }
+
+    /// <summary>
+    /// Downloads the chunks of the archives next to downloaded directory files that the files.json VPK entries are in,
+    /// at their offsets in otherwise empty archives, so VRF reads those entries from the directory file like from a full VPK.
+    /// Returns false when anything failed.
+    /// </summary>
+    private static async Task<bool> DownloadVpkEntries(
+        FileDownloader fileDownloader,
+        List<ManifestJob> jobs,
+        List<DownloadedFile> files,
+        Dictionary<DepotManifest.FileData, IReadOnlyList<VpkPattern>> vpkDirectories)
+    {
+        var success = true;
+        var archives = new List<PartialFile>();
+
+        // Patterns of the directory files that were read, ones that failed to download or read already logged an error
+        var readPatterns = new HashSet<VpkPattern>();
+        var matchedPatterns = new HashSet<VpkPattern>();
+
+        foreach (var (job, file, filePath) in files.OrderBy(static f => f.File.FileName, StringComparer.Ordinal))
+        {
+            if (!vpkDirectories.TryGetValue(file, out var patterns))
+            {
+                continue;
+            }
+
+            var dirFileName = FileFilter.NormalizePath(file.FileName);
+            using var package = VpkReader.TryRead(job, filePath, dirFileName);
+
+            if (package == null)
+            {
+                success = false;
+                continue;
+            }
+
+            var matches = VpkReader.ListEntries(package, patterns);
+            readPatterns.UnionWith(patterns);
+            matchedPatterns.UnionWith(matches.Select(static m => m.Pattern));
+
+            var entries = matches.Select(static m => m.Entry).Distinct().ToList();
+            var (found, dirArchives) = VpkReader.FindArchiveChunks(jobs, job, dirFileName, entries);
+            success &= found;
+            archives.AddRange(dirArchives);
+
+            Log.Info($"[{job}] {dirFileName}: {entries.Count} entries in {dirArchives.Count} archives");
+        }
+
+        // Like a typo, or entries that were moved or removed
+        foreach (var pattern in readPatterns.Except(matchedPatterns))
+        {
+            Log.Warn($"\"{pattern.Source}\" in files.json matched no VPK entries.");
+        }
+
+        return await fileDownloader.DownloadPartialFiles(archives) && success;
     }
 
     // GameTracking passes a username and password, locally a saved login is enough

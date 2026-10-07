@@ -108,7 +108,14 @@ internal static class Help
         backslashes are doubled in JSON strings):
           game/csgo/steam.inf                        exact path
           regex:.+?\.(dll|exe)                       .NET regex for the whole path
-          vpk:vsndevts_c,vxml_c                      archives of the listed pak01_dir.vpk holding those extensions
+          game/dota/pak01_dir.vpk:<pattern>          entries inside that VPK, with the pattern rules of get,
+                                                     like "game/dota/pak01_dir.vpk:regex:^scripts/npc/.+\.txt$"
+                                                     or "pak01_dir.vpk:regex:\.(vsndevts_c|vxml_c)$" for any folder
+
+          For VPK entries, the _dir.vpk is downloaded whole, and only the chunks of its archives that hold
+          the entries are written into them, at their offsets. VRF then extracts those entries from the _dir.vpk
+          as if the archives were complete. The rest of each archive is empty (sparse), so VRF's filters
+          must not match other entries, which fail their CRC check. Archives are found in every depot of the app.
 
         Options:
           --appid <app>          Steam app id

@@ -120,8 +120,9 @@ SteamFileDownloader track --appid 730 --output csgo --save-all-manifests
         "regex:resource/.*\\.txt"
     ],
     "373301": [
-        "game/csgo/pak01_dir.vpk",
-        "vpk:vsndevts_c,vxml_c"
+        "game/dota/pak01_dir.vpk:regex:^scripts/npc/.+\\.txt$",
+        "game/dota/pak01_dir.vpk:scripts/heroes.herolist_c",
+        "pak01_dir.vpk:regex:\\.(vsndevts_c|vxml_c)$"
     ]
 }
 ```
@@ -129,7 +130,16 @@ SteamFileDownloader track --appid 730 --output csgo --save-all-manifests
 Each entry is one of:
 - **A file path**, matched exactly.
 - **`regex:`** followed by a regex for the whole path.
-- **`vpk:`** followed by comma-separated extensions; the `pak01_*.vpk` archives holding them are downloaded. The `pak01_dir.vpk` must be listed too.
+- **`<path>_dir.vpk:<entry pattern>`**, entries inside that VPK, with the same rules as the patterns of `get`. A bare `pak01_dir.vpk` matches it in any folder.
+
+For VPK entries, the `_dir.vpk` is downloaded whole, and only the chunks of its `_NNN.vpk` archives that hold the entries are written into them, at their offsets. [VRF](https://github.com/ValveResourceFormat/ValveResourceFormat) then extracts those entries from the `_dir.vpk` as if the archives were complete:
+
+```bash
+Source2Viewer-CLI --input game/dota/pak01_dir.vpk --output game/dota/pak01_dir/ --vpk_decompile \
+    --vpk_filepath "scripts/npc/,scripts/heroes.herolist_c"
+```
+
+The rest of each archive is empty, and sparse, so it takes no disk space. VRF's filters must match only entries that `files.json` matches, since others fail their CRC check. Archives are looked up in every depot of the app, as Dota 2 keeps most of them in other depots than its `pak01_dir.vpk`.
 
 ### How it works
 
@@ -138,8 +148,8 @@ This command is meant for fresh checkouts. It doesn't diff against earlier downl
 - **Startup**: `files.json` is loaded before connecting, so a broken one fails fast.
 - **Login**: anonymous, with the username and password, or with a saved login. Steam Guard prompts don't work headless.
 - **CDN servers**: `SteamCache` and `CDN` servers for the cell id, without proxies, China-only or app-restricted ones. A server that errors is swapped for the next one.
-- **Depots**: from the app's PICS info, the depots in `files.json`, or all of them with `--save-all-manifests`. Shared depots (`depotfromapp`) are skipped. A depot without a manifest on the branch uses `public`, but a branch the app doesn't have, or a password protected one, fails the run.
+- **Depots**: from the app's PICS info, the depots in `files.json`, or all of them with `--save-all-manifests` or VPK entries. Shared depots (`depotfromapp`) are skipped. A depot without a manifest on the branch uses `public`, but a branch the app doesn't have, or a password protected one, fails the run.
 - **Manifests**: downloaded with the depot key and a manifest request code, with retries. A 401, 403 or 404 is retried once on another server with a new request code. Failures of depots not in `files.json` are only logged.
 - **Download**: after disconnecting from Steam, files download concurrently from the CDN. Identical files are downloaded once and copied. Each chunk is checked against its SHA-1 and written into a file in the system temp folder, which is moved into place once complete.
-- **VPKs**: for `vpk:` entries, the listed `pak01_dir.vpk` is downloaded and read first, then only the archives next to it holding those extensions.
+- **VPKs**: for VPK entries, the `_dir.vpk` is downloaded and read first, then only the chunks of its archives that hold the entries. Chunks already in the archives with the right SHA-1 are kept.
 - **Completion**: when everything succeeded, `steam_buildid.txt` gets the branch's build id and the exit code is 0, otherwise 1 (or 3 or 4 when logging in again after a lost connection failed).

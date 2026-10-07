@@ -23,13 +23,13 @@ internal sealed partial class FileFilter
 
     public List<FilePattern> Patterns { get; } = [];
 
-    // files.json "vpk:" entries, archives holding these extensions are downloaded whole
-    public string[] PakExtensions { get; private set; } = [];
-
-    // Command line "<dir.vpk>:<entry>" entries, only the needed chunks of archives are downloaded
+    // "<dir.vpk>:<entry>" entries, only the needed chunks of archives are downloaded
     public List<VpkPattern> VpkPatterns { get; } = [];
 
     public bool IsMatch(string path) => Patterns.Any(p => p.Regex.IsMatch(path));
+
+    // The VPK patterns whose directory file this is
+    public IReadOnlyList<VpkPattern> GetVpkPatterns(string path) => VpkPatterns.Count == 0 ? [] : [.. VpkPatterns.Where(p => p.Dir.IsMatch(path))];
 
     [JsonSourceGenerationOptions(AllowTrailingCommas = true, ReadCommentHandling = JsonCommentHandling.Skip)]
     [JsonSerializable(typeof(Dictionary<uint, List<string>>))]
@@ -38,7 +38,7 @@ internal sealed partial class FileFilter
     }
 
     /// <summary>
-    /// Loads files.json, which maps depot ids to exact file names, "regex:" patterns and "vpk:" extension lists.
+    /// Loads files.json, which maps depot ids to exact file names, "regex:" patterns and VPK entry patterns.
     /// </summary>
     public static Dictionary<uint, FileFilter> LoadFilesJson(string path)
     {
@@ -53,10 +53,17 @@ internal sealed partial class FileFilter
 
             foreach (var fileMatch in fileMatches)
             {
+                if (filter.TryAddVpkPattern(fileMatch))
+                {
+                    continue;
+                }
+
+                // Would otherwise be a file name that matches nothing
                 if (fileMatch.StartsWith("vpk:", StringComparison.Ordinal))
                 {
-                    filter.PakExtensions = [.. filter.PakExtensions, .. fileMatch["vpk:".Length..].Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)];
-                    continue;
+                    var extensions = string.Join('|', fileMatch["vpk:".Length..].Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries));
+
+                    throw new InvalidDataException($"\"{fileMatch}\" in depot {depotID} is no longer supported. VPK entry patterns download only the chunks the entries are in: \"pak01_dir.vpk:regex:\\\\.({extensions})$\".");
                 }
 
                 var pattern = fileMatch.StartsWith(RegexPrefix, StringComparison.Ordinal) ? fileMatch[RegexPrefix.Length..] : Regex.Escape(fileMatch);
@@ -79,22 +86,31 @@ internal sealed partial class FileFilter
 
         foreach (var pattern in patterns)
         {
-            var vpkSplit = pattern.IndexOf(DirVpkSuffix, StringComparison.OrdinalIgnoreCase);
-
-            if (vpkSplit >= 0)
+            if (!filter.TryAddVpkPattern(pattern))
             {
-                // The directory file follows the same rules, so a bare "pak01_dir.vpk" matches it in any folder
-                var dirPattern = pattern[..(vpkSplit + DirVpkSuffix.Length - 1)];
-                var entryPattern = pattern[(vpkSplit + DirVpkSuffix.Length)..];
-
-                filter.VpkPatterns.Add(new VpkPattern(pattern, ParsePattern(dirPattern), ParsePattern(entryPattern.Length == 0 ? "regex:" : entryPattern)));
-                continue;
+                filter.Patterns.Add(new FilePattern(pattern, ParsePattern(pattern)));
             }
-
-            filter.Patterns.Add(new FilePattern(pattern, ParsePattern(pattern)));
         }
 
         return filter;
+    }
+
+    // "<path>_dir.vpk:<entry pattern>", the same on the command line and in files.json. Returns false for other patterns
+    private bool TryAddVpkPattern(string pattern)
+    {
+        var vpkSplit = pattern.IndexOf(DirVpkSuffix, StringComparison.OrdinalIgnoreCase);
+
+        if (vpkSplit < 0)
+        {
+            return false;
+        }
+
+        // The directory file follows the same rules, so a bare "pak01_dir.vpk" matches it in any folder
+        var dirPattern = pattern[..(vpkSplit + DirVpkSuffix.Length - 1)];
+        var entryPattern = pattern[(vpkSplit + DirVpkSuffix.Length)..];
+
+        VpkPatterns.Add(new VpkPattern(pattern, ParsePattern(dirPattern), ParsePattern(entryPattern.Length == 0 ? "regex:" : entryPattern)));
+        return true;
     }
 
     // Exact paths when there is a slash, otherwise a file name in any folder, or an unanchored regex like DepotDownloader's
