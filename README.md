@@ -63,7 +63,7 @@ Targets are `[<app>/]<depot>[:<manifest>|:latest][@<branch>]`, where `<depot>` c
 - `regex:` matches anywhere in the path, like DepotDownloader's file lists.
 - `<path>_dir.vpk:<entry pattern>` selects entries inside that VPK, with the same rules for both parts. Entries are extracted to a folder named after the directory file, like `game/core/pak01_dir/`.
 
-Files go to `<output>/<depot>/<manifest>/`, by default under `depots` in the current folder. Reuse the same output folder, since files already in it, or identical in another manifest of the depot, aren't downloaded again.
+Files go to `<output>/<depot>/<manifest>/`, by default under `depots` in the current folder. Reuse the same output folder, since files already in it, or identical in another manifest of the depot, aren't downloaded again. Files and folders are dated to when their manifest was created, so builds sort by date.
 
 ## Logins and rate limits
 

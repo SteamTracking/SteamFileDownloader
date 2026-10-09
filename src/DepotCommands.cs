@@ -195,6 +195,7 @@ internal static partial class DepotCommands
         }
 
         var directories = OpenVpkDirectories(run, files).ToList();
+        var paths = files.Select(static f => (f.Job, f.Path)).ToList();
 
         try
         {
@@ -211,6 +212,7 @@ internal static partial class DepotCommands
                 foreach (var path in results[i].Paths.Order(StringComparer.Ordinal))
                 {
                     run.WriteRow(directories[i].Job, path);
+                    paths.Add((directories[i].Job, path));
                 }
             }
         }
@@ -221,6 +223,8 @@ internal static partial class DepotCommands
                 directory.Package.Dispose();
             }
         }
+
+        SetFolderTimes(paths);
 
         return Finish(run, downloads: true);
     }
@@ -267,6 +271,8 @@ internal static partial class DepotCommands
                 }
             }
         }
+
+        SetFolderTimes(dirFiles.Select(static f => (f.Job, f.Path)));
 
         return Finish(run, downloads: false);
     }
@@ -546,7 +552,7 @@ internal static partial class DepotCommands
                 OutputFolder = outputFolder,
                 Optional = optional,
 
-                // Earlier runs of other manifests of this depot may already have identical files, recently written ones first
+                // Earlier runs of other manifests of this depot may already have identical files, newest manifests first by their folder's date
                 ReuseFolders = Directory.Exists(depotFolder)
                     ? [.. new DirectoryInfo(depotFolder).GetDirectories()
                         .Where(d => !string.Equals(d.FullName, outputFolder, StringComparison.OrdinalIgnoreCase))
@@ -733,6 +739,43 @@ internal static partial class DepotCommands
             }
 
             yield return (file.Job, dirFileName, package, matches);
+        }
+    }
+
+    /// <summary>
+    /// Dates the folders of the files, up to their manifest's folder, to when the manifest was created, like the files, so builds sort by date.
+    /// Only once everything is written, since writing a file in a folder changes the folder's date.
+    /// </summary>
+    private static void SetFolderTimes(IEnumerable<(ManifestJob Job, string Path)> files)
+    {
+        var folders = new Dictionary<string, ManifestJob>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (job, path) in files)
+        {
+            var folder = Path.GetDirectoryName(path);
+
+            // Stops at a folder that is already added, since its parents are too
+            while (folder != null && folder.Length >= job.OutputFolder.Length && folders.TryAdd(folder, job))
+            {
+                folder = Path.GetDirectoryName(folder);
+            }
+        }
+
+        foreach (var (folder, job) in folders)
+        {
+            try
+            {
+                var info = new DirectoryInfo(folder);
+
+                if (info.LastWriteTimeUtc != job.CreationTime)
+                {
+                    info.LastWriteTimeUtc = job.CreationTime;
+                }
+            }
+            catch (Exception e) when (FileDownloader.IsFileError(e))
+            {
+                Log.Warn($"[{job}] Failed to set the date of {folder}: {e.Message}");
+            }
         }
     }
 

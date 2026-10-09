@@ -229,7 +229,7 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
                 return (DownloadResult.AlreadyValid, finalPath);
             }
 
-            await File.WriteAllBytesAsync(finalPath, [], cancellationToken);
+            await WriteFileAsync(finalPath, [], job.CreationTime, cancellationToken);
 
             return (DownloadResult.Success, finalPath);
         }
@@ -248,7 +248,9 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
 
             if (reusable != null)
             {
+                // A copy keeps the date of the build it came from
                 File.Copy(reusable, partialPath, overwrite: true);
+                File.SetLastWriteTimeUtc(partialPath, job.CreationTime);
                 File.Move(partialPath, finalPath, overwrite: true);
 
                 return (DownloadResult.Copied, finalPath);
@@ -306,7 +308,8 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
     }
 
     /// <summary>
-    /// Downloads chunks into a file of the given length, each at its position. Returns false when any chunk failed.
+    /// Downloads chunks into a file of the given length, each at its position, dated to when the job's manifest was created.
+    /// Returns false when any chunk failed.
     /// </summary>
     public async Task<bool> DownloadChunksToFile(
         ManifestJob job,
@@ -318,7 +321,25 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
         using var handle = File.OpenHandle(path, FileMode.Create, FileAccess.ReadWrite, FileShare.None, FileOptions.Asynchronous, length);
         RandomAccess.SetLength(handle, length);
 
-        return await DownloadChunks(job, fileName, placements, handle);
+        if (!await DownloadChunks(job, fileName, placements, handle))
+        {
+            return false;
+        }
+
+        File.SetLastWriteTimeUtc(handle, job.CreationTime);
+
+        return true;
+    }
+
+    /// <summary>
+    /// Writes a whole file, dated to the given time.
+    /// </summary>
+    public static async Task WriteFileAsync(string path, byte[] data, DateTime lastWriteTime, CancellationToken cancellationToken = default)
+    {
+        using var handle = File.OpenHandle(path, FileMode.Create, FileAccess.Write, FileShare.None, FileOptions.Asynchronous, data.Length);
+
+        await RandomAccess.WriteAsync(handle, data, 0, cancellationToken);
+        File.SetLastWriteTimeUtc(handle, lastWriteTime);
     }
 
     /// <summary>
@@ -464,6 +485,11 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
 
         if (success)
         {
+            if (missing.Count > 0)
+            {
+                File.SetLastWriteTimeUtc(handle, job.CreationTime);
+            }
+
             Log.Detail($"[{job}] Downloaded {missing.Count} of {chunks.Count} needed chunks of {file.FileName}");
         }
 

@@ -24,13 +24,16 @@ internal sealed class ManifestJob
     public bool NoAccess;
 
     // Other folders that may already hold identical files, which are copied instead of downloaded.
-    // Most recently written first, since only the first few with a same-size file are hashed
+    // Newest manifests first, since only the first few with a same-size file are hashed
     public string[] ReuseFolders = [];
 
     /// <summary>
     /// The manifest's files by normalized path, built once, to find the archives next to VPK directory files.
     /// </summary>
     public Dictionary<string, DepotManifest.FileData> FilesByPath => field ??= IndexFiles();
+
+    // Files and folders written from the manifest are dated to this
+    public DateTime CreationTime => Manifest!.CreationTime;
 
     public override string ToString() => $"{DepotID}:{ManifestID}";
 

@@ -81,7 +81,8 @@ internal static class Help
         Output:
           stdout has only results, one tab-separated line per file; progress and errors go to stderr.
           Files go to <output>/<depot>/<manifest>/<path>. Files already downloaded, or identical in another
-          manifest of the depot, aren't downloaded again, so reuse the same output folder.
+          manifest of the depot, aren't downloaded again, so reuse the same output folder. Files and
+          folders are dated to when their manifest was created.
 
         {ExitCodesText}
 

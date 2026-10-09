@@ -245,7 +245,7 @@ internal static class VpkReader
                 }
 
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                await File.WriteAllBytesAsync(path, data);
+                await FileDownloader.WriteFileAsync(path, data, job.CreationTime);
 
                 Log.Detail($"[{job}] Extracted {path}");
                 paths.Add(path);
