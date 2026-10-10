@@ -100,10 +100,15 @@ internal static class Help
 
         Usage:
           {ExeName} track --appid <app> --output <dir> [--username <name> --password <password>]
-            [--branch <name>] [--save-manifest] [--save-all-manifests]
+            [--branch <name>] [--manifests <folder>] [--save-manifest] [--save-all-manifests]
 
         Files go to <dir>/<path>, without depot and manifest folders. Files already on disk with the
         right hash are kept. When everything succeeded, <dir>/steam_buildid.txt gets the build id.
+
+        To download an older build, pass --manifests with the manifests/ folder of an older run, like
+        from an old commit of a GameTracking repository. Each depot uses the manifest id in its
+        manifest_<depot>.txt, and depots without one are skipped. VPK entries need the manifests of the
+        depots their archives are in too, so use a run with --save-all-manifests. steam_buildid.txt isn't written.
 
         files.json maps depot ids to lists of patterns (comments and trailing commas are allowed, and
         backslashes are doubled in JSON strings):
@@ -124,14 +129,18 @@ internal static class Help
           --username <name>      Steam username, or anonymous; without --password a saved login
                                  (default: the last saved login)
           --password <password>  Steam password, needs --username
-          --branch <name>        branch to download (default: public)
+          --branch <name>        branch to download (default: public), also for --manifests from a beta
+          --manifests <folder>   manifest ids from the manifest_<depot>.txt files of an older run
           --save-manifest        save the manifests of the depots in files.json as text to <dir>/manifests/
           --save-all-manifests   save the manifests of every depot as text to <dir>/manifests/
 
         {ExitCodesText}
 
-        Example:
+        Examples:
           {ExeName} track --appid 570 --output . --save-all-manifests
+          An older build into another folder, with the files.json and manifests of an old commit:
+            git worktree add ../old <commit>
+            cd ../old && {ExeName} track --appid 570 --output . --manifests manifests
         """;
 
     public static string Ls => $"""

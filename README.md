@@ -106,8 +106,11 @@ SteamFileDownloader track --appid 730 --output csgo --save-all-manifests
 | `--username` | Steam username, or `anonymous` | Last saved login |
 | `--password` | Steam password; without it a saved login is used | Saved login |
 | `--branch` | Branch to download | `public` |
+| `--manifests` | Folder of `manifest_<depot>.txt` files from an older run, to download that build | Latest manifests |
 | `--save-manifest` | Save manifests of the depots in `files.json` as text to `<output>/manifests/` | `false` |
 | `--save-all-manifests` | Save manifests of every depot as text to `<output>/manifests/` | `false` |
+
+To download an older build with the same file patterns, pass `--manifests` with the `manifests/` folder of an older run, like from an old commit of a GameTracking repository. Each depot uses the manifest id in its `manifest_<depot>.txt`, depots without one are skipped, and `steam_buildid.txt` isn't written. VPK entries also need the manifests of the depots their archives are in, which `--save-all-manifests` saves.
 
 ### Configuration
 

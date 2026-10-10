@@ -22,6 +22,7 @@ internal static class TrackCommand
         string? username,
         string? password,
         string branch,
+        string? manifestsFolder,
         bool saveManifest,
         bool saveAllManifests,
         CancellationToken cancellationToken)
@@ -41,6 +42,22 @@ internal static class TrackCommand
         {
             Log.Error($"Failed to load files.json from {Environment.CurrentDirectory}: {e.Message} The get and ls commands don't need it, see \"{Help.ExeName} --help\".");
             return ExitCodes.Failed;
+        }
+
+        // Manifest ids of an older build, from the manifests/ folder of a previous run
+        Dictionary<uint, ulong>? manifestIds = null;
+
+        if (manifestsFolder != null)
+        {
+            try
+            {
+                manifestIds = ManifestWriter.ReadManifestIds(manifestsFolder);
+            }
+            catch (Exception e) when (FileDownloader.IsFileError(e))
+            {
+                Log.Error($"Failed to read the manifests in {manifestsFolder}: {e.Message}");
+                return ExitCodes.Failed;
+            }
         }
 
         var credentials = GetCredentials(username, password);
@@ -82,10 +99,15 @@ internal static class TrackCommand
             return ExitCodes.Failed;
         }
 
-        // Log build ID for this branch
+        // Log build ID for this branch, which an older build's manifests don't have
         int? buildId = null;
+        var manifestSource = manifestIds != null ? manifestsFolder : $"app {appID} on branch \"{branch}\"";
 
-        if (int.TryParse(depots["branches"][branch]["buildid"].Value, out var parsedBuildId))
+        if (manifestIds != null)
+        {
+            Log.Info($"Using the manifests in {manifestsFolder}, steam_buildid.txt won't be written");
+        }
+        else if (int.TryParse(depots["branches"][branch]["buildid"].Value, out var parsedBuildId))
         {
             buildId = parsedBuildId;
             Log.Info($"Branch \"{branch}\": build {parsedBuildId}");
@@ -118,14 +140,16 @@ internal static class TrackCommand
             }
 
             var manifestBranch = branch;
-            var manifestID = SteamSession.GetManifestIdForBranch(depot, ref manifestBranch);
+            var manifestID = manifestIds != null
+                ? manifestIds.GetValueOrDefault(depotID)
+                : SteamSession.GetManifestIdForBranch(depot, ref manifestBranch);
 
             // Depots like DLC and other branches often have no manifest, which is only a problem for tracked ones
             if (manifestID == 0)
             {
                 if (filter != null)
                 {
-                    Log.Warn($"No manifest found for depot {depotID} on branch \"{branch}\"");
+                    Log.Warn($"No manifest found for depot {depotID} in {manifestSource}");
                 }
 
                 continue;
@@ -152,7 +176,7 @@ internal static class TrackCommand
 
         if (manifestJobs.All(static job => job.Optional))
         {
-            Log.Error($"None of the depots in files.json have a manifest in app {appID} on branch \"{branch}\". Check the depot ids in files.json.");
+            Log.Error($"None of the depots in files.json have a manifest in {manifestSource}. Check the depot ids in files.json.");
             return ExitCodes.Failed;
         }
 

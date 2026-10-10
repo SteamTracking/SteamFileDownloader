@@ -22,7 +22,7 @@ internal static class ArgumentParser
         ["ls"] = (["output", "branch", "username"], ["anonymous"]),
         ["depots"] = (["branch", "username"], ["anonymous", "json"]),
         ["login"] = (["username"], []),
-        ["track"] = (["appid", "output", "username", "password", "branch"], ["save-manifest", "save-all-manifests"]),
+        ["track"] = (["appid", "output", "username", "password", "branch", "manifests"], ["save-manifest", "save-all-manifests"]),
     };
 
     public static ParsedArguments? Parse(string command, string[] args)

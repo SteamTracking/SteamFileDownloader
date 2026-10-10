@@ -127,6 +127,7 @@ internal static class Program
             options.GetValueOrDefault("username"),
             options.GetValueOrDefault("password"),
             options.GetValueOrDefault("branch") ?? "public",
+            options.GetValueOrDefault("manifests"),
             options.ContainsKey("save-manifest"),
             options.ContainsKey("save-all-manifests"),
             cancellationToken);
