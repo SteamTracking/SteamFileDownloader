@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 
 namespace SteamFileDownloader;
 
@@ -96,6 +97,7 @@ internal static class Help
           {ExeName} depots <app>... [--json]                  list apps' depots and branches
           {ExeName} ls [<app>] <target>... [-- <pattern>...]  list files without downloading
           {ExeName} get [<app>] <target>... -- <pattern>...   download matching files (or --all-files)
+          {ExeName} workshop <subcommand> ...                 workshop items: info, search, ls and get
           {ExeName} dd <DepotDownloader arguments>            run a DepotDownloader command line
           {ExeName} track --appid <app> --output <dir>        download the files in ./files.json (GameTracking)
           {ExeName} <command> --help                          details and examples
@@ -315,6 +317,181 @@ internal static class Help
           {ExeName} dd -app 730 -depot 2347771 -manifest 8344780363095656278 -filelist files.txt
         """;
 
+    private static string WorkshopItems => """
+        Items:
+          <item>               an item's id or its page's URL, like 3070715607 or
+                               https://steamcommunity.com/sharedfiles/filedetails/?id=3070715607
+          <item>:<manifest>    an older version for ls and get, which workshop info lists with its history
+          <collection>         the items in a collection, skipping ones without files to download
+
+          Each run logs in to Steam once, so put all items in one run. Items of the legacy workshop, from
+          before it kept files in depots, like those of Left 4 Dead 2, are not implemented.
+        """;
+
+    private static string WorkshopExitCodesText => """
+        Exit codes:
+          0  success
+          1  something failed, see stderr
+          3  no saved login, or Steam rejected it: a person has to run "login"
+          4  Steam is rate limiting logins: wait about 15 minutes
+          5  only access failed: some items are private, or need another account (--username)
+        """;
+
+    private static string WorkshopFilesExitCodesText => """
+        Exit codes:
+          0  success
+          1  something failed, see stderr. stdout has the rows of what succeeded; failed items have none,
+             which doesn't mean their files don't exist. Running the same command again retries only what failed
+          2  a pattern matched nothing in any item, and nothing failed
+          3  no saved login, or Steam rejected it: a person has to run "login"
+          4  Steam is rate limiting logins: wait about 15 minutes
+          5  only access failed: some items are private, or need another account (--username)
+        """;
+
+    public static string Workshop => $"""
+        Workshop items, whose files are manifests in the workshop depot of the app they're for.
+
+        Usage:
+          {ExeName} workshop info <item>... [--json]                       app, depot, manifest, size and title
+          {ExeName} workshop info <item>... --history [--limit <n|all>]    versions, newest first
+          {ExeName} workshop search <app> <text>... [--limit <n|all>]      find items by text
+          {ExeName} workshop ls <item>... [-- <pattern>...]                list files without downloading
+          {ExeName} workshop get <item>... -- <pattern>...                 download matching files (or --all-files)
+          {ExeName} workshop <subcommand> --help                           details and examples
+
+        Files go to <output>/workshop/<item>/<manifest>/<path>, and ls and get take the patterns of get.
+
+        {WorkshopItems}
+        """;
+
+    public static string WorkshopLs => $"""
+        Lists files of workshop items without downloading them, over one Steam login.
+
+        Usage:
+          {ExeName} workshop ls <item>... [-- <pattern>...]
+
+        {ExitCodesSummary}
+
+        Without patterns every file is listed. stdout has one tab-separated row per file:
+          depot  manifest  sha1  size  path
+        and one per VPK entry, for which only the _dir.vpk is downloaded:
+          depot  manifest  crc32  size  <dir.vpk>:<entry path>
+        depot is the app's workshop depot. stderr has a line per item with its manifest and title.
+        {Streams}
+
+        To see what changed between versions, list them in one run and compare the sha1 column.
+
+        {WorkshopItems}
+
+        {Patterns}
+
+        Options:
+          --output <dir>      root output folder for _dir.vpk files (default: depots in the current folder)
+        {LoginOptions}
+
+        {WorkshopFilesExitCodesText}
+
+        Examples:
+          {ExeName} workshop ls 3070715607
+          {ExeName} workshop ls 3818412809 -- "*.vpk"
+        """;
+
+    public static string WorkshopGet => $"""
+        Downloads matching files of workshop items, over one Steam login.
+
+        Usage:
+          {ExeName} workshop get <item>... -- <pattern>...
+          {ExeName} workshop get <item>... --all-files     every file of the items
+
+        {ExitCodesSummary}
+
+        Files go to <output>/workshop/<item>/<manifest>/<path>, dated to when their manifest was created.
+        Files already on disk with the right hash are kept, and ones with the same hash in another downloaded
+        version of the item are copied.
+
+        stdout has one tab-separated row per matching file on disk, including ones that already were,
+        and none with --all-files:
+          depot  manifest  absolute path
+        stderr has a line per item with its manifest and title.
+        {Streams}
+
+        {WorkshopItems}
+
+        {Patterns}
+
+        Options:
+          --output <dir>      root output folder (default: depots in the current folder)
+        {LoginOptions}
+
+        {WorkshopFilesExitCodesText}
+
+        Examples:
+          {ExeName} workshop get 3070715607 -- "*.vpk"
+          {ExeName} workshop get https://steamcommunity.com/sharedfiles/filedetails/?id=3818412809 --all-files
+        """;
+
+    public static string WorkshopInfo => $"""
+        Shows workshop items: the app they're for, its workshop depot, their current manifest, when they were
+        updated, their size and title.
+
+        Usage:
+          {ExeName} workshop info <item>... [--json]
+          {ExeName} workshop info <item>... --history [--limit <n|all>] [--json]
+
+        stdout has one tab-separated row per item, and one per item of a collection after the collection's row:
+          item  app  depot  manifest  updated  size  title
+        manifest is "collection" for a collection, and "legacy" for a legacy item. depot is - when the app has
+        no workshop depot. updated is in UTC, size in bytes.
+
+        With --history, stdout has one row per version of each item instead, newest first:
+          <item>:<manifest>  updated  change note
+        Changes that only edited an item's text keep its manifest, so they are one version, dated to when the
+        manifest was uploaded. stderr has the number of changes of each item.
+
+        With --json, stdout is one JSON object with everything Steam sends about each item, by item id: its
+        "details", and with --history its "history" of changes. 64-bit numbers are strings.
+
+        {Streams}
+
+        {WorkshopItems}
+
+        Options:
+          --history           list the versions of each item
+          --limit <n|all>     how many versions --history lists per item (default: 20)
+          --json              everything about the items as JSON
+        {LoginOptions}
+
+        {WorkshopExitCodesText}
+
+        Examples:
+          {ExeName} workshop info 3070715607 https://steamcommunity.com/sharedfiles/filedetails/?id=2852945816
+          {ExeName} workshop info 3070715607 --history --limit all
+        """;
+
+    public static string WorkshopSearch => $"""
+        Searches an app's workshop items by text, ranked like the workshop's search, to find their ids.
+
+        Usage:
+          {ExeName} workshop search <app> <text>... [--limit <n|all>]
+
+        stdout has one tab-separated row per item, best match first:
+          item  app  depot  manifest  updated  size  subscribers  title
+        manifest is - for an item whose current manifest is only in its history (see workshop info), and
+        "legacy" for a legacy item. stderr has the number of matching items.
+
+        {Streams}
+
+        Options:
+          --limit <n|all>     how many items to list (default: 20)
+        {LoginOptions}
+
+        {WorkshopExitCodesText}
+
+        Examples:
+          {ExeName} workshop search 730 de_dust2
+          {ExeName} workshop search 570 custom hero chaos --limit 100
+        """;
+
     public static string Login => $"""
         Logs in to Steam and saves a refresh token, so other commands never ask for a password.
 
@@ -345,15 +522,17 @@ internal static class Help
     {
         if (args.Length == 0 || IsHelp(args[0]) || args[0] == "help")
         {
-            var command = args.Length > 1 && !IsHelp(args[1]) ? args[1] : null;
+            var command = args.Length > 1 && !IsHelp(args[1]) ? GetCommandName(args[1..]) : null;
             Console.WriteLine(GetCommandHelp(command) ?? Overview);
             return true;
         }
 
-        var commandHelp = GetCommandHelp(args[0]);
+        var name = GetCommandName(args);
+        var commandHelp = GetCommandHelp(name);
+        var bare = args.Length == name.Count(static c => c == ' ') + 1;
 
         // A bare command, or --help anywhere before the patterns. A bare login is the QR code login, not a request for help
-        if ((commandHelp != null && args.Length == 1 && args[0] != "login") || Array.Exists(ArgumentParser.SplitPatterns(args).Options, IsHelp))
+        if ((commandHelp != null && bare && name != "login") || Array.Exists(ArgumentParser.SplitPatterns(args).Options, IsHelp))
         {
             Console.WriteLine(commandHelp ?? Overview);
             return true;
@@ -370,8 +549,17 @@ internal static class Help
         "dd" => DepotDownloader,
         "login" => Login,
         "track" => Track,
+        "workshop" => Workshop,
+        "workshop info" => WorkshopInfo,
+        "workshop search" => WorkshopSearch,
+        "workshop ls" => WorkshopLs,
+        "workshop get" => WorkshopGet,
         _ => null,
     };
+
+    // The first argument, or the first two for a subcommand
+    private static string GetCommandName(string[] args) =>
+        args.Length > 1 && ArgumentParser.CommandOptions.ContainsKey($"{args[0]} {args[1]}") ? $"{args[0]} {args[1]}" : args[0];
 
     private static bool IsHelp(string arg) => arg is "-h" or "--help" or "-?" or "/?";
 }

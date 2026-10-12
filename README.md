@@ -11,6 +11,7 @@ Typical uses are datamining and reverse engineering Source 2 games like Counter-
 - **Listing without downloading**: names, sizes and SHA-1 hashes, to compare builds.
 - **Partial VPK downloads**: list a VPK's entries, or extract them by downloading only the chunks they span.
 - **No repeat downloads**: files already downloaded are checked and kept, and ones identical in another build are copied, so running a failed command again retries only what failed.
+- **Workshop items**: details, version history and search, and listing or downloading an item's files from any version, collections included.
 - **Saved logins**: log in once with a QR code from the Steam mobile app. Tokens are encrypted for the Windows user.
 - **DepotDownloader compatible**: `dd` runs an existing DepotDownloader command line.
 - **Agent friendly**: running it without arguments prints the full usage, exit codes say what went wrong, and parallel runs on one account don't disconnect each other.
@@ -69,6 +70,27 @@ Patterns go after `--` and ignore case:
 Files go to `<output>/<depot>/<manifest>/`, by default under `depots` in the current folder. Reuse the same output folder, since files already in it, or identical in another manifest of the depot, aren't downloaded again. Files and folders are dated to when their manifest was created, so builds sort by date.
 
 stdout has only results, as tab-separated rows (one JSON object for `depots --json`), and everything else goes to stderr. A run that fails still prints the rows of what succeeded.
+
+## Workshop items
+
+A workshop item's files are a manifest in the workshop depot of the app it's for. `workshop` takes item ids or their page URLs, and a collection stands for its items:
+
+```bash
+# Item details: item, app, depot, manifest, updated, size, title (--json for everything Steam sends)
+SteamFileDownloader workshop info 3070715607
+
+# Its versions, newest first, as <item>:<manifest> rows for ls and get
+SteamFileDownloader workshop info 3070715607 --history
+
+# Find items by text: the same columns plus subscribers
+SteamFileDownloader workshop search 730 dust2
+
+# List or download files of the current and an older version, into <output>/workshop/<item>/<manifest>/
+SteamFileDownloader workshop ls 3070715607
+SteamFileDownloader workshop get 3070715607 3070715607:5179645662803098587 -- "*.vpk"
+```
+
+`ls` and `get` take the patterns, `--all-files` and `--output` of the root commands. Items of the legacy workshop, from before it kept files in depots, are not supported.
 
 ## Logins and rate limits
 

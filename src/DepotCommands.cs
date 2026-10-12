@@ -338,6 +338,13 @@ internal static class DepotCommands
 
             var depotInfo = depots[target.DepotID.Value.ToString(CultureInfo.InvariantCulture)];
 
+            if (depotInfo == KeyValue.Invalid && Workshop.GetWorkshopDepot(appInfos[target.AppID]) == target.DepotID)
+            {
+                Log.Error($"Depot {target.DepotID} is the workshop depot of app {target.AppID}, whose manifests are workshop items. Use \"{Help.ExeName} workshop ls <item>\" or \"workshop get\", or give <depot>:<manifest>.");
+                run.Fail($"{target.Source} (workshop depot)");
+                continue;
+            }
+
             if (depotInfo == KeyValue.Invalid)
             {
                 Log.Error($"Depot {target.DepotID} is not in app {target.AppID}, so its latest manifest is unknown. Check with \"{Help.ExeName} depots {target.AppID}\", name its app as <app>/<depot>, or give <depot>:<manifest>.");
@@ -451,17 +458,18 @@ internal static class DepotCommands
             if (jobs.All(static j => j.Manifest == null))
             {
                 var noAccess = jobs.All(static j => j.NoAccess);
+                var what = jobs[0].ItemID != null ? "items" : "depots";
 
                 Log.Error(noAccess
-                    ? $"None of the {jobs.Count} depots of target {source} could be downloaded; this account likely has no access to them."
-                    : $"None of the {jobs.Count} depots of target {source} could be downloaded; see the errors above.");
+                    ? $"None of the {jobs.Count} {what} of target {source} could be downloaded; this account likely has no access to them."
+                    : $"None of the {jobs.Count} {what} of target {source} could be downloaded; see the errors above.");
                 run.Fail(noAccess ? $"{source} (no access)" : source, noAccess);
             }
         }
 
         // Patterns can only be judged against manifests that were downloaded
         var unmatched = run.Matches.Count > 0 ? run.MatchCounts.Where(static p => p.Value == 0).Select(static p => p.Key).ToList() : [];
-        var skipped = run.Jobs.Where(static j => j.Optional && j.NoAccess).Select(static j => j.DepotID.ToString(CultureInfo.InvariantCulture)).ToList();
+        var skipped = run.Jobs.Where(static j => j.Optional && j.NoAccess).Select(static j => j.ItemID != null ? j.ToString() : j.DepotID.ToString(CultureInfo.InvariantCulture)).ToList();
 
         foreach (var pattern in unmatched)
         {

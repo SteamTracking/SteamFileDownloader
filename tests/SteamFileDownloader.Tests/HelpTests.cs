@@ -15,6 +15,10 @@ public partial class HelpTests
         "depots" => Help.Depots,
         "login" => Help.Login,
         "track" => Help.Track,
+        "workshop info" => Help.WorkshopInfo,
+        "workshop search" => Help.WorkshopSearch,
+        "workshop ls" => Help.WorkshopLs,
+        "workshop get" => Help.WorkshopGet,
         _ => throw new ArgumentOutOfRangeException(nameof(command)),
     };
 
@@ -62,6 +66,7 @@ public partial class HelpTests
     [Arguments("--version")]
     [Arguments("get 730 1 -- --help")]
     [Arguments("get 730 1 -- server.dll")]
+    [Arguments("workshop info 3070715607")]
     public async Task OtherCommandLinesAreNotHelp(string commandLine)
     {
         await Assert.That(Help.TryPrint(commandLine.Split(' '))).IsFalse();
@@ -78,12 +83,19 @@ public partial class HelpTests
     [Arguments("--help track", "track")]
     [Arguments("help", "overview")]
     [Arguments("bogus --help", "overview")]
+    [Arguments("workshop", "workshop")]
+    [Arguments("workshop bogus --help", "workshop")]
+    [Arguments("workshop info", "workshop info")]
+    [Arguments("workshop info 3070715607 --help", "workshop info")]
+    [Arguments("help workshop info", "workshop info")]
+    [Arguments("workshop get 3070715607 -h -- a.vpk", "workshop get")]
     public async Task HelpRequestPrintsTheHelpOfItsCommand(string commandLine, string command)
     {
         var expected = command switch
         {
             "overview" => Help.Overview,
             "dd" => Help.DepotDownloader,
+            "workshop" => Help.Workshop,
             _ => GetHelp(command),
         };
 
@@ -110,6 +122,11 @@ public partial class HelpTests
             ["dd"] = Help.DepotDownloader,
             ["login"] = Help.Login,
             ["track"] = Help.Track,
+            ["workshop"] = Help.Workshop,
+            ["workshop info"] = Help.WorkshopInfo,
+            ["workshop search"] = Help.WorkshopSearch,
+            ["workshop ls"] = Help.WorkshopLs,
+            ["workshop get"] = Help.WorkshopGet,
         };
 
         var tooLong = new List<string>();

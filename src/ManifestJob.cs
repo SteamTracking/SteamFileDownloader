@@ -14,6 +14,8 @@ internal sealed class ManifestJob
     public ulong ManifestID;
     public required string Branch;
     public required string OutputFolder;
+    // The workshop item whose files the manifest has, which names the job as <item>:<manifest> instead of <depot>:<manifest>
+    public ulong? ItemID;
     public byte[]? DepotKey;
     public DepotManifest? Manifest;
 
@@ -41,7 +43,7 @@ internal sealed class ManifestJob
     // Files and folders written from the manifest are dated to this
     public DateTime CreationTime => Manifest!.CreationTime;
 
-    public override string ToString() => $"{DepotID}:{ManifestID}";
+    public override string ToString() => $"{ItemID ?? DepotID}:{ManifestID}";
 
     /// <summary>
     /// A job whose files go to &lt;parentFolder&gt;/&lt;manifest&gt;, where folders of other manifests may already have identical files.

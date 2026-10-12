@@ -24,6 +24,10 @@ internal static class ArgumentParser
         ["depots"] = (["branch", "username"], ["anonymous", "json"]),
         ["login"] = (["username"], []),
         ["track"] = (["appid", "output", "username", "password", "branch", "manifests"], ["save-manifest", "save-all-manifests"]),
+        ["workshop info"] = (["limit", "username"], ["history", "json", "anonymous"]),
+        ["workshop search"] = (["limit", "username"], ["anonymous"]),
+        ["workshop ls"] = (["output", "username"], ["anonymous"]),
+        ["workshop get"] = (["output", "username"], ["anonymous", "all-files"]),
     };
 
     public static ParsedArguments? Parse(string command, string[] args)

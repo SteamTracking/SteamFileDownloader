@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using SteamKit2;
 using SteamKit2.Authentication;
 using SteamKit2.CDN;
+using SteamKit2.Internal;
 
 namespace SteamFileDownloader;
 
@@ -26,7 +27,7 @@ internal sealed record LogOnCredentials(string Username, string? Password = null
 /// One Steam connection, used to get depot keys and manifests, and the CDN client that manifests download from. As an
 /// <see cref="IChunkSource"/> it also downloads the chunks of files, which doesn't need the Steam connection.
 /// </summary>
-internal sealed class SteamSession : IDisposable, IChunkSource
+internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
 {
     private const int MaxRetries = 7;
     private const int MaxCdnRetries = 5;
@@ -40,6 +41,7 @@ internal sealed class SteamSession : IDisposable, IChunkSource
     private readonly SteamUser User;
     private readonly SteamApps Apps;
     private readonly SteamContent Content;
+    private readonly PublishedFile PublishedFiles;
     private readonly CancellationTokenSource PumpCts;
     private readonly CancellationToken CancellationToken;
     private readonly Dictionary<(uint DepotID, uint AppID), Task<(byte[]? Key, bool NoAccess, string? Problem)>> DepotKeys = [];
@@ -78,6 +80,7 @@ internal sealed class SteamSession : IDisposable, IChunkSource
 
         CdnClient = new Client(SteamClient);
         Content = SteamClient.GetHandler<SteamContent>()!;
+        PublishedFiles = SteamClient.GetHandler<SteamUnifiedMessages>()!.CreateService<PublishedFile>();
 
         // A server that doesn't answer is given up on soon, since the retry goes to another one. A body gets much
         // longer, since many chunks share the connection and a slow one can take minutes for each, as can big manifests
@@ -506,6 +509,47 @@ internal sealed class SteamSession : IDisposable, IChunkSource
         return appInfos;
     }
 
+    public async Task<List<PublishedFileDetails>> GetPublishedFileDetailsAsync(IReadOnlyCollection<ulong> itemIDs, bool full)
+    {
+        var request = new CPublishedFile_GetDetails_Request
+        {
+            includechildren = true,
+            includetags = full,
+            includekvtags = full,
+            includemetadata = full,
+            includevotes = full,
+            includeadditionalpreviews = full,
+        };
+        request.publishedfileids.AddRange(itemIDs);
+
+        return (await CallServiceAsync("workshop item details", () => PublishedFiles.GetDetails(request))).publishedfiledetails;
+    }
+
+    public Task<CPublishedFile_GetChangeHistory_Response> GetChangeHistoryAsync(ulong itemID, uint startIndex, uint count) =>
+        CallServiceAsync("workshop change history", () => PublishedFiles.GetChangeHistory(new CPublishedFile_GetChangeHistory_Request
+        {
+            publishedfileid = itemID,
+            startindex = startIndex,
+            count = count,
+        }));
+
+    public Task<CPublishedFile_QueryFiles_Response> QueryFilesAsync(CPublishedFile_QueryFiles_Request request) =>
+        CallServiceAsync("workshop search", () => PublishedFiles.QueryFiles(request));
+
+    // Throws when Steam answers with an error
+    private async Task<T> CallServiceAsync<T>(string what, Func<AsyncJob<SteamUnifiedMessages.ServiceMethodResponse<T>>> call)
+        where T : ProtoBuf.IExtensible, new()
+    {
+        var response = await RequestFromSteamAsync(what, async () => await call());
+
+        if (response.Result != EResult.OK)
+        {
+            throw new InvalidOperationException($"Steam answered {response.Result}");
+        }
+
+        return response.Body;
+    }
+
     /// <summary>
     /// Gets the depot keys and manifests of jobs, storing both on them. Failed jobs are left without a manifest, after a report.
     /// </summary>
@@ -634,7 +678,9 @@ internal sealed class SteamSession : IDisposable, IChunkSource
         if (code == 0)
         {
             job.NoAccess = true;
-            Report(job, $"[{job}] Steam gave no manifest request code: the manifest may be on another branch (set it with --branch, or @<branch> in a target) or in another app, or this account has no access to it.", noAccess: true);
+            Report(job, job.ItemID != null
+                ? $"[{job}] Steam gave no manifest request code: this account may have no access to the item, or the manifest isn't one of the item's."
+                : $"[{job}] Steam gave no manifest request code: the manifest may be on another branch (set it with --branch, or @<branch> in a target) or in another app, or this account has no access to it.", noAccess: true);
         }
 
         return code;
@@ -713,7 +759,9 @@ internal sealed class SteamSession : IDisposable, IChunkSource
         // like a busy Steam, are failures that running again can fix
         if (keyResult.Result is EResult.AccessDenied or EResult.FileNotFound)
         {
-            return (null, true, $"Steam gave no depot key for depot {job.DepotID} in app {job.AppID} ({keyResult.Result}): this account may not own it, or it belongs to another app.");
+            return (null, true, job.ItemID != null
+                ? $"Steam gave no key for the workshop depot {job.DepotID} of app {job.AppID} ({keyResult.Result}): this account may need to own the app."
+                : $"Steam gave no depot key for depot {job.DepotID} in app {job.AppID} ({keyResult.Result}): this account may not own it, or it belongs to another app.");
         }
 
         if (keyResult.Result != EResult.OK)

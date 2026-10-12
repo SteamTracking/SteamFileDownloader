@@ -43,6 +43,7 @@ internal static class Program
                 "get" or "ls" or "depots" or "dd" => await RunDepotCommandAsync(args[0], args[1..], cts.Token),
                 "login" => await RunLoginAsync(args[1..], cts.Token),
                 "track" => await RunTrackAsync(args[1..], cts.Token),
+                "workshop" => await RunWorkshopAsync(args[1..], cts.Token),
                 _ => UnknownCommand(args[0]),
             };
         }
@@ -82,6 +83,26 @@ internal static class Program
         };
     }
 
+    private static async Task<int> RunWorkshopAsync(string[] args, CancellationToken cancellationToken)
+    {
+        // stdout carries the results
+        Log.UseStdoutForResults();
+
+        var arguments = WorkshopArgumentParser.Parse(args);
+
+        if (arguments == null)
+        {
+            return ExitCodes.Failed;
+        }
+
+        return arguments.Command switch
+        {
+            "workshop search" => await WorkshopCommands.SearchAsync(arguments, cancellationToken),
+            "workshop ls" or "workshop get" => await WorkshopCommands.RunAsync(arguments, cancellationToken),
+            _ => await WorkshopCommands.InfoAsync(arguments, cancellationToken),
+        };
+    }
+
     private static async Task<int> RunLoginAsync(string[] args, CancellationToken cancellationToken)
     {
         var parsed = ArgumentParser.Parse("login", args);
@@ -107,7 +128,7 @@ internal static class Program
         // GameTracking mode used to be the command line without a command name
         var hint = argument.StartsWith("--", StringComparison.Ordinal)
             ? $" The command goes first, before its options. Downloading the files in files.json is now: {Help.ExeName} track --appid <app> --output <dir> ..."
-            : " Commands are get, ls, depots, dd, login and track.";
+            : " Commands are get, ls, depots, workshop, dd, login and track.";
 
         Log.Error($"Unknown command \"{argument}\".{hint} {Help.UsageHint()}");
         return ExitCodes.Failed;
