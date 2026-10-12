@@ -43,6 +43,41 @@ public class DepotDownloaderArgumentsTests
     }
 
     [Test]
+    [Arguments(false, "workshop get")]
+    [Arguments(true, "workshop ls")]
+    public async Task PubfileRunsAsWorkshopCommandWithoutAnApp(bool manifestOnly, string command)
+    {
+        var result = DepotDownloaderArguments.Parse(["-pubfile", "3070715607", .. manifestOnly ? new[] { "-manifest-only" } : []]);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.Command).IsEqualTo(command);
+        await Assert.That(result.Targets).IsEquivalentTo(["3070715607"]);
+        await Assert.That(result.Options.AllFiles).IsEqualTo(!manifestOnly);
+    }
+
+    [Test]
+    public async Task UgcIsAManifestOfTheDepotWithTheAppsId()
+    {
+        var result = DepotDownloaderArguments.Parse(["-app", "730", "-ugc", "8344780363095656278"]);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.Command).IsEqualTo("get");
+        await Assert.That(result.Targets).IsEquivalentTo(["730:8344780363095656278"]);
+    }
+
+    [Test]
+    [Arguments("-pubfile 3070715607 -depot 730")]
+    [Arguments("-app 730 -ugc 5 -depot 730 -manifest 5")]
+    [Arguments("-pubfile 3070715607 -app 730 -ugc 5")]
+    [Arguments("-ugc 5")]
+    [Arguments("-pubfile item")]
+    [Arguments("-pubfile 0")]
+    public async Task WorkshopOptionsThatConflictAreErrors(string commandLine)
+    {
+        await Assert.That(DepotDownloaderArguments.Parse(commandLine.Split(' '))).IsNull();
+    }
+
+    [Test]
     public async Task MissingAppIsAnError()
     {
         await Assert.That(DepotDownloaderArguments.Parse(["-depot", "1"])).IsNull();

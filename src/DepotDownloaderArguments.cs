@@ -22,6 +22,8 @@ internal static class DepotDownloaderArguments
         var patterns = new List<string>();
         var options = new DepotOptions(null);
         var manifestOnly = false;
+        string? pubfile = null;
+        string? ugc = null;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -35,7 +37,7 @@ internal static class DepotDownloaderArguments
                 case "-manifest-only":
                     manifestOnly = true;
                     continue;
-                case "-app" or "-depot" or "-manifest" or "-filelist" or "-dir" or "-branch" or "-beta" when value == null:
+                case "-app" or "-depot" or "-manifest" or "-pubfile" or "-ugc" or "-filelist" or "-dir" or "-branch" or "-beta" when value == null:
                     return Fail($"{args[i]} needs a value.");
                 case "-app":
                     if (!uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var appID))
@@ -46,8 +48,14 @@ internal static class DepotDownloaderArguments
                     options = options with { App = appID };
                     break;
                 case "-depot" when !uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out _):
-                case "-manifest" when !ulong.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out _):
+                case "-manifest" or "-pubfile" or "-ugc" when !ulong.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var id) || id == 0:
                     return Fail($"{args[i]} needs a numeric id, got \"{value}\".");
+                case "-pubfile":
+                    pubfile = value;
+                    break;
+                case "-ugc":
+                    ugc = value;
+                    break;
                 case "-depot":
                     depots.Add(value);
                     break;
@@ -117,6 +125,26 @@ internal static class DepotDownloaderArguments
             i++;
         }
 
+        if ((pubfile != null || ugc != null) && (depots.Count > 0 || manifests.Count > 0))
+        {
+            return Fail($"{(pubfile != null ? "-pubfile" : "-ugc")} downloads a workshop item, so it can't be combined with -depot or -manifest.");
+        }
+
+        if (pubfile != null && ugc != null)
+        {
+            return Fail("-pubfile and -ugc each name a workshop item, give one of them.");
+        }
+
+        // Without a file list DepotDownloader downloads every file
+        var allFiles = !manifestOnly && patterns.Count == 0;
+        options = options with { AllFiles = allFiles };
+
+        // The item's files go to the workshop folder, like with workshop get, and its app doesn't matter
+        if (pubfile != null)
+        {
+            return new DepotArguments(manifestOnly ? "workshop ls" : "workshop get", options, [pubfile], patterns);
+        }
+
         if (options.App == null)
         {
             return Fail("DepotDownloader commands need -app <app>.");
@@ -127,15 +155,13 @@ internal static class DepotDownloaderArguments
             return Fail("Each -manifest needs a -depot before it.");
         }
 
-        // -depot and -manifest pair up in order; without -depot, DepotDownloader takes every depot of the app
-        var targets = depots.Count == 0
-            ? ["all"]
-            : depots.Select((depot, index) => index < manifests.Count ? $"{depot}:{manifests[index]}" : depot).ToList();
+        // A UGC id is a manifest of the depot with the app's id. Without -depot, DepotDownloader takes every depot of
+        // the app, and -depot and -manifest pair up in order
+        var targets = ugc != null ? new List<string> { $"{options.App}:{ugc}" }
+            : depots.Count == 0 ? ["all"]
+            : [.. depots.Select((depot, index) => index < manifests.Count ? $"{depot}:{manifests[index]}" : depot)];
 
-        // Without a file list DepotDownloader downloads every file
-        var allFiles = !manifestOnly && patterns.Count == 0;
-
-        return new DepotArguments(manifestOnly ? "ls" : "get", options with { AllFiles = allFiles }, targets, patterns);
+        return new DepotArguments(manifestOnly ? "ls" : "get", options, targets, patterns);
     }
 
     // Returns null after printing an error

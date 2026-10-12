@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Threading;
@@ -79,6 +81,9 @@ internal static class Program
         return arguments.Command switch
         {
             "get" or "ls" => await DepotCommands.RunAsync(arguments, cancellationToken),
+            "workshop get" or "workshop ls" => await WorkshopCommands.RunAsync(
+                new WorkshopArguments(arguments.Command, arguments.Options, [.. arguments.Targets.Select(static t => new WorkshopTarget(t, ulong.Parse(t, CultureInfo.InvariantCulture), null))], arguments.Patterns),
+                cancellationToken),
             _ => await DepotsCommand.ListDepotsAsync(arguments, cancellationToken),
         };
     }

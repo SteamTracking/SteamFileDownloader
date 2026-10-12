@@ -106,7 +106,7 @@ Each login uses a random login id, so parallel runs on one account don't disconn
 SteamFileDownloader dd -app 730 -depot 2347771 -manifest 8344780363095656278 -filelist files.txt
 ```
 
-It uses `-app`, `-depot`, `-manifest`, `-filelist`, `-dir`, `-branch`, `-username` (a saved login) and `-manifest-only`, and skips other flags like `-remember-password` or `-loginid`. `-os` and `-language` don't filter depots, so pick them with `-depot`. Password protected branches (`-branchpassword`) are not supported. `-filelist` lines are exact paths from the depot root, without globs, or `regex:` patterns, like in DepotDownloader. Files keep the `<output>/<depot>/<manifest>/` layout.
+It uses `-app`, `-depot`, `-manifest`, `-filelist`, `-dir`, `-branch`, `-username` (a saved login) and `-manifest-only`, and skips other flags like `-remember-password` or `-loginid`. `-os` and `-language` don't filter depots, so pick them with `-depot`. Password protected branches (`-branchpassword`) are not supported. `-filelist` lines are exact paths from the depot root, without globs, or `regex:` patterns, like in DepotDownloader. Files keep the `<output>/<depot>/<manifest>/` layout. `-pubfile <item>` runs as `workshop get` (files go to `<output>/workshop/<item>/<manifest>/`), and `-ugc <manifest>` as `get <app>/<app>:<manifest>`.
 
 ## Exit codes
 

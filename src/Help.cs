@@ -301,6 +301,11 @@ internal static class Help
         Usage:
           {ExeName} dd -app <app> [-depot <depot> [-manifest <manifest>]]... [-filelist <file>] [-dir <dir>]
             [-branch <name>] [-username <name>] [-manifest-only]
+          {ExeName} dd -pubfile <item> [-filelist <file>] [-dir <dir>] [-username <name>] [-manifest-only]
+          {ExeName} dd -app <app> -ugc <manifest> [-filelist <file>] [-dir <dir>] [-username <name>] [-manifest-only]
+
+        -pubfile runs as workshop get (or ls), so files go to <dir>/workshop/<item>/<manifest>/<path>. -ugc is a
+        manifest of the app's workshop depot, like get <app>/<app>:<manifest>; legacy workshop files aren't supported.
 
         -depot and -manifest pair up in order. Without -depot every depot of the app is used. File list
         lines are exact paths from the depot root, without globs, or "regex:" patterns, like in DepotDownloader,
