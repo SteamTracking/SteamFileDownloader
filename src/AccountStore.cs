@@ -42,28 +42,22 @@ internal static partial class AccountStore
         {
             var saved = stored.Accounts.Keys;
 
-            Log.Error($"No saved login{(username == null ? "" : $" for {username}")}. Run \"{Help.ExeName} login\"{(username == null ? "" : " with that account")} to save one with a QR code{(saved.Count > 0 ? $". Saved logins: {string.Join(", ", saved)}" : "")}.");
+            Log.Error($"No saved login{(username == null ? "" : $" for {username}")}{(saved.Count > 0 ? $" (saved: {string.Join(", ", saved)})" : "")}. Run \"{Help.ExeName} login\"{(username == null ? "" : " with that account")} to save one; it needs a person to scan a QR code.");
             return null;
         }
 
         // Use the casing it was saved with
         var savedUsername = stored.Accounts.Keys.First(k => k.Equals(wanted, StringComparison.OrdinalIgnoreCase));
 
-        LogOnCredentials credentials;
-
         try
         {
-            credentials = new LogOnCredentials(savedUsername, RefreshToken: Secrets.Unprotect(refreshToken));
+            return new LogOnCredentials(savedUsername, RefreshToken: Secrets.Unprotect(refreshToken));
         }
         catch (CryptographicException)
         {
-            Log.Error($"The saved login for {savedUsername} can't be decrypted, it was saved by another Windows user or machine. Run \"{Help.ExeName} login\" again.");
+            Log.Error($"The saved login for {savedUsername} can't be decrypted, since another Windows user or machine saved it. Run \"{Help.ExeName} login\" again with that account; it needs a person to scan a QR code.");
             return null;
         }
-
-        Log.Info($"Using saved login {savedUsername}");
-
-        return credentials;
     }
 
     public static IReadOnlyCollection<string> GetUsernames() => Read().Accounts.Keys;

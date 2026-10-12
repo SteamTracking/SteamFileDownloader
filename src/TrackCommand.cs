@@ -164,6 +164,7 @@ internal static class TrackCommand
                 OutputFolder = outputPath,
                 Filter = filter,
                 Optional = filter == null,
+                FailureIsFine = filter == null,
             });
 
             Log.Info($"Found depot {depotID}: manifest {manifestID}{(filter != null ? "" : " (manifest only)")}");

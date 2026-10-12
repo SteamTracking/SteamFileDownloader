@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -33,8 +35,8 @@ internal static partial class Log
     private static bool IsInteractive { get; } = !IsCI && !Console.IsErrorRedirected && EnableVirtualTerminal();
 
     /// <summary>
-    /// For commands whose stdout carries results: progress moves to stderr, and per-file progress,
-    /// which the results already list, is hidden. Results are buffered, since there can be millions of rows.
+    /// For commands whose stdout carries results: messages and progress move to stderr.
+    /// Results are buffered, since there can be millions of rows.
     /// </summary>
     public static void UseStdoutForResults()
     {
@@ -61,15 +63,13 @@ internal static partial class Log
     /// </summary>
     public static void Flush() => Console.Out.Flush();
 
-    public static void Info(string message) => Write(ResultsOnStdout ? Console.Error : Console.Out, message);
+    /// <summary>
+    /// The first few items, and how many more there are.
+    /// </summary>
+    public static string JoinFirst(IReadOnlyCollection<string> items, int max = 5) =>
+        string.Join(", ", items.Take(max)) + (items.Count > max ? $" and {items.Count - max} more" : "");
 
-    public static void Detail(string message)
-    {
-        if (!ResultsOnStdout)
-        {
-            Write(Console.Out, message);
-        }
-    }
+    public static void Info(string message) => Write(ResultsOnStdout ? Console.Error : Console.Out, message);
 
     /// <summary>
     /// A problem that stops the command or fails the run.
@@ -80,13 +80,35 @@ internal static partial class Log
 
     /// <summary>
     /// Shows a progress bar with a text after it, updating in place while the returned object is alive.
-    /// Only on an interactive terminal, so agents and logs never see it.
+    /// Agents and logs get it as a line every now and then instead.
     /// </summary>
-    public static IAsyncDisposable? StartProgress(Func<(double Fraction, string Text)> render) => IsInteractive ? new Progress(render) : null;
+    public static IAsyncDisposable StartProgress(Func<(double Fraction, string Text)> render) => new Progress(render);
 
     private sealed class Progress(Func<(double Fraction, string Text)> render) : IAsyncDisposable
     {
-        private readonly Timer Timer = new(_ => SetProgress(render()), null, TimeSpan.Zero, TimeSpan.FromMilliseconds(250));
+        private static readonly TimeSpan Interval = IsInteractive ? TimeSpan.FromMilliseconds(250) : TimeSpan.FromSeconds(30);
+
+        private readonly Timer Timer = new(_ =>
+        {
+            var state = render();
+
+            try
+            {
+                if (IsInteractive)
+                {
+                    SetProgress(state);
+                }
+                else
+                {
+                    Info($"Progress: {Percent(state.Fraction)}% {state.Text}");
+                }
+            }
+            catch (IOException)
+            {
+                // Like a full disk for redirected output, which the command itself reports, while an exception
+                // on the timer's thread would end the process
+            }
+        }, null, IsInteractive ? TimeSpan.Zero : Interval, Interval);
 
         public async ValueTask DisposeAsync()
         {
@@ -108,9 +130,15 @@ internal static partial class Log
     {
         lock (WriteLock)
         {
-            // An empty line separates it from the log above
+            // An empty line separates it from the log above, after the rows so far, which would otherwise come out
+            // after the progress line when a message flushes them
             if (ProgressState == null)
             {
+                if (ResultsOnStdout)
+                {
+                    Console.Out.Flush();
+                }
+
                 Console.Error.Write(Environment.NewLine + HideCursor);
             }
 
@@ -130,8 +158,10 @@ internal static partial class Log
         var rest = new string('\u2501', BarWidth - filled);
 
         // Without wrapping, a line wider than the terminal is cut off instead of spilling onto a second row
-        return $"{NoWrap}\e[32m{bar}\e[90m{rest}\e[32m{(int)(fraction * 100),4}%\e[0m  {text}{Wrap}";
+        return $"{NoWrap}\e[32m{bar}\e[90m{rest}\e[32m{Percent(fraction),4}%\e[0m  {text}{Wrap}";
     }
+
+    private static int Percent(double fraction) => (int)(Math.Clamp(fraction, 0, 1) * 100);
 
     private static void WriteProblem(string ciCommand, string label, string message)
     {

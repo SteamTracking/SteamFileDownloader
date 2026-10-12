@@ -123,7 +123,7 @@ internal static class VpkReader
         {
             if (FindArchive(jobs, dirJob, dirFileName, archive.Key) is not { } found)
             {
-                Log.Warn($"[{dirJob}] Failed to find archive {archive.Key} of {dirFileName} in any depot of app {dirJob.AppID}");
+                Log.Error($"[{dirJob}] Failed to find archive {archive.Key} of {dirFileName} in any depot of app {dirJob.AppID}.");
                 success = false;
                 continue;
             }
@@ -135,7 +135,7 @@ internal static class VpkReader
             {
                 if ((ulong)entry.Offset + entry.Length > found.File.TotalSize)
                 {
-                    Log.Warn($"[{dirJob}] {entry.GetFullPath()} in {dirFileName} is past the end of archive {archive.Key}");
+                    Log.Error($"[{dirJob}] {entry.GetFullPath()} in {dirFileName} is past the end of archive {archive.Key}.");
                     success = false;
                     continue;
                 }
@@ -179,7 +179,6 @@ internal static class VpkReader
 
                 if (IsAlreadyExtracted(match.Entry, path))
                 {
-                    Log.Detail($"[{job}] Validated {outputFolder}/{match.Path}");
                     extracted.Add(path);
                     return;
                 }
@@ -239,15 +238,13 @@ internal static class VpkReader
                 if (data == null)
                 {
                     var otherBuild = ranges != null && ranges.Job != job ? $"; archive {archive.Key} came from {ranges.Job}, which may be another build" : "";
-                    Log.Warn($"[{job}] CRC mismatch for {entry.GetFullPath()} in {dirFileName}{otherBuild}");
+                    Log.Error($"[{job}] CRC mismatch for {entry.GetFullPath()} in {dirFileName}{otherBuild}.");
                     success = false;
                     continue;
                 }
 
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 await FileDownloader.WriteFileAsync(path, data, job.CreationTime);
-
-                Log.Detail($"[{job}] Extracted {path}");
                 paths.Add(path);
             }
         }
@@ -281,7 +278,7 @@ internal static class VpkReader
     {
         if (FindArchive(jobs, job, dirFileName, archiveIndex) is not var (archiveJob, archiveFile))
         {
-            Log.Warn($"[{job}] Archive {archiveIndex} of {dirFileName} is in none of the manifests of this run. It may be in another depot of app {job.AppID}: add \"all\" for the latest build, or that depot's manifest from the same build.");
+            Log.Error($"[{job}] Archive {archiveIndex} of {dirFileName} is in none of the manifests of this run. It may be in another depot of app {job.AppID}: add the target \"all\" for the latest build, or that depot's manifest from the same build.");
             return null;
         }
 
@@ -295,9 +292,6 @@ internal static class VpkReader
             length += chunk.UncompressedLength;
         }
 
-        var fromDepot = archiveJob != job ? $" from {archiveJob}" : "";
-        Log.Info($"[{job}] Downloading {needed.Count} of {archiveFile.Chunks.Count} chunks ({FileDownloader.FormatSize(length)}) of {archiveFile.FileName}{fromDepot}");
-
         // Next to the directory file's job, since directory files of several builds can share an archive of another depot
         var path = downloader.GetPartialPath(FileDownloader.GetFinalPath(job, archiveFile.FileName));
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -306,9 +300,15 @@ internal static class VpkReader
 
         try
         {
-            downloaded = await downloader.DownloadChunksToFile(archiveJob, archiveFile.FileName, placements, length, path);
+            downloaded = await downloader.DownloadChunksToFile(archiveJob, placements, length, path);
 
-            return downloaded ? new ArchiveRanges(archiveJob, path, [.. placements]) : null;
+            if (!downloaded)
+            {
+                Log.Error($"[{job}] Failed to download the chunks of {archiveFile.FileName} that entries of {dirFileName} are in.");
+                return null;
+            }
+
+            return new ArchiveRanges(archiveJob, path, [.. placements]);
         }
         finally
         {

@@ -20,6 +20,9 @@ internal sealed class ManifestJob
     // Lacking access is expected and only informational, like for a depot from an "all" target
     public bool Optional;
 
+    // Any failure is only a warning, since the run doesn't need this manifest, like track's depots that aren't in files.json
+    public bool FailureIsFine;
+
     // Steam denied the depot key or manifest request code, as opposed to an error
     public bool NoAccess;
 

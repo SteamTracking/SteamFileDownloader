@@ -5,12 +5,14 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Win32.SafeHandles;
 using SteamKit2;
+using SteamKit2.CDN;
 
 namespace SteamFileDownloader;
 
@@ -26,6 +28,12 @@ internal sealed record PartialFile(ManifestJob Job, DepotManifest.FileData File,
 
 internal sealed partial class FileDownloader(SteamSession session, CancellationToken cancellationToken) : IDisposable
 {
+    // Chunks downloaded at once, which fills a gigabit line, while many more only slow down the last files
+    private const int Connections = 64;
+
+    // Between the parts of a progress line
+    private const string Separator = " · ";
+
     private enum DownloadResult
     {
         Success,
@@ -37,12 +45,17 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
     // When set, partial downloads go here instead of next to the file, so they never end up in the output folder
     public string? TempFolder { get; init; }
 
-    // Most files are one chunk, so files can't be what limits downloads, only chunks are
-    private readonly SemaphoreSlim SemaphorePerFile = new(64, 64);
-    private readonly SemaphoreSlim SemaphorePerDownloadChunk = new(32, 32);
+    // Most files are one chunk, and a file also holds its slot while it's hashed or written, so files can't be what limits downloads, only chunks are
+    private readonly SemaphoreSlim SemaphorePerFile = new(Connections * 2, Connections * 2);
+    private readonly SemaphoreSlim SemaphorePerDownloadChunk = new(Connections, Connections);
 
     // Chunk bytes downloaded from the CDN, for the progress line
     private long DownloadedBytes;
+
+    // Failed chunk requests by reason and by server, summed up after each download instead of a line each
+    private readonly ConcurrentDictionary<string, int> ChunkErrorReasons = new();
+    private readonly ConcurrentDictionary<string, int> ChunkErrorServers = new();
+    private int FailedChunks;
 
     public void Dispose()
     {
@@ -119,15 +132,6 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
                 Interlocked.Add(ref skippedBytes, (long)fileJob.File.TotalSize);
             }
 
-            var remaining = fileJobs.Count - resultCounts.Sum();
-            var action = fileState switch
-            {
-                DownloadResult.AlreadyValid => "Validated",
-                DownloadResult.Copied => "Copied",
-                _ => "Downloaded",
-            };
-            Log.Detail($"[{fileJob.Job}] {action} {fileJob.File.FileName} ({remaining} files left)");
-
             return finalPath;
         }
 
@@ -136,7 +140,7 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
             Interlocked.Read(ref skippedBytes),
             totalBytes,
             stopwatch.Elapsed,
-            $"{resultCounts.Sum()} / {fileJobs.Count} files");
+            $"{resultCounts.Sum()} / {fileJobs.Count} files{FormatChunkErrorCount()}");
 
         // The first file of each hash is downloaded, the rest are copied from it once it's done
         async Task RunHashGroup(IGrouping<string, FileJob> group)
@@ -154,25 +158,103 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
             await Task.WhenAll(groups.Select(RunHashGroup));
         }
 
-        Log.Info($"Files: {resultCounts[(int)DownloadResult.Success]} downloaded, {resultCounts[(int)DownloadResult.Copied]} copied from identical files, {resultCounts[(int)DownloadResult.AlreadyValid]} already present.");
+        Log.Info($"Files: {resultCounts[(int)DownloadResult.Success]} downloaded ({FormatTransfer(Interlocked.Read(ref DownloadedBytes) - startBytes, stopwatch.Elapsed)}), {resultCounts[(int)DownloadResult.Copied]} copied from identical files, {resultCounts[(int)DownloadResult.AlreadyValid]} already present.");
+        LogChunkErrors();
 
         LogFailures("files", failedFiles.Select(static f => $"{f.Job}/{FileFilter.NormalizePath(f.File.FileName)}"), "Running the same command again retries only those.");
 
         return (failedFiles.IsEmpty, [.. downloaded]);
     }
 
+    /// <summary>
+    /// Runs work that downloads chunks of an unknown total size, like extracting VPK entries, under a progress line
+    /// of the bytes downloaded and how many of the items are done.
+    /// </summary>
+    public async Task<TResult[]> RunWithProgress<TItem, TResult>(string what, IReadOnlyList<TItem> items, Func<TItem, Task<TResult>> work)
+    {
+        if (items.Count == 0)
+        {
+            return [];
+        }
+
+        var done = 0;
+        var startBytes = Interlocked.Read(ref DownloadedBytes);
+        var stopwatch = Stopwatch.StartNew();
+
+        (double, string) RenderProgress()
+        {
+            var bytes = Interlocked.Read(ref DownloadedBytes) - startBytes;
+            var finished = Volatile.Read(ref done);
+
+            return ((double)finished / items.Count, $"{FormatSize(bytes)} at {FormatSize((long)Speed(bytes, stopwatch.Elapsed))}/s{Separator}{finished} / {items.Count} {what}{FormatChunkErrorCount()}");
+        }
+
+        await using (Log.StartProgress(RenderProgress))
+        {
+            return await Task.WhenAll(items.Select(async item =>
+            {
+                var result = await work(item);
+                Interlocked.Increment(ref done);
+                return result;
+            }));
+        }
+    }
+
+    private string FormatChunkErrorCount() => ChunkErrorReasons.Values.Sum() is > 0 and var errors ? $"{Separator}{errors} chunk errors" : "";
+
+    /// <summary>
+    /// Sums up the chunk errors since the last summary in one line, a warning when chunks failed for good.
+    /// </summary>
+    public void LogChunkErrors()
+    {
+        var reasons = TakeCounts(ChunkErrorReasons);
+        var servers = TakeCounts(ChunkErrorServers);
+        var failed = Interlocked.Exchange(ref FailedChunks, 0);
+
+        if (reasons.Count == 0)
+        {
+            return;
+        }
+
+        var outcome = failed > 0 ? $"{failed} chunks failed after all retries" : "all were retried successfully";
+        var message = $"{reasons.Sum(static c => c.Value)} chunk errors ({Format(reasons)}) from {Format(servers)}; {outcome}.";
+
+        (failed > 0 ? (Action<string>)Log.Warn : Log.Info)(message);
+
+        // Most first
+        static List<KeyValuePair<string, int>> TakeCounts(ConcurrentDictionary<string, int> counts)
+        {
+            var sorted = counts.OrderByDescending(static c => c.Value).ThenBy(static c => c.Key, StringComparer.Ordinal).ToList();
+            counts.Clear();
+            return sorted;
+        }
+
+        static string Format(List<KeyValuePair<string, int>> counts) => Log.JoinFirst([.. counts.Select(static c => $"{c.Key} x{c.Value}")]);
+    }
+
+    // Short enough to count by: the status code, a timeout, or data that didn't decrypt, decompress or match its hash
+    private static string DescribeChunkError(Exception e) => e switch
+    {
+        SteamKitWebRequestException { StatusCode: var status } => $"HTTP {(int)status}",
+        CryptographicException or InvalidDataException => "corrupt data",
+        HttpRequestException or IOException => "connection failed",
+        _ => SteamSession.DescribeError(e),
+    };
+
+    private static double Speed(long bytes, TimeSpan elapsed) => bytes / Math.Max(elapsed.TotalSeconds, 0.001);
+
     // Bytes already on disk count as done, without being downloaded
     private static (double Fraction, string Text) FormatProgress(long downloadedBytes, long skippedBytes, long totalBytes, TimeSpan elapsed, string count)
     {
-        const string Separator = " \u00B7 ";
-
         var doneBytes = downloadedBytes + skippedBytes;
         var total = Math.Max(totalBytes, 1);
-        var speed = downloadedBytes / Math.Max(elapsed.TotalSeconds, 0.001);
+        var speed = Speed(downloadedBytes, elapsed);
         var left = speed > 0 ? $"{Separator}{FormatDuration((total - doneBytes) / speed)} left" : "";
 
         return ((double)doneBytes / total, $"{FormatSize(doneBytes)} / {FormatSize(total)}{Separator}{FormatSize((long)speed)}/s{Separator}{count}{left}");
     }
+
+    private static string FormatTransfer(long bytes, TimeSpan elapsed) => $"{FormatSize(bytes)} in {FormatDuration(elapsed.TotalSeconds)} at {FormatSize((long)Speed(bytes, elapsed))}/s";
 
     private static string FormatDuration(double seconds) => TimeSpan.FromSeconds(Math.Min(seconds, TimeSpan.MaxValue.TotalSeconds / 2)) switch
     {
@@ -181,7 +263,7 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
         var t => $"{t.Seconds}s",
     };
 
-    public static string FormatSize(long bytes) => bytes switch
+    private static string FormatSize(long bytes) => bytes switch
     {
         >= 1024L * 1024 * 1024 => $"{bytes / 1024.0 / 1024 / 1024:F1} GiB",
         >= 1024 * 1024 => $"{bytes / 1024.0 / 1024:F1} MiB",
@@ -258,7 +340,7 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
 
             var placements = file.Chunks.Select(static c => new ChunkPlacement(c, (long)c.Offset)).ToList();
 
-            if (!await DownloadChunksToFile(job, file.FileName, placements, (long)file.TotalSize, partialPath))
+            if (!await DownloadChunksToFile(job, placements, (long)file.TotalSize, partialPath))
             {
                 return (DownloadResult.DownloadFailed, finalPath);
             }
@@ -313,7 +395,6 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
     /// </summary>
     public async Task<bool> DownloadChunksToFile(
         ManifestJob job,
-        string fileName,
         IReadOnlyCollection<ChunkPlacement> placements,
         long length,
         string path)
@@ -321,7 +402,7 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
         using var handle = File.OpenHandle(path, FileMode.Create, FileAccess.ReadWrite, FileShare.None, FileOptions.Asynchronous, length);
         RandomAccess.SetLength(handle, length);
 
-        if (!await DownloadChunks(job, fileName, placements, handle))
+        if (!await DownloadChunks(job, placements, handle))
         {
             return false;
         }
@@ -371,7 +452,7 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
             Interlocked.Read(ref skippedBytes),
             totalBytes,
             stopwatch.Elapsed,
-            $"{Volatile.Read(ref doneFiles)} / {partialFiles.Count} archives");
+            $"{Volatile.Read(ref doneFiles)} / {partialFiles.Count} archives{FormatChunkErrorCount()}");
 
         Log.Info($"Downloading {partialFiles.Sum(static f => f.Chunks.Count)} chunks ({FormatSize(totalBytes)}) of {partialFiles.Count} VPK archives...");
 
@@ -397,7 +478,8 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
             })));
         }
 
-        Log.Info($"VPK archives: {FormatSize(Interlocked.Read(ref DownloadedBytes) - startBytes)} downloaded, {FormatSize(skippedBytes)} already present.");
+        Log.Info($"VPK archives: {FormatTransfer(Interlocked.Read(ref DownloadedBytes) - startBytes, stopwatch.Elapsed)} downloaded, {FormatSize(skippedBytes)} already present.");
+        LogChunkErrors();
 
         var failedFiles = partialFiles.Where((_, i) => !results[i]).Select(static f => FileFilter.NormalizePath(f.File.FileName)).ToList();
         LogFailures("VPK archives", failedFiles, "Running the same command again retries only their missing chunks.");
@@ -426,7 +508,7 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
 
         if (sorted.Count > 0)
         {
-            Log.Error($"{sorted.Count} {what} failed: {string.Join(", ", sorted.Take(20))}{(sorted.Count > 20 ? ", ..." : "")}. {retryHint}");
+            Log.Error($"{sorted.Count} {what} failed: {Log.JoinFirst(sorted, 20)}. {retryHint}");
         }
     }
 
@@ -481,16 +563,11 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
             ArrayPool<byte>.Shared.Return(buffer);
         }
 
-        var success = missing.Count == 0 || await DownloadChunks(job, file.FileName, missing, handle);
+        var success = missing.Count == 0 || await DownloadChunks(job, missing, handle);
 
-        if (success)
+        if (success && missing.Count > 0)
         {
-            if (missing.Count > 0)
-            {
-                File.SetLastWriteTimeUtc(handle, job.CreationTime);
-            }
-
-            Log.Detail($"[{job}] Downloaded {missing.Count} of {chunks.Count} needed chunks of {file.FileName}");
+            File.SetLastWriteTimeUtc(handle, job.CreationTime);
         }
 
         return (success, keptBytes);
@@ -506,7 +583,6 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
     // Returns false when any chunk failed
     private async Task<bool> DownloadChunks(
         ManifestJob job,
-        string fileName,
         IReadOnlyCollection<ChunkPlacement> placements,
         SafeFileHandle handle)
     {
@@ -515,95 +591,129 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
 
         await Task.WhenAll(placements.Select(placement => Task.Run(async () =>
         {
-            await SemaphorePerDownloadChunk.WaitAsync(cancellationToken);
-
-            try
+            if (!await DownloadChunk(job, placement, handle, chunkCancellation.Token))
             {
-                // Once one chunk failed, the file failed, so the rest are skipped
-                if (!chunkCancellation.IsCancellationRequested && !await DownloadChunk(job, placement, handle, chunkCancellation.Token))
-                {
-                    Log.Warn($"[{job}] Failed to download chunk for {fileName} ({placement.Chunk.Offset})");
-
-                    failed = true;
-                    await chunkCancellation.CancelAsync();
-                }
-            }
-            finally
-            {
-                SemaphorePerDownloadChunk.Release();
+                failed = true;
+                await chunkCancellation.CancelAsync();
             }
         })));
 
         return !failed;
     }
 
-    // Returns false when the chunk failed, or right away when the file failed
+    // Returns false when the chunk failed, or right away when another chunk failed the file. Ctrl+C throws
     private async Task<bool> DownloadChunk(
         ManifestJob job,
         ChunkPlacement placement,
         SafeFileHandle handle,
         CancellationToken chunkCancellation)
     {
-        const int MaxChunkRetries = 6;
+        // Each attempt goes to another server than the last, so the first retries don't wait. The waits after them add
+        // up to about two minutes, which rides out a short network outage
+        const int ImmediateRetries = 2;
+        const int MaxChunkRetries = 8;
 
-        var chunk = placement.Chunk;
-        var buffer = ArrayPool<byte>.Shared.Rent((int)chunk.UncompressedLength);
-        var refused = false;
+        Server? lastServer = null;
+        Server? refusedBy = null;
 
-        try
+        for (var attempt = 0; ; attempt++)
         {
-            for (var i = 0; i <= MaxChunkRetries; i++)
+            var (error, server) = await TryDownloadChunk(job, placement, handle, lastServer, chunkCancellation);
+
+            if (error == null)
             {
-                var server = session.GetContentServer();
-                int written;
-
-                try
-                {
-                    written = await session.CDNClient.DownloadDepotChunkAsync(job.DepotID, chunk, server, buffer, job.DepotKey);
-
-                    // SteamKit only checks an Adler-32 checksum. The chunk id is the SHA-1 of the data, and a file
-                    // of chunks that match it needs no hashing after
-                    if (!SHA1.HashData(buffer.AsSpan(0, written)).SequenceEqual(chunk.ChunkID))
-                    {
-                        throw new InvalidDataException("the chunk does not match its hash");
-                    }
-                }
-                catch (Exception e) when (SteamSession.IsError(e, cancellationToken))
-                {
-                    Log.Warn($"[{job}] Chunk download error: {e.Message}");
-
-                    // Any server can be broken, so every error moves on to the next one
-                    session.MarkContentServerAsBad(server);
-
-                    // Refused by a second server, so it's not that server
-                    if (SteamSession.IsRefusal(e) && refused)
-                    {
-                        Log.Warn($"[{job}] The CDN refused the chunk ({e.Message}), aborting");
-                        return false;
-                    }
-
-                    refused |= SteamSession.IsRefusal(e);
-
-                    if (i < MaxChunkRetries && !await DelayUnlessCancelled(SteamSession.ExponentialBackoff(i + 1), chunkCancellation))
-                    {
-                        return false;
-                    }
-
-                    continue;
-                }
-
-                // Disk errors are not the server's fault, so they fail the file
-                await RandomAccess.WriteAsync(handle, buffer.AsMemory(0, written), placement.Position, cancellationToken);
-                Interlocked.Add(ref DownloadedBytes, written);
-
                 return true;
             }
 
-            return false;
+            // A chunk that Ctrl+C stopped is not in the file, so it must not end up as a complete file
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (chunkCancellation.IsCancellationRequested)
+            {
+                return false;
+            }
+
+            lastServer = server;
+            var isRefusal = SteamSession.IsRefusal(error);
+
+            // Refused by a second server too, so the CDN doesn't have it, rather than one server
+            if (attempt >= MaxChunkRetries || (isRefusal && refusedBy != null && refusedBy != server))
+            {
+                Interlocked.Increment(ref FailedChunks);
+                return false;
+            }
+
+            // Another server may have it, so it's tried right away
+            if (isRefusal)
+            {
+                refusedBy ??= server;
+                continue;
+            }
+
+            if (attempt >= ImmediateRetries && !await DelayUnlessCancelled(SteamSession.ExponentialBackoff(attempt - ImmediateRetries + 1), chunkCancellation))
+            {
+                return false;
+            }
+        }
+    }
+
+    // One attempt, on another server than the one to avoid if there is one. The download slot is held until the chunk is
+    // written, so a disk slower than the network slows the downloads instead of piling up chunks in memory, and it's
+    // free during the waits between attempts. Returns the error and its server, or no error once the chunk is in the file.
+    private async Task<(Exception? Error, Server? Server)> TryDownloadChunk(ManifestJob job, ChunkPlacement placement, SafeFileHandle handle, Server? avoid, CancellationToken chunkCancellation)
+    {
+        var chunk = placement.Chunk;
+        byte[]? buffer = null;
+
+        await SemaphorePerDownloadChunk.WaitAsync(cancellationToken);
+
+        try
+        {
+            // Once one chunk failed, the file failed, so the rest are skipped
+            if (chunkCancellation.IsCancellationRequested)
+            {
+                return (new OperationCanceledException(chunkCancellation), null);
+            }
+
+            buffer = ArrayPool<byte>.Shared.Rent((int)chunk.UncompressedLength);
+            var server = session.GetContentServer(avoid);
+            int written;
+
+            try
+            {
+                written = await session.CDNClient.DownloadDepotChunkAsync(job.DepotID, chunk, server, buffer, job.DepotKey);
+
+                // SteamKit only checks an Adler-32 checksum. The chunk id is the SHA-1 of the data, and a file
+                // of chunks that match it needs no hashing after
+                if (!SHA1.HashData(buffer.AsSpan(0, written)).SequenceEqual(chunk.ChunkID))
+                {
+                    throw new InvalidDataException("the chunk does not match its hash");
+                }
+            }
+            catch (Exception e) when (SteamSession.IsError(e, cancellationToken))
+            {
+                ChunkErrorReasons.AddOrUpdate(DescribeChunkError(e), 1, static (_, count) => count + 1);
+                ChunkErrorServers.AddOrUpdate(server.Host ?? server.ToString(), 1, static (_, count) => count + 1);
+                session.MarkContentServerAsBad(server);
+                return (e, server);
+            }
+
+            session.MarkContentServerAsGood(server);
+
+            // Disk errors are not the server's fault, so they fail the file
+            await RandomAccess.WriteAsync(handle, buffer.AsMemory(0, written), placement.Position, cancellationToken);
+            Interlocked.Add(ref DownloadedBytes, written);
+
+            return (null, server);
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(buffer);
+            if (buffer != null)
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+
+            SemaphorePerDownloadChunk.Release();
         }
     }
 

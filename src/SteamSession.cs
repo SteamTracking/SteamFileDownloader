@@ -32,6 +32,11 @@ internal sealed class SteamSession : IDisposable
     // Each manifest mostly waits on a Steam request code and a CDN download
     private const int ManifestConcurrency = 16;
 
+    // How many CDN servers requests are spread over, and when one that fails has to sit out
+    private const int ActiveCdnServers = 8;
+    private const int CdnServerFailuresToBench = 3;
+    private static readonly TimeSpan CdnServerBenchTime = TimeSpan.FromSeconds(30);
+
     private readonly SteamClient SteamClient = new();
     private readonly CallbackManager Manager;
     private readonly SteamUser User;
@@ -39,15 +44,16 @@ internal sealed class SteamSession : IDisposable
     private readonly SteamContent Content;
     private readonly CancellationTokenSource PumpCts;
     private readonly CancellationToken CancellationToken;
-    private readonly Dictionary<(uint DepotID, uint AppID), Task<(byte[]? Key, bool NoAccess)>> DepotKeys = [];
+    private readonly Dictionary<(uint DepotID, uint AppID), Task<(byte[]? Key, bool NoAccess, string? Problem)>> DepotKeys = [];
     private readonly Lock LazyLock = new();
     private readonly Lock CdnServerLock = new();
     private List<Server> CDNServers = [];
+    private (int Failures, long BenchedUntil)[] CdnServerHealth = [];
     private Task<bool>? CdnServersTask;
     private LogOnCredentials? Credentials;
     private Task<bool>? RelogonTask;
     private int Relogons;
-    private int NextCdnServer;
+    private uint NextCdnServer;
     private uint CellID;
     private volatile bool IsLoggedOn;
 
@@ -71,11 +77,14 @@ internal sealed class SteamSession : IDisposable
         Manager = new CallbackManager(SteamClient);
         User = SteamClient.GetHandler<SteamUser>()!;
         Apps = SteamClient.GetHandler<SteamApps>()!;
-        Content = SteamClient.GetHandler<SteamContent>()!;
 
         CDNClient = new Client(SteamClient);
-        Client.RequestTimeout = TimeSpan.FromSeconds(60);
-        Client.ResponseBodyTimeout = TimeSpan.FromSeconds(120);
+        Content = SteamClient.GetHandler<SteamContent>()!;
+
+        // A server that doesn't answer is given up on soon, since the retry goes to another one. A body gets much
+        // longer, since many chunks share the connection and a slow one can take minutes for each, as can big manifests
+        Client.RequestTimeout = TimeSpan.FromSeconds(10);
+        Client.ResponseBodyTimeout = TimeSpan.FromMinutes(5);
 
         Manager.Subscribe<SteamClient.ConnectedCallback>(_ => ConnectedTcs.TrySetResult(true));
         Manager.Subscribe<SteamClient.DisconnectedCallback>(cb =>
@@ -142,13 +151,12 @@ internal sealed class SteamSession : IDisposable
         ConnectedTcs = new TaskCompletionSource<bool>();
         LoggedOnTcs = new TaskCompletionSource<SteamUser.LoggedOnCallback?>();
 
-        Log.Info("Connecting to Steam...");
         SteamClient.Connect();
 
         // The callback pump stops on cancellation, so the callbacks would never come
         if (!await ConnectedTcs.Task.WaitAsync(CancellationToken))
         {
-            Log.Warn("Failed to connect to Steam.");
+            Log.Info("Failed to connect to Steam.");
             return false;
         }
 
@@ -167,15 +175,15 @@ internal sealed class SteamSession : IDisposable
 
         if (exitCode == ExitCodes.RateLimited)
         {
-            Log.Error($"Steam is rate limiting logins ({result}), wait about 15 minutes. Put all targets in one run instead of one run per target.");
+            Log.Error($"Steam is rate limiting logins ({result}). Wait about 15 minutes, and put all targets in one run instead of one run per target.");
         }
         else if (exitCode == ExitCodes.NoAccess && credentials.RefreshToken != null)
         {
-            Log.Error($"Steam rejected the saved login for {credentials.Username} ({result}). Run \"{Help.ExeName} login\" again with that account.");
+            Log.Error($"Steam rejected the saved login for {credentials.Username} ({result}). Run \"{Help.ExeName} login\" again with that account; it needs a person to scan a QR code.");
         }
         else if (exitCode != ExitCodes.Ok)
         {
-            Log.Error($"Could not log in to Steam ({result}). Check the credentials and network, or retry in a few minutes if Steam is down.");
+            Log.Error($"Failed to log in to Steam ({result}). Check the credentials and network, or retry in a few minutes if Steam is down.");
         }
 
         return exitCode;
@@ -195,7 +203,6 @@ internal sealed class SteamSession : IDisposable
 
             if (credentials.IsAnonymous)
             {
-                Log.Info("Connected. Logging in anonymously...");
                 User.LogOnAnonymous();
             }
             else
@@ -204,15 +211,13 @@ internal sealed class SteamSession : IDisposable
 
                 if (accessToken == null)
                 {
-                    Log.Info("Connected. Authenticating...");
-
                     try
                     {
                         accessToken = await AuthenticateAsync(credentials.Username, credentials.Password!, isPersistentSession: false);
                     }
                     catch (Exception e) when (IsError(e))
                     {
-                        Log.Warn($"Authentication failed: {e.Message}");
+                        Log.Info($"Authentication failed: {DescribeError(e)}");
                         SteamClient.Disconnect();
 
                         // Steam Guard without a terminal to ask for the code fails the same way every time
@@ -232,8 +237,6 @@ internal sealed class SteamSession : IDisposable
                     }
                 }
 
-                Log.Info("Logging in...");
-
                 User.LogOn(new SteamUser.LogOnDetails
                 {
                     Username = credentials.Username,
@@ -252,12 +255,12 @@ internal sealed class SteamSession : IDisposable
             {
                 IsLoggedOn = true;
                 CellID = logOnResult!.CellID;
-                Log.Info($"Logged in. Cell ID: {CellID}");
+                Log.Info($"Logged in as {credentials.Username}.");
 
                 return result;
             }
 
-            Log.Warn($"Failed to log in: {result}");
+            Log.Info($"Failed to log in: {result}.");
             SteamClient.Disconnect();
 
             if (IsFinal(result))
@@ -378,44 +381,83 @@ internal sealed class SteamSession : IDisposable
                     && !server.UseAsProxy
                     && !server.SteamChinaOnly
                     && server.Type is "SteamCache" or "CDN")];
+                CdnServerHealth = new (int, long)[CDNServers.Count];
 
                 break;
             }
             catch (Exception e) when (IsError(e))
             {
-                Log.Warn($"Failed to get CDN servers: {e.Message}");
+                Log.Info($"Failed to get CDN servers: {DescribeError(e)}");
             }
         }
 
         if (CDNServers.Count == 0)
         {
-            Log.Error("Could not get any Steam CDN servers. Check the network, or retry later.");
+            Log.Error("Failed to get any Steam CDN servers. Check the network, or retry later.");
             return false;
         }
-
-        Log.Info($"Got {CDNServers.Count} CDN servers.");
 
         return true;
     }
 
-    public Server GetContentServer()
+    /// <summary>
+    /// Takes turns between the best few servers that work, so one slow or overloaded server doesn't hold back the whole download.
+    /// </summary>
+    public Server GetContentServer(Server? avoid)
     {
         lock (CdnServerLock)
         {
-            return CDNServers[NextCdnServer % CDNServers.Count];
+            var now = Environment.TickCount64;
+            Span<int> usable = stackalloc int[ActiveCdnServers];
+            var count = 0;
+
+            // The directory lists the best servers for the cell first
+            for (var i = 0; i < CDNServers.Count && count < usable.Length; i++)
+            {
+                if (CdnServerHealth[i].BenchedUntil <= now && CDNServers[i] != avoid)
+                {
+                    usable[count++] = i;
+                }
+            }
+
+            if (count > 0)
+            {
+                return CDNServers[usable[(int)(NextCdnServer++ % (uint)count)]];
+            }
+
+            // Every server failed lately, so they all take turns, still skipping the one to avoid
+            var server = CDNServers[(int)(NextCdnServer++ % (uint)CDNServers.Count)];
+
+            return server == avoid && CDNServers.Count > 1 ? CDNServers[(int)(NextCdnServer++ % (uint)CDNServers.Count)] : server;
         }
     }
 
+    /// <summary>
+    /// A failed request, refusals included. A server that fails several with no success in between sits out for a while,
+    /// like a cache that refuses everything, but one that only fails some, like a cache that is slow to fetch old chunks
+    /// or one asked for a deleted chunk, keeps its turn.
+    /// </summary>
     public void MarkContentServerAsBad(Server server)
     {
         lock (CdnServerLock)
         {
-            // Concurrent failures on one server move on only once
-            if (CDNServers[NextCdnServer % CDNServers.Count] == server)
+            ref var health = ref CdnServerHealth[CDNServers.IndexOf(server)];
+
+            // Requests that were under way when it was benched don't count towards the next time
+            if (health.BenchedUntil > Environment.TickCount64 || ++health.Failures < CdnServerFailuresToBench)
             {
-                NextCdnServer++;
-                Log.Info($"Switching from CDN server {server} to {CDNServers[NextCdnServer % CDNServers.Count]}");
+                return;
             }
+
+            health = (0, Environment.TickCount64 + (long)CdnServerBenchTime.TotalMilliseconds);
+        }
+    }
+
+    public void MarkContentServerAsGood(Server server)
+    {
+        lock (CdnServerLock)
+        {
+            CdnServerHealth[CDNServers.IndexOf(server)].Failures = 0;
         }
     }
 
@@ -433,9 +475,6 @@ internal sealed class SteamSession : IDisposable
             return appInfos;
         }
 
-        var appList = string.Join(", ", appIDs);
-        Log.Info($"Fetching app info for {appList}...");
-
         try
         {
             var tokenResult = await Apps.PICSGetAccessTokens(appIDs, []);
@@ -452,13 +491,13 @@ internal sealed class SteamSession : IDisposable
         }
         catch (Exception e) when (IsError(e))
         {
-            Log.Error($"Failed to get app info for {appList} ({e.Message}). Retry later.");
+            Log.Error($"Failed to get app info for {string.Join(", ", appIDs)} ({DescribeError(e)}). Retry later.");
             return appInfos;
         }
 
         foreach (var appID in appIDs.Where(appID => !appInfos.ContainsKey(appID)))
         {
-            Log.Error($"App {appID} does not exist, or this account can't see it. Check the app id, it's the number in the app's store or SteamDB url.");
+            Log.Error($"App {appID} does not exist, or this account can't see it. Check the app id, which is the number in the app's store page url.");
         }
 
         return appInfos;
@@ -522,7 +561,7 @@ internal sealed class SteamSession : IDisposable
 
             if (manifestID != 0)
             {
-                Log.Info($"Depot {depot.Name}: branch \"{branch}\" has no manifest, falling back to \"public\"");
+                Log.Info($"Depot {depot.Name} has no manifest on branch \"{branch}\", using the one on \"public\".");
                 branch = "public";
             }
         }
@@ -536,8 +575,16 @@ internal sealed class SteamSession : IDisposable
     /// <summary>
     /// Gets the depot keys and manifests of jobs, storing both on them. Failed jobs are left without a manifest, after a report.
     /// </summary>
-    public Task DownloadManifestsAsync(IEnumerable<ManifestJob> jobs) =>
-        Parallel.ForEachAsync(jobs, new ParallelOptions { MaxDegreeOfParallelism = ManifestConcurrency, CancellationToken = CancellationToken }, async (job, _) => await DownloadManifestAsync(job));
+    public Task DownloadManifestsAsync(IReadOnlyCollection<ManifestJob> jobs)
+    {
+        // Old manifests can take a while, and each prints a line only once it's done
+        if (jobs.Count > 0)
+        {
+            Log.Info($"Getting {jobs.Count} manifests...");
+        }
+
+        return Parallel.ForEachAsync(jobs, new ParallelOptions { MaxDegreeOfParallelism = ManifestConcurrency, CancellationToken = CancellationToken }, async (job, _) => await DownloadManifestAsync(job));
+    }
 
     private async Task DownloadManifestAsync(ManifestJob job)
     {
@@ -548,13 +595,19 @@ internal sealed class SteamSession : IDisposable
         catch (Exception e) when (IsError(e))
         {
             // Mostly a lost Steam connection, which fails the pending requests
-            Report(job, $"Failed to get manifest {job.ManifestID} for depot {job.DepotID}: {e.Message}");
+            Report(job, $"[{job}] Failed to get the manifest: {DescribeError(e)}");
         }
     }
 
     private async Task DownloadManifestFromSteamAsync(ManifestJob job)
     {
-        (job.DepotKey, job.NoAccess) = await GetDepotKeyAsync(job);
+        (job.DepotKey, job.NoAccess, var keyProblem) = await GetDepotKeyAsync(job);
+
+        // Jobs that share the key request each report it, at their own level
+        if (keyProblem != null)
+        {
+            Report(job, $"[{job}] {keyProblem}", job.NoAccess);
+        }
 
         if (job.DepotKey == null || !await EnsureCdnServersAsync())
         {
@@ -568,11 +621,15 @@ internal sealed class SteamSession : IDisposable
             return;
         }
 
-        var refused = false;
+        Server? lastServer = null;
+        Server? refusedBy = null;
+        Exception? lastError = null;
 
         for (var attempt = 0; attempt <= MaxCdnRetries; attempt++)
         {
-            var server = GetContentServer();
+            // Each attempt goes to another server than the last
+            var server = GetContentServer(lastServer);
+            lastServer = server;
 
             try
             {
@@ -580,8 +637,9 @@ internal sealed class SteamSession : IDisposable
             }
             catch (Exception e) when (IsError(e))
             {
-                Report(job, $"Failed to download manifest for depot {job.DepotID} ({server}: {e.Message}) (#{attempt})");
+                Log.Info($"[{job}] Failed to download the manifest from {server}: {DescribeError(e)} (attempt {attempt + 1}/{MaxCdnRetries + 1}).");
                 MarkContentServerAsBad(server);
+                lastError = e;
 
                 if (!IsRefusal(e))
                 {
@@ -593,30 +651,35 @@ internal sealed class SteamSession : IDisposable
                     continue;
                 }
 
-                // An expired request code or a bad server can cause this, so retry once on another server with a new code
-                if (refused)
+                // Refused by a second server too, so the CDN doesn't serve it, rather than one server
+                if (refusedBy != null && refusedBy != server)
                 {
-                    Report(job, $"The CDN refused depot {job.DepotID} manifest {job.ManifestID} ({e.Message}), some old manifests are no longer served");
+                    Report(job, $"[{job}] The CDN refused the manifest ({DescribeError(e)}); some old manifests are no longer served.");
                     return;
                 }
 
-                refused = true;
-                manifestRequestCode = await GetManifestRequestCodeAsync(job);
-
-                if (manifestRequestCode == 0)
+                // An expired request code or one bad server can cause this, so another server gets a new code
+                if (refusedBy == null)
                 {
-                    return;
+                    refusedBy = server;
+                    manifestRequestCode = await GetManifestRequestCodeAsync(job);
+
+                    if (manifestRequestCode == 0)
+                    {
+                        return;
+                    }
                 }
 
                 continue;
             }
 
-            Log.Info($"Downloaded manifest {job.ManifestID} for depot {job.DepotID} ({job.Manifest.CreationTime:yyyy-MM-dd HH:mm:ss}, {job.Manifest.Files?.Count} files)");
+            MarkContentServerAsGood(server);
+            Log.Info($"[{job}] Downloaded the manifest: {job.Manifest.CreationTime:yyyy-MM-dd HH:mm:ss}, {job.Manifest.Files?.Count} files.");
 
             return;
         }
 
-        Report(job, $"Failed to download manifest for depot {job.DepotID} after all retries.");
+        Report(job, $"[{job}] Failed to download the manifest after all retries: {(lastError != null ? DescribeError(lastError) : "no server answered")}.");
     }
 
     // Request codes expire after a few minutes. Returns 0 after reporting why there is none.
@@ -630,14 +693,14 @@ internal sealed class SteamSession : IDisposable
         }
         catch (Exception e) when (IsError(e))
         {
-            Report(job, $"Manifest request code request failed for depot {job.DepotID}: {DescribeError(e)}");
+            Report(job, $"[{job}] Failed to get a manifest request code: {DescribeError(e)}");
             return 0;
         }
 
         if (code == 0)
         {
             job.NoAccess = true;
-            Report(job, $"Steam gave no manifest request code for depot {job.DepotID} manifest {job.ManifestID}: the manifest may be from another branch (pass --branch), another app, or not accessible to this account", noAccess: true);
+            Report(job, $"[{job}] Steam gave no manifest request code: the manifest may be on another branch (set it with --branch, or @<branch> in a target) or in another app, or this account has no access to it.", noAccess: true);
         }
 
         return code;
@@ -654,7 +717,7 @@ internal sealed class SteamSession : IDisposable
 
             if (!await EnsureLoggedOnAsync())
             {
-                throw new InvalidOperationException("there is no Steam login");
+                throw new InvalidOperationException("the Steam connection was lost, and logging in again failed");
             }
 
             try
@@ -668,10 +731,10 @@ internal sealed class SteamSession : IDisposable
         }
     }
 
-    private static string DescribeError(Exception e) => e is TaskCanceledException ? "timed out" : e.Message;
+    public static string DescribeError(Exception e) => e is TaskCanceledException ? "timed out" : e.Message;
 
-    // Concurrent jobs of one depot share a single key request
-    private Task<(byte[]? Key, bool NoAccess)> GetDepotKeyAsync(ManifestJob job)
+    // Concurrent jobs of one depot share a single key request. Returns the key, or why there is none
+    private Task<(byte[]? Key, bool NoAccess, string? Problem)> GetDepotKeyAsync(ManifestJob job)
     {
         lock (DepotKeys)
         {
@@ -687,13 +750,13 @@ internal sealed class SteamSession : IDisposable
         }
     }
 
-    private async Task<(byte[]? Key, bool NoAccess)> RequestDepotKeyAsync(ManifestJob job)
+    private async Task<(byte[]? Key, bool NoAccess, string? Problem)> RequestDepotKeyAsync(ManifestJob job)
     {
         var depotKey = CacheDepotKeys ? DepotCache.LoadDepotKey(job.DepotID) : null;
 
         if (depotKey != null)
         {
-            return (depotKey, false);
+            return (depotKey, false, null);
         }
 
         SteamApps.DepotKeyCallback keyResult;
@@ -709,14 +772,19 @@ internal sealed class SteamSession : IDisposable
         }
         catch (Exception e) when (IsError(e))
         {
-            Report(job, $"Depot key request failed for {job.DepotID}: {DescribeError(e)}");
-            return (null, false);
+            return (null, false, $"Failed to get the depot key: {DescribeError(e)}");
+        }
+
+        // Steam denies a depot the account doesn't own, and doesn't find one that isn't in the app. Other results,
+        // like a busy Steam, are failures that running again can fix
+        if (keyResult.Result is EResult.AccessDenied or EResult.FileNotFound)
+        {
+            return (null, true, $"Steam gave no depot key for depot {job.DepotID} in app {job.AppID} ({keyResult.Result}): this account may not own it, or it belongs to another app.");
         }
 
         if (keyResult.Result != EResult.OK)
         {
-            Report(job, $"No access to depot {job.DepotID} in app {job.AppID} ({keyResult.Result}): the account may not own it, or the depot belongs to another app", noAccess: true);
-            return (null, true);
+            return (null, false, $"Failed to get the depot key: Steam answered {keyResult.Result}.");
         }
 
         if (CacheDepotKeys)
@@ -724,19 +792,24 @@ internal sealed class SteamSession : IDisposable
             DepotCache.SaveDepotKey(job.DepotID, keyResult.DepotKey);
         }
 
-        return (keyResult.DepotKey, false);
+        return (keyResult.DepotKey, false, null);
     }
 
-    // Optional depots, like ones only fetched for their manifest, can lack access without it being a problem
+    // Lacking access to an optional depot, like one of an "all" target, is expected, and any failure of a job whose
+    // manifest isn't needed is only a warning. Everything else fails the run, so it's an error
     private static void Report(ManifestJob job, string message, bool noAccess = false)
     {
         if (job.Optional && noAccess)
         {
             Log.Info(message);
         }
-        else
+        else if (job.FailureIsFine)
         {
             Log.Warn(message);
+        }
+        else
+        {
+            Log.Error(message);
         }
     }
 
@@ -748,7 +821,7 @@ internal sealed class SteamSession : IDisposable
         }
 
         var delay = ExponentialBackoff(attempt);
-        Log.Info($"Retrying {what} in {delay / 1000.0:F1}s (attempt {attempt + 1}/{maxAttempts})...");
+        Log.Info($"Retrying the {what} in {delay / 1000.0:F1}s (attempt {attempt + 1}/{maxAttempts})...");
         await Task.Delay(delay, CancellationToken);
     }
 
