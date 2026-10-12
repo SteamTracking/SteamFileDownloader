@@ -80,7 +80,7 @@ internal static partial class AccountStore
         stored.Accounts[account.Username] = Secrets.Protect(account.RefreshToken);
         stored.LastUsername = account.Username;
 
-        Secrets.WriteSecretJson(FilePath, stored, AccountJsonContext.Default.StoredAccounts);
+        Secrets.WriteJson(FilePath, stored, AccountJsonContext.Default.StoredAccounts);
     }
 
     private static StoredAccounts Read()

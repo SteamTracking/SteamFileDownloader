@@ -1,9 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
-using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using System.Threading;
 
 namespace SteamFileDownloader;
@@ -15,21 +14,23 @@ internal static partial class DepotCache
 {
     private static readonly string DepotKeysPath = Path.Combine(Secrets.AppDataFolder, "depot_keys.json");
     private static readonly Lock DepotKeysLock = new();
-    private static Dictionary<string, string>? DepotKeys;
+    private static SortedDictionary<uint, string>? DepotKeys;
 
     [JsonSourceGenerationOptions(WriteIndented = true)]
-    [JsonSerializable(typeof(Dictionary<string, string>))]
+    [JsonSerializable(typeof(SortedDictionary<uint, string>))]
     private sealed partial class DepotKeysJsonContext : JsonSerializerContext
     {
     }
+
+    private static JsonTypeInfo<SortedDictionary<uint, string>> DepotKeysTypeInfo => DepotKeysJsonContext.Default.SortedDictionaryUInt32String;
 
     public static byte[]? LoadDepotKey(uint depotID)
     {
         lock (DepotKeysLock)
         {
-            DepotKeys ??= Secrets.ReadJson(DepotKeysPath, DepotKeysJsonContext.Default.DictionaryStringString);
+            DepotKeys ??= Secrets.ReadJson(DepotKeysPath, DepotKeysTypeInfo);
 
-            if (!DepotKeys.TryGetValue(depotID.ToString(CultureInfo.InvariantCulture), out var hex))
+            if (!DepotKeys.TryGetValue(depotID, out var hex))
             {
                 return null;
             }
@@ -53,10 +54,10 @@ internal static partial class DepotCache
             try
             {
                 // Re-read so keys saved by other processes meanwhile are kept
-                DepotKeys = Secrets.ReadJson(DepotKeysPath, DepotKeysJsonContext.Default.DictionaryStringString);
-                DepotKeys[depotID.ToString(CultureInfo.InvariantCulture)] = Convert.ToHexString(depotKey);
+                DepotKeys = Secrets.ReadJson(DepotKeysPath, DepotKeysTypeInfo);
+                DepotKeys[depotID] = Convert.ToHexString(depotKey);
 
-                Secrets.WriteAtomic(DepotKeysPath, temp => File.WriteAllText(temp, JsonSerializer.Serialize(DepotKeys, DepotKeysJsonContext.Default.DictionaryStringString)));
+                Secrets.WriteJson(DepotKeysPath, DepotKeys, DepotKeysTypeInfo);
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
