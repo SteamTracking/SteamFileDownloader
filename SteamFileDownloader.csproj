@@ -21,7 +21,11 @@
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <SelfContained>true</SelfContained>
     <Nullable>enable</Nullable>
+    <DefaultItemExcludes>$(DefaultItemExcludes);tests/**</DefaultItemExcludes>
   </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="SteamFileDownloader.Tests" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="QRCoder" Version="1.8.0" />
     <PackageReference Include="SteamKit2" Version="3.4.0" />

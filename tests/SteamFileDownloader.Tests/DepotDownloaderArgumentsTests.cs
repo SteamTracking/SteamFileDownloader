@@ -1,0 +1,220 @@
+using TUnit.Core.Enums;
+
+namespace SteamFileDownloader.Tests;
+
+public class DepotDownloaderArgumentsTests
+{
+    [Test]
+    public async Task MinimalCommandDownloadsEveryDepotAndFile()
+    {
+        var result = DepotDownloaderArguments.Parse(["-app", "730"]);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.Command).IsEqualTo("get");
+        await Assert.That(result.Options.App).IsEqualTo(730u);
+        await Assert.That(result.Options.AllFiles).IsTrue();
+        await Assert.That(string.Join(",", result.Targets)).IsEqualTo("all");
+        await Assert.That(result.Patterns.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task DepotsAndManifestsPairUpInOrder()
+    {
+        var result = DepotDownloaderArguments.Parse(["-app", "730", "-depot", "1", "-manifest", "11", "-depot", "2", "-depot", "3", "-manifest", "33"]);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(string.Join(",", result!.Targets)).IsEqualTo("1:11,2:33,3");
+    }
+
+    [Test]
+    public async Task OptionNamesIgnoreCase()
+    {
+        var result = DepotDownloaderArguments.Parse(["-APP", "730", "-Depot", "1"]);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(string.Join(",", result!.Targets)).IsEqualTo("1");
+    }
+
+    [Test]
+    public async Task MoreManifestsThanDepotsIsAnError()
+    {
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-manifest", "5"])).IsNull();
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-depot", "1", "-manifest", "5", "-manifest", "6"])).IsNull();
+    }
+
+    [Test]
+    public async Task MissingAppIsAnError()
+    {
+        await Assert.That(DepotDownloaderArguments.Parse(["-depot", "1"])).IsNull();
+        await Assert.That(DepotDownloaderArguments.Parse([])).IsNull();
+    }
+
+    [Test]
+    [Arguments("-app")]
+    [Arguments("-depot")]
+    [Arguments("-manifest")]
+    [Arguments("-filelist")]
+    [Arguments("-dir")]
+    [Arguments("-branch")]
+    [Arguments("-beta")]
+    public async Task OptionWithoutValueIsAnError(string option)
+    {
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", option])).IsNull();
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", option, "-manifest-only"])).IsNull();
+    }
+
+    [Test]
+    [Arguments("-app", "abc")]
+    [Arguments("-app", "-5")]
+    [Arguments("-depot", "x")]
+    [Arguments("-manifest", "x")]
+    [Arguments("-app", "99999999999")]
+    [Arguments("-depot", "99999999999")]
+    public async Task NonNumericIdsAreAnError(string option, string value)
+    {
+        var args = option == "-app" ? new[] { option, value } : ["-app", "730", option, value];
+
+        await Assert.That(DepotDownloaderArguments.Parse(args)).IsNull();
+    }
+
+    [Test]
+    public async Task ManifestOnlyRunsLs()
+    {
+        var result = DepotDownloaderArguments.Parse(["-app", "730", "-depot", "1", "-manifest-only"]);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.Command).IsEqualTo("ls");
+        await Assert.That(result.Options.AllFiles).IsFalse();
+    }
+
+    [Test]
+    public async Task BranchAndBetaSetTheBranch()
+    {
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-branch", "dev"])!.Options.Branch).IsEqualTo("dev");
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-beta", "dev"])!.Options.Branch).IsEqualTo("dev");
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730"])!.Options.Branch).IsEqualTo("public");
+    }
+
+    [Test]
+    [Arguments("-branchpassword")]
+    [Arguments("-betapassword")]
+    public async Task BranchPasswordsAreRejected(string option)
+    {
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", option, "secret"])).IsNull();
+    }
+
+    [Test]
+    public async Task UsernameIsKept()
+    {
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-username", "me"])!.Options.Username).IsEqualTo("me");
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-user", "me"])!.Options.Username).IsEqualTo("me");
+    }
+
+    [Test]
+    public async Task SkippedOptionsAreIgnoredWithAndWithoutValues()
+    {
+        var result = DepotDownloaderArguments.Parse(["-remember-password", "-app", "730", "-loginid", "5", "-password", "x", "-os", "windows", "-all-platforms", "-depot", "1", "-max-downloads", "8"]);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.Options.App).IsEqualTo(730u);
+        await Assert.That(string.Join(",", result.Targets)).IsEqualTo("1");
+        await Assert.That(result.Options.Username).IsNull();
+    }
+
+    [Test]
+    public async Task FileListLinesBecomeEscapedRegexPatterns()
+    {
+        using var temp = new TempDirectory();
+        var list = temp.Write("files.txt", "game/bin/a+b.dll\n  game\\bin\\c.dll  \n\n/lead/slash.txt\r\nregex:^game/.*\\.so$\n");
+
+        var result = DepotDownloaderArguments.Parse(["-app", "730", "-filelist", list]);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.Options.AllFiles).IsFalse();
+
+        var filter = FileFilter.FromPatterns(result.Patterns);
+
+        await Assert.That(result.Patterns.Count).IsEqualTo(4);
+        await Assert.That(filter.GetMatchingPatterns("game/bin/a+b.dll").Count).IsEqualTo(1);
+        await Assert.That(filter.GetMatchingPatterns("game/bin/aab.dll").Count).IsEqualTo(0);
+        await Assert.That(filter.GetMatchingPatterns("game/bin/a+bXdll").Count).IsEqualTo(0);
+        await Assert.That(filter.GetMatchingPatterns("x/game/bin/a+b.dll").Count).IsEqualTo(0);
+        await Assert.That(filter.GetMatchingPatterns("game/bin/c.dll").Count).IsEqualTo(1);
+        await Assert.That(filter.GetMatchingPatterns("game/lib/x.so").Count).IsEqualTo(1);
+        await Assert.That(filter.GetMatchingPatterns("lead/slash.txt").Count).IsEqualTo(1);
+    }
+
+    [Test]
+    [Arguments("")]
+    [Arguments("  ")]
+    public async Task EmptyDirIsAnError(string dir)
+    {
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-dir", dir])).IsNull();
+    }
+
+    [Test]
+    public async Task FileListEntriesAreExactPathsWithoutGlobs()
+    {
+        using var temp = new TempDirectory();
+        var list = temp.Write("files.txt", "game/*.dll\nserver.dll\n");
+
+        var filter = FileFilter.FromPatterns(DepotDownloaderArguments.Parse(["-app", "730", "-filelist", list])!.Patterns);
+
+        await Assert.That(filter.GetMatchingPatterns("game/*.dll").Count).IsEqualTo(1);
+        await Assert.That(filter.GetMatchingPatterns("game/a.dll").Count).IsEqualTo(0);
+        await Assert.That(filter.GetMatchingPatterns("server.dll").Count).IsEqualTo(1);
+        await Assert.That(filter.GetMatchingPatterns("bin/server.dll").Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task FileListsAccumulate()
+    {
+        using var temp = new TempDirectory();
+        var first = temp.Write("a.txt", "a.txt");
+        var second = temp.Write("b.txt", "regex:b");
+
+        var result = DepotDownloaderArguments.Parse(["-app", "730", "-filelist", first, "-filelist", second]);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.Patterns.Count).IsEqualTo(2);
+    }
+
+    [Test]
+    [Arguments("")]
+    [Arguments("\n\n")]
+    [Arguments("   \r\n\t\r\n")]
+    public async Task EmptyFileListIsAnError(string content)
+    {
+        using var temp = new TempDirectory();
+        var list = temp.Write("files.txt", content);
+
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-filelist", list])).IsNull();
+    }
+
+    [Test]
+    public async Task MissingFileListIsAnError()
+    {
+        using var temp = new TempDirectory();
+
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-filelist", Path.Combine(temp.Path, "missing.txt")])).IsNull();
+    }
+
+    [Test]
+    [Arguments("C:foo", false)]
+    [Arguments("\\foo", false)]
+    [Arguments("D:/SteamDepots", true)]
+    [Arguments("D:\\SteamDepots", true)]
+    [Arguments("out/dir", true)]
+    [RunOn(OS.Windows)]
+    public async Task DirIsCheckedForDriveRelativePaths(string dir, bool accepted)
+    {
+        var result = DepotDownloaderArguments.Parse(["-app", "730", "-dir", dir]);
+
+        await Assert.That(result != null).IsEqualTo(accepted);
+
+        if (accepted)
+        {
+            await Assert.That(result!.Options.Output).IsEqualTo(dir);
+        }
+    }
+}
