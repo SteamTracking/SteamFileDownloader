@@ -10,6 +10,8 @@ namespace SteamFileDownloader;
 
 internal static class Program
 {
+    public static string Version { get; } = (Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "").Split('+')[0];
+
     private static async Task<int> Main(string[] args)
     {
         if (Help.TryPrint(args))
@@ -19,8 +21,7 @@ internal static class Program
 
         if (args[0] == "--version")
         {
-            var version = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "";
-            Console.WriteLine(version.Split('+')[0]);
+            Console.WriteLine(Version);
             return ExitCodes.Ok;
         }
 

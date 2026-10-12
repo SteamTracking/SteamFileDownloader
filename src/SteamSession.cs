@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Threading;
 using System.Threading.Tasks;
 using SteamKit2;
@@ -37,7 +39,7 @@ internal sealed class SteamSession : IDisposable
     private const int CdnServerFailuresToBench = 3;
     private static readonly TimeSpan CdnServerBenchTime = TimeSpan.FromSeconds(30);
 
-    private readonly SteamClient SteamClient = new();
+    private readonly SteamClient SteamClient = new(SteamConfiguration.Create(static b => b.WithHttpClientFactory(CreateHttpClient)));
     private readonly CallbackManager Manager;
     private readonly SteamUser User;
     private readonly SteamApps Apps;
@@ -141,6 +143,32 @@ internal sealed class SteamSession : IDisposable
     /// The CDN refusing content, from an expired request code, missing access, or a server without it.
     /// </summary>
     public static bool IsRefusal(Exception e) => e is SteamKitWebRequestException { StatusCode: HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.NotFound };
+
+    /// <summary>
+    /// CDN requests ask for HTTP/2, so each server gets one connection for all of them instead of one per request.
+    /// Servers without HTTP/2, or without HTTPS, get HTTP/1.1. The CM connection is a WebSocket, which stays on HTTP/1.1.
+    /// </summary>
+    private static HttpClient CreateHttpClient(HttpClientPurpose purpose)
+    {
+#pragma warning disable CA2000 // The client disposes its handlers
+        var client = purpose == HttpClientPurpose.CDN ? new HttpClient(new Http2Handler { InnerHandler = new SocketsHttpHandler() }) : new HttpClient();
+#pragma warning restore CA2000
+        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue(nameof(SteamFileDownloader), Program.Version));
+
+        return client;
+    }
+
+    // SteamKit creates its requests as HTTP/1.1, which a client's default version doesn't change
+    private sealed class Http2Handler : DelegatingHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            request.Version = HttpVersion.Version20;
+            request.VersionPolicy = HttpVersionPolicy.RequestVersionOrLower;
+
+            return base.SendAsync(request, cancellationToken);
+        }
+    }
 
     private bool IsError(Exception e) => IsError(e, CancellationToken);
 
