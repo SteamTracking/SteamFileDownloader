@@ -78,6 +78,38 @@ internal static class ArgumentParser
     }
 
     /// <summary>
+    /// Checks what follows "--": only patterns, and for a get command patterns or --all-files but not both, explained
+    /// by noPatternsError when neither is given. Returns false after printing an error.
+    /// </summary>
+    public static bool CheckPatterns(ParsedArguments parsed, bool get, string noPatternsError)
+    {
+        var misplacedOption = parsed.Patterns.FirstOrDefault(static p => p.StartsWith("--", StringComparison.Ordinal));
+
+        if (misplacedOption != null)
+        {
+            Log.Error($"\"{misplacedOption}\" is after --, which is only for patterns. Put options before --.");
+            return false;
+        }
+
+        var allFiles = parsed.Options.ContainsKey("all-files");
+
+        // Whole depots can be tens of gigabytes, so downloading every file has to be asked for
+        if (get && parsed.Patterns.Count == 0 && !allFiles)
+        {
+            Log.Error(noPatternsError);
+            return false;
+        }
+
+        if (get && parsed.Patterns.Count > 0 && allFiles)
+        {
+            Log.Error("--all-files downloads every file, so it can't be combined with patterns.");
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Rejects positional arguments and patterns, for commands that only take options. Returns false after printing an error.
     /// </summary>
     public static bool NoPositionals(ParsedArguments parsed, string command)

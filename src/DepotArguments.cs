@@ -16,7 +16,17 @@ internal sealed record DepotOptions(
     bool Anonymous = false,
     string? Username = null,
     bool AllFiles = false,
-    bool Json = false);
+    bool Json = false)
+{
+    public static DepotOptions From(ParsedArguments parsed, uint? app) => new(
+        app,
+        parsed.Options.GetValueOrDefault("output"),
+        parsed.Options.GetValueOrDefault("branch") ?? "public",
+        parsed.Options.ContainsKey("anonymous"),
+        parsed.Options.GetValueOrDefault("username"),
+        parsed.Options.ContainsKey("all-files"),
+        parsed.Options.ContainsKey("json"));
+}
 
 /// <summary>
 /// A parsed get, ls or depots command line.
@@ -86,26 +96,9 @@ internal static partial class DepotArgumentParser
             return null;
         }
 
-        var misplacedOption = parsed.Patterns.FirstOrDefault(static p => p.StartsWith("--", StringComparison.Ordinal));
-
-        if (misplacedOption != null)
+        if (!ArgumentParser.CheckPatterns(parsed, get: command == "get",
+            $"get needs patterns after --, like: {Help.ExeName} get 730 2347771:latest -- server.dll. Use ls to see a manifest's files, or --all-files to download every file."))
         {
-            Log.Error($"\"{misplacedOption}\" is after --, which is only for patterns. Put options before --.");
-            return null;
-        }
-
-        var allFiles = parsed.Options.ContainsKey("all-files");
-
-        // Whole depots can be tens of gigabytes, so downloading every file has to be asked for
-        if (command == "get" && parsed.Patterns.Count == 0 && !allFiles)
-        {
-            Log.Error($"get needs patterns after --, like: {Help.ExeName} get 730 2347771:latest -- server.dll. Use ls to see a manifest's files, or --all-files to download every file.");
-            return null;
-        }
-
-        if (command == "get" && parsed.Patterns.Count > 0 && allFiles)
-        {
-            Log.Error("--all-files downloads every file, so it can't be combined with patterns.");
             return null;
         }
 
@@ -115,16 +108,7 @@ internal static partial class DepotArgumentParser
             return null;
         }
 
-        var options = new DepotOptions(
-            app,
-            parsed.Options.GetValueOrDefault("output"),
-            parsed.Options.GetValueOrDefault("branch") ?? "public",
-            parsed.Options.ContainsKey("anonymous"),
-            parsed.Options.GetValueOrDefault("username"),
-            allFiles,
-            parsed.Options.ContainsKey("json"));
-
-        return new DepotArguments(command, options, targets, parsed.Patterns);
+        return new DepotArguments(command, DepotOptions.From(parsed, app), targets, parsed.Patterns);
     }
 
     // Returns null after printing an error

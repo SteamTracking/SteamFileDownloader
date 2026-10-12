@@ -1,5 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Linq;
 using SteamKit2;
 
 namespace SteamFileDownloader;
@@ -39,6 +42,31 @@ internal sealed class ManifestJob
     public DateTime CreationTime => Manifest!.CreationTime;
 
     public override string ToString() => $"{DepotID}:{ManifestID}";
+
+    /// <summary>
+    /// A job whose files go to &lt;parentFolder&gt;/&lt;manifest&gt;, where folders of other manifests may already have identical files.
+    /// </summary>
+    public static ManifestJob Create(uint appID, uint depotID, ulong manifestID, string branch, string parentFolder)
+    {
+        var outputFolder = Path.Combine(parentFolder, manifestID.ToString(CultureInfo.InvariantCulture));
+
+        return new ManifestJob
+        {
+            AppID = appID,
+            DepotID = depotID,
+            ManifestID = manifestID,
+            Branch = branch,
+            OutputFolder = outputFolder,
+
+            // Newest manifests first by their folder's date
+            ReuseFolders = Directory.Exists(parentFolder)
+                ? [.. new DirectoryInfo(parentFolder).GetDirectories()
+                    .Where(d => !string.Equals(d.FullName, outputFolder, StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(static d => d.LastWriteTimeUtc)
+                    .Select(static d => d.FullName)]
+                : [],
+        };
+    }
 
     /// <summary>
     /// The manifest's files with their normalized paths, without its directories.

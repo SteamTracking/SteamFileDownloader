@@ -30,6 +30,21 @@ internal static class ExitCodes
         _ => Failed,
     };
 
+    /// <summary>
+    /// The exit code of a finished run, after logging the error that explains it.
+    /// </summary>
+    public static int Report(bool failed, bool failedOtherwise, int sessionFailureExitCode, bool unmatched = false)
+    {
+        var (exitCode, message) = GetExitCode(failed, failedOtherwise, sessionFailureExitCode, unmatched);
+
+        if (message != null)
+        {
+            Log.Error(message);
+        }
+
+        return exitCode;
+    }
+
     // The exit code of a finished get or ls run and the error that explains it, or null for success
     public static (int ExitCode, string? Message) GetExitCode(bool failed, bool failedOtherwise, int sessionFailureExitCode, bool unmatched)
     {

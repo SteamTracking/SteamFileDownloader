@@ -17,13 +17,13 @@ internal static class DepotCommands
 {
     // A matching manifest file with its normalized path. Requested is false for directory VPKs only needed for their entries,
     // and VpkPatterns are the VPK patterns that read entries from it
-    private sealed record MatchedFile(
+    internal sealed record MatchedFile(
         DepotManifest.FileData File,
         string Path,
         bool Requested,
         IReadOnlyList<VpkPattern> VpkPatterns);
 
-    private sealed class Run
+    internal sealed class Run
     {
         public required FileFilter Filter;
         public required SteamSession Session;
@@ -33,8 +33,9 @@ internal static class DepotCommands
         public Dictionary<string, int> MatchCounts = [];
         public List<string> FailedTargets = [];
 
-        // The jobs of each all target, whose depots fail quietly one by one, but not all of them
-        public Dictionary<Target, List<ManifestJob>> AllTargets = [];
+        // The jobs of each target that names several manifests, like all, by the target's source. Its manifests fail
+        // quietly one by one, but not all of them
+        public Dictionary<string, List<ManifestJob>> AllTargets = [];
         public int Rows;
         public bool Failed;
 
@@ -43,6 +44,29 @@ internal static class DepotCommands
 
         // Whole depots are thousands of files, which nobody asked to see one by one
         public bool HideRows;
+
+        private readonly Dictionary<(uint DepotID, ulong ManifestID), ManifestJob> JobsByManifest = [];
+
+        /// <summary>
+        /// Adds the job of a manifest, or returns the one already added for it. Its files go to &lt;parentFolder&gt;/&lt;manifest&gt;.
+        /// </summary>
+        public ManifestJob AddJob(uint appID, uint depotID, ulong manifestID, string branch, bool optional, string parentFolder)
+        {
+            if (JobsByManifest.TryGetValue((depotID, manifestID), out var existing))
+            {
+                // Also asked for by an explicit target, so its failure counts
+                existing.Optional &= optional;
+                return existing;
+            }
+
+            var job = ManifestJob.Create(appID, depotID, manifestID, branch, parentFolder);
+            job.Optional = optional;
+
+            JobsByManifest[(depotID, manifestID)] = job;
+            Jobs.Add(job);
+
+            return job;
+        }
 
         public void Fail(string? target = null, bool noAccess = false)
         {
@@ -66,17 +90,84 @@ internal static class DepotCommands
         }
     }
 
-    public static async Task<int> GetAsync(DepotArguments arguments, CancellationToken cancellationToken)
+    /// <summary>
+    /// Runs get or ls on depot targets.
+    /// </summary>
+    public static async Task<int> RunAsync(DepotArguments arguments, CancellationToken cancellationToken)
     {
-        var (run, exitCode) = await PrepareAsync(arguments, cancellationToken);
+        var targets = new List<Target>();
 
-        if (run == null)
+        foreach (var arg in arguments.Targets)
         {
-            return exitCode;
+            if (DepotArgumentParser.ParseTarget(arg, arguments) is not { } target)
+            {
+                return ExitCodes.Failed;
+            }
+
+            targets.Add(target);
         }
 
-        using var session = run.Session;
-        using var downloader = new FileDownloader(session, cancellationToken);
+        return await RunAsync(arguments.Options, arguments.Patterns, list: arguments.Command == "ls", run => ResolveJobsAsync(run, targets), cancellationToken);
+    }
+
+    /// <summary>
+    /// Logs in, adds the run's jobs with resolveJobs, gets every manifest, and lists or downloads the matching files.
+    /// </summary>
+    internal static async Task<int> RunAsync(DepotOptions options, List<string> patterns, bool list, Func<Run, Task> resolveJobs, CancellationToken cancellationToken)
+    {
+        FileFilter filter;
+
+        try
+        {
+            filter = FileFilter.FromPatterns(patterns);
+        }
+        catch (ArgumentException e)
+        {
+            Log.Error($"Invalid regex pattern: {e.Message}");
+            return ExitCodes.Failed;
+        }
+
+        var (loggedOn, logOnExitCode) = await SteamSession.CreateLoggedOnAsync(options, takesTargets: true, cancellationToken);
+
+        if (loggedOn == null)
+        {
+            return logOnExitCode;
+        }
+
+        using var session = loggedOn;
+
+        var run = new Run
+        {
+            Filter = filter,
+            Session = session,
+            OutputRoot = Path.GetFullPath(options.Output ?? "depots"),
+            HideRows = options.AllFiles,
+        };
+
+        // Manifests come from the CDN too, so its server list loads while the jobs resolve
+        _ = session.EnsureCdnServersAsync();
+
+        await resolveJobs(run);
+
+        await session.DownloadManifestsAsync(run.Jobs);
+
+        // Depots of all targets that the account can't access are expected, errors are not
+        foreach (var job in run.Jobs.Where(static j => j.Manifest == null && !(j.Optional && j.NoAccess)))
+        {
+            run.Fail(job.ToString(), job.NoAccess);
+        }
+
+        // Files come from the CDN, which does not need the Steam connection
+        session.Disconnect();
+
+        MatchFiles(run);
+
+        return list ? await ListFilesAsync(run, cancellationToken) : await GetFilesAsync(run, cancellationToken);
+    }
+
+    private static async Task<int> GetFilesAsync(Run run, CancellationToken cancellationToken)
+    {
+        using var downloader = new FileDownloader(run.Session, cancellationToken);
 
         var fileJobs = run.Matches
             .SelectMany(static m => m.Value.Select(f => new FileJob(m.Key, f.File)))
@@ -146,17 +237,8 @@ internal static class DepotCommands
         return Finish(run, downloads: true);
     }
 
-    public static async Task<int> ListAsync(DepotArguments arguments, CancellationToken cancellationToken)
+    private static async Task<int> ListFilesAsync(Run run, CancellationToken cancellationToken)
     {
-        var (run, exitCode) = await PrepareAsync(arguments, cancellationToken);
-
-        if (run == null)
-        {
-            return exitCode;
-        }
-
-        using var session = run.Session;
-
         foreach (var (job, files) in run.Matches)
         {
             foreach (var file in files.Where(static f => f.Requested).OrderBy(static f => f.Path, StringComparer.Ordinal))
@@ -166,7 +248,7 @@ internal static class DepotCommands
         }
 
         // Directory files have to be downloaded to read their entries
-        using var downloader = new FileDownloader(session, cancellationToken);
+        using var downloader = new FileDownloader(run.Session, cancellationToken);
         var dirJobs = run.Matches
             .SelectMany(static m => m.Value.Where(static f => f.VpkPatterns.Count > 0).Select(f => new FileJob(m.Key, f.File)))
             .ToList();
@@ -194,114 +276,13 @@ internal static class DepotCommands
         return Finish(run, downloads: false);
     }
 
-    /// <summary>
-    /// Parses targets and patterns, logs in, and gets every manifest. Returns a null run with the exit code after printing an error.
-    /// </summary>
-    private static async Task<(Run? Run, int ExitCode)> PrepareAsync(DepotArguments arguments, CancellationToken cancellationToken)
-    {
-        var options = arguments.Options;
-        var targets = new List<Target>();
-
-        foreach (var arg in arguments.Targets)
-        {
-            if (DepotArgumentParser.ParseTarget(arg, arguments) is not { } target)
-            {
-                return (null, ExitCodes.Failed);
-            }
-
-            targets.Add(target);
-        }
-
-        FileFilter filter;
-
-        try
-        {
-            filter = FileFilter.FromPatterns(arguments.Patterns);
-        }
-        catch (ArgumentException e)
-        {
-            Log.Error($"Invalid regex pattern: {e.Message}");
-            return (null, ExitCodes.Failed);
-        }
-
-        var credentials = options.Anonymous ? LogOnCredentials.Anonymous : AccountStore.LoadCredentials(options.Username);
-        var (session, logOnExitCode) = await SteamSession.CreateLoggedOnAsync(credentials, cacheDepotKeys: true, takesTargets: true, cancellationToken);
-
-        if (session == null)
-        {
-            return (null, logOnExitCode);
-        }
-
-        var run = new Run
-        {
-            Filter = filter,
-            Session = session,
-            OutputRoot = Path.GetFullPath(options.Output ?? "depots"),
-            HideRows = options.AllFiles,
-        };
-
-        // Manifests come from the CDN too, so its server list loads while the app info does
-        _ = session.EnsureCdnServersAsync();
-
-        await ResolveJobsAsync(run, targets);
-
-        await session.DownloadManifestsAsync(run.Jobs);
-
-        // Depots of all targets that the account can't access are expected, errors are not
-        foreach (var job in run.Jobs.Where(static j => j.Manifest == null && !(j.Optional && j.NoAccess)))
-        {
-            run.Fail(job.ToString(), job.NoAccess);
-        }
-
-        // Files come from the CDN, which does not need the Steam connection
-        session.Disconnect();
-
-        MatchFiles(run);
-
-        return (run, ExitCodes.Ok);
-    }
-
     private static async Task ResolveJobsAsync(Run run, List<Target> targets)
     {
         var appInfos = await run.Session.GetAppInfosAsync([.. targets.Where(static t => t.DepotID == null || t.ManifestID == null).Select(static t => t.AppID).Distinct()]);
 
-        var jobs = new Dictionary<(uint, ulong), ManifestJob>();
-
-        ManifestJob AddJob(Target target, uint depotID, ulong manifestID, string branch, bool optional)
-        {
-            if (jobs.TryGetValue((depotID, manifestID), out var existing))
-            {
-                // Also asked for by an explicit target, so its failure counts
-                existing.Optional &= optional;
-                return existing;
-            }
-
-            var depotFolder = Path.Combine(run.OutputRoot, depotID.ToString(CultureInfo.InvariantCulture));
-            var outputFolder = Path.Combine(depotFolder, manifestID.ToString(CultureInfo.InvariantCulture));
-
-            var job = new ManifestJob
-            {
-                AppID = target.AppID,
-                DepotID = depotID,
-                ManifestID = manifestID,
-                Branch = branch,
-                OutputFolder = outputFolder,
-                Optional = optional,
-
-                // Earlier runs of other manifests of this depot may already have identical files, newest manifests first by their folder's date
-                ReuseFolders = Directory.Exists(depotFolder)
-                    ? [.. new DirectoryInfo(depotFolder).GetDirectories()
-                        .Where(d => !string.Equals(d.FullName, outputFolder, StringComparison.OrdinalIgnoreCase))
-                        .OrderByDescending(static d => d.LastWriteTimeUtc)
-                        .Select(static d => d.FullName)]
-                    : [],
-            };
-
-            jobs[(depotID, manifestID)] = job;
-            run.Jobs.Add(job);
-
-            return job;
-        }
+        // Earlier runs of other manifests of the depot may already have identical files
+        ManifestJob AddJob(Target target, uint depotID, ulong manifestID, string branch, bool optional) =>
+            run.AddJob(target.AppID, depotID, manifestID, branch, optional, Path.Combine(run.OutputRoot, depotID.ToString(CultureInfo.InvariantCulture)));
 
         foreach (var target in targets)
         {
@@ -349,7 +330,7 @@ internal static class DepotCommands
                 else
                 {
                     Log.Info($"Target {target.Source}: {allJobs.Count} depots of app {target.AppID} with a manifest on \"{target.Branch}\".");
-                    run.AllTargets[target] = allJobs;
+                    run.AllTargets[target.Source] = allJobs;
                 }
 
                 continue;
@@ -465,16 +446,16 @@ internal static class DepotCommands
 
     private static int Finish(Run run, bool downloads)
     {
-        foreach (var (target, jobs) in run.AllTargets)
+        foreach (var (source, jobs) in run.AllTargets)
         {
             if (jobs.All(static j => j.Manifest == null))
             {
                 var noAccess = jobs.All(static j => j.NoAccess);
 
                 Log.Error(noAccess
-                    ? $"None of the {jobs.Count} depots of target {target.Source} could be downloaded; this account likely has no access to them."
-                    : $"None of the {jobs.Count} depots of target {target.Source} could be downloaded; see the errors above.");
-                run.Fail(noAccess ? $"{target.Source} (no access)" : target.Source, noAccess);
+                    ? $"None of the {jobs.Count} depots of target {source} could be downloaded; this account likely has no access to them."
+                    : $"None of the {jobs.Count} depots of target {source} could be downloaded; see the errors above.");
+                run.Fail(noAccess ? $"{source} (no access)" : source, noAccess);
             }
         }
 
@@ -517,13 +498,6 @@ internal static class DepotCommands
             }
         }
 
-        var (exitCode, message) = ExitCodes.GetExitCode(run.Failed, run.FailedOtherwise, run.Session.FailureExitCode, unmatched.Count > 0);
-
-        if (message != null)
-        {
-            Log.Error(message);
-        }
-
-        return exitCode;
+        return ExitCodes.Report(run.Failed, run.FailedOtherwise, run.Session.FailureExitCode, unmatched.Count > 0);
     }
 }

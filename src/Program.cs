@@ -77,8 +77,7 @@ internal static class Program
 
         return arguments.Command switch
         {
-            "get" => await DepotCommands.GetAsync(arguments, cancellationToken),
-            "ls" => await DepotCommands.ListAsync(arguments, cancellationToken),
+            "get" or "ls" => await DepotCommands.RunAsync(arguments, cancellationToken),
             _ => await DepotsCommand.ListDepotsAsync(arguments, cancellationToken),
         };
     }

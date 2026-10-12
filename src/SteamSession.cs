@@ -236,6 +236,16 @@ internal sealed class SteamSession : IDisposable, IChunkSource
         return (session, ExitCodes.Ok);
     }
 
+    /// <summary>
+    /// Logs on with --anonymous, or a saved login picked by --username.
+    /// </summary>
+    public static Task<(SteamSession? Session, int ExitCode)> CreateLoggedOnAsync(DepotOptions options, bool takesTargets, CancellationToken cancellationToken)
+    {
+        var credentials = options.Anonymous ? LogOnCredentials.Anonymous : AccountStore.LoadCredentials(options.Username);
+
+        return CreateLoggedOnAsync(credentials, cacheDepotKeys: true, takesTargets, cancellationToken);
+    }
+
     private async Task<EResult> LogOnWithRetriesAsync(LogOnCredentials credentials)
     {
         var result = EResult.Fail;
