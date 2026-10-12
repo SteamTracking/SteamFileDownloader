@@ -5,7 +5,8 @@ using System.Linq;
 namespace SteamFileDownloader;
 
 /// <summary>
-/// Help texts, written so the tool can be used without the readme.
+/// Help texts, written so the tool can be used without the readme. Each starts with what a truncated read needs
+/// (usage, examples, syntax, options and the exit codes in short), and the details follow.
 /// </summary>
 internal static class Help
 {
@@ -14,37 +15,39 @@ internal static class Help
     public static string UsageHint(string command = "") => $"Run \"{ExeName}{(command.Length > 0 ? " " + command : "")} --help\" for usage.";
 
     private static string Targets => """
-        Targets:
-          <depot>              the latest manifest on the branch, same as <depot>:latest
-          <depot>:<manifest>   a specific manifest, including old ones (2347771:8344780363095656278)
-          all                  every depot of the app except shared ones, skipping ones without access
-          <app>/<depot>...     a depot of another app (570/373303:latest, or 570/373303/<manifest>)
-          ...@<branch>         a manifest on that branch, needed for beta-only manifests
-                               (2347779:2591545799285498410@animgraph_2_beta)
+        Targets (all in one run: each run logs in to Steam once, and Steam rate limits logins):
+          <depot>[:<manifest>]   the latest manifest on the branch, or that one, old ones too (2347771:8344780363095656278)
+          all                    every depot of the app except shared ones, skipping ones without access
+          <app>/<depot>...       a depot of another app (570/373303:latest, or 570/373303/<manifest>)
+          ...@<branch>           a manifest on that branch, needed for beta-only manifests
+        """;
 
-          The app id before the targets can be left out when every target names its app.
-          Each run logs in to Steam once, and Steam rate limits logins, so put all targets in one run.
-          Parallel runs on one account don't disconnect each other.
-          "depots <app>" shows the latest manifests; old manifest ids are in the history of a
-          GameTracking manifests/ folder.
+    private static string TargetNotes => """
+        More on targets:
+          <depot> is the same as <depot>:latest. The app id before the targets can be left out when every target
+          names its app. Parallel runs on one account don't disconnect each other. "depots <app>" shows the latest
+          manifests; old manifest ids are in the history of a GameTracking manifests/ folder.
         """;
 
     private static string Patterns => """
         Patterns (after --, case-insensitive, each tried against every target):
-          game/bin/win64/engine2.dll          exact path from the depot root, when it has a slash
-          server.dll                          that file name in any folder
-          *.vpk, game/**/bin/**               globs: * and ? within a folder, ** across folders
-          regex:tools/.*\.dll$                .NET regex, matched anywhere in the path
-          game/core/pak01_dir.vpk:<pattern>   entries inside that VPK, both parts use the rules above;
-                                              an empty <pattern> means all entries
+          server.dll, game/bin/win64/engine2.dll   a file name in any folder, or an exact path from the depot root
+          *.vpk, game/**/bin/**                    globs: * and ? within a folder, ** across folders
+          regex:tools/.*\.dll$                     .NET regex, matched anywhere in the path
+          <dir.vpk>:<pattern>                      entries inside that VPK, like "game/core/pak01_dir.vpk:regex:^scripts/"
+        """;
 
-          Depot paths use forward slashes. A target without a match is fine (like a build before the
-          file existed); a pattern that matches nothing in any target is an error (exit code 2).
-          Quote patterns with characters the shell expands, like * ? ( | $.
+    private static string PatternNotes => """
+        More on patterns:
+          Depot paths use forward slashes. In <dir.vpk>:<pattern>, both parts use the pattern rules, and an empty
+          <pattern> means all entries. A target without a match is fine (like a build before the file existed);
+          a pattern that matches nothing in any target is an error (exit code 2). Quote patterns with characters
+          the shell expands, like * ? ( | $.
         """;
 
     // Near the top of the help, since the full exit codes are at the end, past where a truncated read stops
-    private static string ExitCodesSummary => "Exit codes: 0 ok, 1 failed, 2 a pattern matched nothing, 3 log in again, 4 rate limited, 5 no access (see the end).";
+    private static string ExitCodesSummary(string? details = "see the end") =>
+        $"Exit codes: 0 ok, 1 failed, 2 a pattern matched nothing, 3 log in again, 4 rate limited, 5 no access{(details == null ? "" : $" ({details})")}.";
 
     private static string LoginOptions => """
           --username <name>   saved login to use instead of the last one
@@ -58,12 +61,7 @@ internal static class Help
         {LoginOptions}
         """;
 
-    // Follows the description of the rows on stdout
-    private static string Streams => """
-        Everything else goes to stderr: progress, as a "Progress:" line every 30 seconds when stderr
-        isn't a terminal, and problems, which start with [ERROR] or [WARN] (::error:: and ::warning::
-        when the CI environment variable is set).
-        """;
+    private static string Streams => "Progress and problems ([ERROR] and [WARN], or ::error:: and ::warning:: when CI is set) go to stderr.";
 
     private static string ExitCodesText => """
         Exit codes:
@@ -105,7 +103,7 @@ internal static class Help
 
         Typical run, with every target in one call and rows of downloaded files on stdout:
           {ExeName} get 730 2347771 2347773 --output D:/SteamDepots -- server.dll "regex:lib(tier0|engine2)\.so$"
-        {ExitCodesSummary}
+        {ExitCodesSummary(null)}
 
         {Targets}
 
@@ -113,25 +111,8 @@ internal static class Help
 
         {Options}
 
-        Output:
-          stdout has only results, as tab-separated rows:
-            ls       depot  manifest  sha1  size  path
-                     depot  manifest  crc32  size  <dir.vpk>:<entry path>   (VPK entries)
-            get      depot  manifest  absolute path                         (none with --all-files)
-            depots   app  depot  manifest  max size  notes                  (one JSON object with --json)
-          {Streams.ReplaceLineEndings(Environment.NewLine + "  ")}
-
-          Files go to <output>/<depot>/<manifest>/<path>, dated to when their manifest was created.
-          Files already there, or identical in another manifest of the depot, aren't downloaded again,
-          so reuse the same output folder.
-
-        {ExitCodesText}
-
-        Examples:
-          {ExeName} depots 730
-          {ExeName} ls 730 2347779:4784444484596788209 2347779:2356538687884552308 -- source1import.exe
-          {ExeName} get 730 2347771:8344780363095656278 2347771:latest -- game/csgo/bin/win64/server.dll engine2.dll
-          {ExeName} get 730 2347770 -- "game/core/pak01_dir.vpk:scripts/scenes.vdata_c"
+        Files go to <output>/<depot>/<manifest>/<path>. Files already there, or identical in another manifest
+        of the depot, aren't downloaded again, so reuse the same output folder.
 
         Saved logins: {AccountStore.FilePath}
         """;
@@ -143,32 +124,11 @@ internal static class Help
           {ExeName} track --appid <app> --output <dir> [--username <name> [--password <password>]]
             [--branch <name>] [--manifests <folder>] [--save-manifest] [--save-all-manifests]
 
-        Files go to <dir>/<path>, without depot and manifest folders. Files already on disk with the
-        right hash are kept. When everything succeeded, <dir>/steam_buildid.txt gets the build id.
-        Messages go to stdout, and warnings and errors to stderr.
-
-        To download an older build, pass --manifests with the manifests/ folder of an older run, like
-        from an old commit of a GameTracking repository. Each depot uses the manifest id in its
-        manifest_<depot>.txt, and depots without one are skipped. VPK entries need the manifests of the
-        depots their archives are in too, so use a run with --save-all-manifests. steam_buildid.txt isn't written.
-
-        files.json maps depot ids to lists of patterns (comments and trailing commas are allowed, and
-        backslashes are doubled in JSON strings):
-          game/csgo/steam.inf                        exact path
-          game/**/bin/win64/*.dll                    glob for the whole path: * and ? within a folder,
-                                                     ** across folders
-          regex:.+?\.(dll|exe)                       .NET regex for the whole path
-          game/dota/pak01_dir.vpk:<pattern>          entries inside that VPK, with the pattern rules of get,
-                                                     like "game/dota/pak01_dir.vpk:regex:^scripts/npc/.+\.txt$"
-                                                     or "pak01_dir.vpk:regex:\.(vsndevts_c|vxml_c)$" for any folder
-
-          Paths, globs and regexes are case-sensitive, while VPK entry patterns ignore case like get's.
-          A pattern that matches nothing is a warning, not an error.
-
-          For VPK entries, the _dir.vpk is downloaded whole, and only the chunks of its archives that hold
-          the entries are written into them, at their offsets. VRF then extracts those entries from the _dir.vpk
-          as if the archives were complete. The rest of each archive is empty (sparse), so VRF's filters
-          must not match other entries, which fail their CRC check. Archives are found in every depot of the app.
+        Examples:
+          {ExeName} track --appid 570 --output . --save-all-manifests
+          An older build into another folder, with the files.json and manifests of an old commit:
+            git worktree add ../old <commit>
+            cd ../old && {ExeName} track --appid 570 --output . --manifests manifests
 
         Options:
           --appid <app>          Steam app id
@@ -181,13 +141,31 @@ internal static class Help
           --save-manifest        save the manifests of the depots in files.json as text to <dir>/manifests/
           --save-all-manifests   save the manifests of every depot as text to <dir>/manifests/
 
-        {BasicExitCodesText}
+        files.json maps depot ids to lists of patterns (comments and trailing commas are allowed, and
+        backslashes are doubled in JSON strings):
+          game/csgo/steam.inf                        exact path
+          game/**/bin/win64/*.dll                    glob for the whole path: * and ? within a folder, ** across folders
+          regex:.+?\.(dll|exe)                       .NET regex for the whole path
+          game/dota/pak01_dir.vpk:<pattern>          entries inside that VPK, with the pattern rules of get,
+                                                     like "game/dota/pak01_dir.vpk:regex:^scripts/npc/.+\.txt$"
+                                                     or "pak01_dir.vpk:regex:\.(vsndevts_c|vxml_c)$" for any folder
 
-        Examples:
-          {ExeName} track --appid 570 --output . --save-all-manifests
-          An older build into another folder, with the files.json and manifests of an old commit:
-            git worktree add ../old <commit>
-            cd ../old && {ExeName} track --appid 570 --output . --manifests manifests
+          Paths, globs and regexes are case-sensitive, while VPK entry patterns ignore case like get's.
+          A pattern that matches nothing is a warning, not an error.
+
+        Files go to <dir>/<path>, without depot and manifest folders. Files already on disk with the
+        right hash are kept. When everything succeeded, <dir>/steam_buildid.txt gets the build id.
+        Messages go to stdout, and warnings and errors to stderr.
+
+        To download an older build, pass --manifests with the manifests/ folder of an older run, like
+        from an old commit of a GameTracking repository. Each depot uses the manifest id in its
+        manifest_<depot>.txt, and depots without one are skipped. VPK entries need the manifests of the
+        depots their archives are in too, so use a run with --save-all-manifests. steam_buildid.txt isn't written.
+
+        For VPK entries, the _dir.vpk is downloaded whole, and its archives only get the chunks with the entries
+        (the rest is sparse), so VRF filters must match only those entries; others fail their CRC check.
+
+        {BasicExitCodesText}
         """;
 
     public static string Ls => $"""
@@ -195,17 +173,13 @@ internal static class Help
 
         Usage:
           {ExeName} ls [<app>] <target>... [-- <pattern>...]
+        stdout has a tab-separated row per file: depot  manifest  sha1  size  path. Without patterns, every file.
+        {ExitCodesSummary()}
 
-        {ExitCodesSummary}
-
-        Without patterns every file is listed. stdout has one tab-separated row per file:
-          depot  manifest  sha1  size  path
-        and one per VPK entry, for which only the _dir.vpk is downloaded, to <output>/<depot>/<manifest>/:
-          depot  manifest  crc32  size  <dir.vpk>:<entry path>
-        {Streams}
-
-        To find the build where a file changed, list every candidate manifest in one run and compare
-        the sha1 column, then get one manifest per distinct sha1. Manifest dates are on stderr.
+        Examples:
+          {ExeName} ls 730 2347779:4784444484596788209 2347779:2356538687884552308 -- source1import.exe
+          {ExeName} ls 570 all -- hammer.dll
+          {ExeName} ls 730 2347770 -- "game/core/pak01_dir.vpk:regex:^scripts/"
 
         {Targets}
 
@@ -213,15 +187,19 @@ internal static class Help
 
         {Options}
 
-        {ExitCodesText}
+        Output:
+          A VPK entry's row is: depot  manifest  crc32  size  <dir.vpk>:<entry path>. For those, only the
+          _dir.vpk is downloaded, to <output>/<depot>/<manifest>/.
+          To find the build where a file changed, list every candidate manifest in one run and compare
+          the sha1 column, then get one manifest per distinct sha1. Manifest dates are on stderr.
 
-        Examples:
-          Where did source1import.exe change between builds?
-            {ExeName} ls 730 2347779:4784444484596788209 2347779:2356538687884552308 -- source1import.exe
-          Which depot of Dota 2 has hammer.dll?
-            {ExeName} ls 570 all -- hammer.dll
-          Which scripts are in the core VPK?
-            {ExeName} ls 730 2347770 -- "game/core/pak01_dir.vpk:regex:^scripts/"
+        {Streams}
+
+        {TargetNotes}
+
+        {PatternNotes}
+
+        {ExitCodesText}
         """;
 
     public static string Get => $"""
@@ -230,19 +208,13 @@ internal static class Help
         Usage:
           {ExeName} get [<app>] <target>... -- <pattern>...
           {ExeName} get [<app>] <target>... --all-files     every file, which can be tens of gigabytes per depot
+        stdout has a tab-separated row per matching file: depot  manifest  absolute path (none with --all-files).
+        {ExitCodesSummary()}
 
-        {ExitCodesSummary}
-
-        Files go to <output>/<depot>/<manifest>/<path>. VPK entries go to a folder named after
-        the _dir.vpk without .vpk, like 2347770/7820179980365915207/game/core/pak01_dir/scripts/scenes.vdata_c,
-        and only the archive chunks they are in are downloaded, plus the _dir.vpk, which gets no row.
-        Files already on disk with the right hash are kept, and ones with the same hash in another target
-        or downloaded manifest of the depot are copied.
-
-        stdout has one tab-separated row per matching file on disk, including ones that already were,
-        and none with --all-files:
-          depot  manifest  absolute path
-        {Streams}
+        Examples:
+          {ExeName} get 730 2347771 2347773 -- server.dll "regex:lib(tier0|engine2)\.so$"
+          {ExeName} get 730 2347771:8344780363095656278 2347771:latest -- game/csgo/bin/win64/server.dll
+          {ExeName} get 730/2347771 570/373303 -- game/bin/win64/resourcecompiler.dll
 
         {Targets}
 
@@ -250,18 +222,21 @@ internal static class Help
 
         {Options}
 
-        {ExitCodesText}
+        Output:
+          Files go to <output>/<depot>/<manifest>/<path>, dated to when their manifest was created. VPK entries
+          go to a folder named after the _dir.vpk without .vpk, like
+          2347770/7820179980365915207/game/core/pak01_dir/scripts/scenes.vdata_c, and only the archive chunks
+          they are in are downloaded, plus the _dir.vpk, which gets no row.
+          Files already on disk with the right hash are kept, and ones with the same hash in another target
+          or downloaded manifest of the depot are copied. Rows include files that already were on disk.
 
-        Examples:
-          server.dll and engine2.dll from three builds, plus a VPK entry:
-            {ExeName} get 730 2347771:8344780363095656278 2347771:3583953281387649656 2347771:latest 2347770 -- \
-              game/csgo/bin/win64/server.dll engine2.dll "game/core/pak01_dir.vpk:scripts/scenes.vdata_c"
-          resourcecompiler.dll from CS2 and Dota 2:
-            {ExeName} get 730/2347771 570/373303 -- game/bin/win64/resourcecompiler.dll
-          Linux shared libraries of the latest build:
-            {ExeName} get 730 2347773 -- "regex:\.so$"
-          A whole depot:
-            {ExeName} get 730 2347771:8344780363095656278 --all-files
+        {Streams}
+
+        {TargetNotes}
+
+        {PatternNotes}
+
+        {ExitCodesText}
         """;
 
     public static string Depots => $"""
@@ -270,29 +245,27 @@ internal static class Help
         Usage:
           {ExeName} depots <app>... [--branch <name>]
           {ExeName} depots <app>... --json
+        stdout has a tab-separated row per depot: app  depot  manifest  max size  notes
 
-        stdout has one tab-separated row per depot:
-          app  depot  manifest  max size  notes
-        manifest is the latest on the branch, or public's when the branch has none ("manifest from public"
-        in notes), or - when neither has one. max size is in bytes, or -. notes lists the name, os, arch,
-        language, dlc and "shared from app <app>"; a shared depot is downloaded as <that app>/<depot>.
-        Branches, with build ids and dates, are on stderr.
-
-        With --json, stdout is one JSON object with each app's whole "depots" section from Steam, for
-        filtering with jq or a script: every depot with all its keys (config like oslist, osarch and
-        language, maxsize, dlcappid, depotfromapp, ...) and its manifest on every branch, and every branch
-        under "branches" (buildid, timeupdated, pwdrequired, ...). Values are strings, as Steam sends them.
+        Examples:
+          {ExeName} depots 570
+          {ExeName} depots 730 570 --json
 
         Options:
           --branch <name>     branch whose manifests are listed (default: public)
           --json              everything about the depots and branches as JSON
         {LoginOptions}
 
-        {BasicExitCodesText}
+        Output:
+          manifest is the latest on the branch, or public's when the branch has none ("manifest from public"
+          in notes), or - when neither has one. max size is in bytes, or -. notes lists the name, os, arch,
+          language, dlc and "shared from app <app>"; a shared depot is downloaded as <that app>/<depot>.
+          Branches, with build ids and dates, are on stderr.
 
-        Examples:
-          {ExeName} depots 570
-          {ExeName} depots 730 570 --json
+          With --json, stdout is one JSON object with each app's whole "depots" section from Steam, with every
+          depot's keys and manifests and every branch, for jq or a script. Values are strings, as Steam sends them.
+
+        {BasicExitCodesText}
         """;
 
     public static string DepotDownloader => $"""
@@ -304,33 +277,35 @@ internal static class Help
           {ExeName} dd -pubfile <item> [-filelist <file>] [-dir <dir>] [-username <name>] [-manifest-only]
           {ExeName} dd -app <app> -ugc <manifest> [-filelist <file>] [-dir <dir>] [-username <name>] [-manifest-only]
 
-        -pubfile runs as workshop get (or ls), so files go to <dir>/workshop/<item>/<manifest>/<path>. -ugc is a
-        manifest of the app's workshop depot, like get <app>/<app>:<manifest>; legacy workshop files aren't supported.
+        Example:
+          {ExeName} dd -app 730 -depot 2347771 -manifest 8344780363095656278 -filelist files.txt
 
         -depot and -manifest pair up in order. Without -depot every depot of the app is used. File list
         lines are exact paths from the depot root, without globs, or "regex:" patterns, like in DepotDownloader,
         and a list without entries is an error. Without -filelist every file is downloaded, like get --all-files,
         so stdout has no rows. -dir sets the root output folder; files still go to <dir>/<depot>/<manifest>/<path>.
-        -username picks a saved login. Other flags, like -remember-password or -loginid, are skipped:
-        a random login id is used. -os and -language don't filter depots, so pick them with -depot.
+        Other flags, like -remember-password or -loginid, are skipped: a random login id is used.
+        -os and -language don't filter depots, so pick them with -depot.
         Password protected branches (-branchpassword) are not supported.
         For new command lines, use get or ls, which also take several apps, branches and VPK entries.
 
-        {ExitCodesText}
+        -pubfile runs as workshop get (or ls), so files go to <dir>/workshop/<item>/<manifest>/<path>. -ugc is a
+        manifest of the app's workshop depot, like get <app>/<app>:<manifest>; legacy workshop files aren't supported.
 
-        Example:
-          {ExeName} dd -app 730 -depot 2347771 -manifest 8344780363095656278 -filelist files.txt
+        {ExitCodesText}
         """;
 
     private static string WorkshopItems => """
-        Items:
-          <item>               an item's id or its page's URL, like 3070715607 or
-                               https://steamcommunity.com/sharedfiles/filedetails/?id=3070715607
+        Items (all in one run, since each run logs in to Steam once):
+          <item>               an item's id or its page's URL (3070715607, or .../filedetails/?id=3070715607)
           <item>:<manifest>    an older version for ls and get, which workshop info lists with its history
           <collection>         the items in a collection, skipping ones without files to download
+        """;
 
-          Each run logs in to Steam once, so put all items in one run. Items of the legacy workshop, from
-          before it kept files in depots, like those of Left 4 Dead 2, are not implemented.
+    private static string WorkshopItemNotes => """
+        More on items:
+          Items of the legacy workshop, from before it kept files in depots, like those of Left 4 Dead 2, are not
+          implemented.
         """;
 
     private static string WorkshopExitCodesText => """
@@ -367,6 +342,8 @@ internal static class Help
         Files go to <output>/workshop/<item>/<manifest>/<path>, and ls and get take the patterns of get.
 
         {WorkshopItems}
+
+        {WorkshopItemNotes}
         """;
 
     public static string WorkshopLs => $"""
@@ -374,17 +351,12 @@ internal static class Help
 
         Usage:
           {ExeName} workshop ls <item>... [-- <pattern>...]
+        stdout has a tab-separated row per file: depot  manifest  sha1  size  path. Without patterns, every file.
+        {ExitCodesSummary()}
 
-        {ExitCodesSummary}
-
-        Without patterns every file is listed. stdout has one tab-separated row per file:
-          depot  manifest  sha1  size  path
-        and one per VPK entry, for which only the _dir.vpk is downloaded:
-          depot  manifest  crc32  size  <dir.vpk>:<entry path>
-        depot is the app's workshop depot. stderr has a line per item with its manifest and title.
-        {Streams}
-
-        To see what changed between versions, list them in one run and compare the sha1 column.
+        Examples:
+          {ExeName} workshop ls 3070715607
+          {ExeName} workshop ls 3818412809 -- "*.vpk"
 
         {WorkshopItems}
 
@@ -394,11 +366,18 @@ internal static class Help
           --output <dir>      root output folder for _dir.vpk files (default: depots in the current folder)
         {LoginOptions}
 
-        {WorkshopFilesExitCodesText}
+        Output:
+          depot is the app's workshop depot. A VPK entry's row is: depot  manifest  crc32  size  <dir.vpk>:<entry path>.
+          For those, only the _dir.vpk is downloaded. stderr has a line per item with its manifest and title.
+          To see what changed between versions, list them in one run and compare the sha1 column.
 
-        Examples:
-          {ExeName} workshop ls 3070715607
-          {ExeName} workshop ls 3818412809 -- "*.vpk"
+        {Streams}
+
+        {WorkshopItemNotes}
+
+        {PatternNotes}
+
+        {WorkshopFilesExitCodesText}
         """;
 
     public static string WorkshopGet => $"""
@@ -407,18 +386,12 @@ internal static class Help
         Usage:
           {ExeName} workshop get <item>... -- <pattern>...
           {ExeName} workshop get <item>... --all-files     every file of the items
+        stdout has a tab-separated row per matching file: depot  manifest  absolute path (none with --all-files).
+        {ExitCodesSummary()}
 
-        {ExitCodesSummary}
-
-        Files go to <output>/workshop/<item>/<manifest>/<path>, dated to when their manifest was created.
-        Files already on disk with the right hash are kept, and ones with the same hash in another downloaded
-        version of the item are copied.
-
-        stdout has one tab-separated row per matching file on disk, including ones that already were,
-        and none with --all-files:
-          depot  manifest  absolute path
-        stderr has a line per item with its manifest and title.
-        {Streams}
+        Examples:
+          {ExeName} workshop get 3070715607 -- "*.vpk"
+          {ExeName} workshop get https://steamcommunity.com/sharedfiles/filedetails/?id=3818412809 --all-files
 
         {WorkshopItems}
 
@@ -428,35 +401,33 @@ internal static class Help
           --output <dir>      root output folder (default: depots in the current folder)
         {LoginOptions}
 
-        {WorkshopFilesExitCodesText}
+        Output:
+          Files go to <output>/workshop/<item>/<manifest>/<path>, dated to when their manifest was created.
+          Files already on disk with the right hash are kept, and ones with the same hash in another downloaded
+          version of the item are copied. Rows include files that already were on disk. stderr has a line per
+          item with its manifest and title.
 
-        Examples:
-          {ExeName} workshop get 3070715607 -- "*.vpk"
-          {ExeName} workshop get https://steamcommunity.com/sharedfiles/filedetails/?id=3818412809 --all-files
+        {Streams}
+
+        {WorkshopItemNotes}
+
+        {PatternNotes}
+
+        {WorkshopFilesExitCodesText}
         """;
 
     public static string WorkshopInfo => $"""
-        Shows workshop items: the app they're for, its workshop depot, their current manifest, when they were
-        updated, their size and title.
+        Shows workshop items: their app, its workshop depot, their current manifest, update time, size and title.
 
         Usage:
           {ExeName} workshop info <item>... [--json]
           {ExeName} workshop info <item>... --history [--limit <n|all>] [--json]
+        stdout has a tab-separated row per item: item  app  depot  manifest  updated  size  title
+        and with --history, one per version of each item instead, newest first: <item>:<manifest>  updated  change note
 
-        stdout has one tab-separated row per item, and one per item of a collection after the collection's row:
-          item  app  depot  manifest  updated  size  title
-        manifest is "collection" for a collection, and "legacy" for a legacy item. depot is - when the app has
-        no workshop depot. updated is in UTC, size in bytes.
-
-        With --history, stdout has one row per version of each item instead, newest first:
-          <item>:<manifest>  updated  change note
-        Changes that only edited an item's text keep its manifest, so they are one version, dated to when the
-        manifest was uploaded. stderr has the number of changes of each item.
-
-        With --json, stdout is one JSON object with everything Steam sends about each item, by item id: its
-        "details", and with --history its "history" of changes. 64-bit numbers are strings.
-
-        {Streams}
+        Examples:
+          {ExeName} workshop info 3070715607 https://steamcommunity.com/sharedfiles/filedetails/?id=2852945816
+          {ExeName} workshop info 3070715607 --history --limit all
 
         {WorkshopItems}
 
@@ -466,11 +437,22 @@ internal static class Help
           --json              everything about the items as JSON
         {LoginOptions}
 
-        {WorkshopExitCodesText}
+        Output:
+          A collection's row is followed by one per item in it. manifest is "collection" for a collection, and
+          "legacy" for a legacy item. depot is - when the app has no workshop depot. updated is in UTC, size
+          in bytes.
 
-        Examples:
-          {ExeName} workshop info 3070715607 https://steamcommunity.com/sharedfiles/filedetails/?id=2852945816
-          {ExeName} workshop info 3070715607 --history --limit all
+          With --history, changes that only edited an item's text keep its manifest, so they are one version,
+          dated to when the manifest was uploaded. stderr has the number of changes of each item.
+
+          With --json, stdout is one JSON object with everything Steam sends about each item, by item id: its
+          "details", and with --history its "history" of changes. 64-bit numbers are strings.
+
+        {Streams}
+
+        {WorkshopItemNotes}
+
+        {WorkshopExitCodesText}
         """;
 
     public static string WorkshopSearch => $"""
@@ -478,23 +460,24 @@ internal static class Help
 
         Usage:
           {ExeName} workshop search <app> <text>... [--limit <n|all>]
-
-        stdout has one tab-separated row per item, best match first:
+        stdout has a tab-separated row per item, best match first:
           item  app  depot  manifest  updated  size  subscribers  title
-        manifest is - for an item whose current manifest is only in its history (see workshop info), and
-        "legacy" for a legacy item. stderr has the number of matching items.
 
-        {Streams}
+        Examples:
+          {ExeName} workshop search 730 de_dust2
+          {ExeName} workshop search 570 custom hero chaos --limit 100
 
         Options:
           --limit <n|all>     how many items to list (default: 20)
         {LoginOptions}
 
-        {WorkshopExitCodesText}
+        Output:
+          manifest is - for an item whose current manifest is only in its history (see workshop info), and
+          "legacy" for a legacy item. stderr has the number of matching items.
 
-        Examples:
-          {ExeName} workshop search 730 de_dust2
-          {ExeName} workshop search 570 custom hero chaos --limit 100
+        {Streams}
+
+        {WorkshopExitCodesText}
         """;
 
     public static string Login => $"""

@@ -5,6 +5,7 @@ namespace SteamFileDownloader.Tests;
 public partial class HelpTests
 {
     private const int MaxLineLength = 120;
+    private const int HeadLines = 30;
 
     private static string Normalize(string text) => Help.ExeName.Length == 0 ? text : text.Replace(Help.ExeName, "SteamFileDownloader", StringComparison.Ordinal);
 
@@ -50,6 +51,37 @@ public partial class HelpTests
             .ToList();
 
         await Assert.That(string.Join(",", unknown)).IsEqualTo("");
+    }
+
+    // What a truncated read like head -30 sees
+    private static string Head(string text) => string.Join("\n", Normalize(text).Split('\n').Take(HeadLines));
+
+    [Test]
+    [MethodDataSource(nameof(Commands))]
+    public async Task HelpHeadHasTheExamplesAndEveryOption(string command)
+    {
+        var help = GetHelp(command);
+        var head = Head(help);
+        var (values, flags) = ArgumentParser.CommandOptions[command];
+        var expected = values.Concat(flags).Select(static o => $"--{o}");
+
+        // login's usage lines are its examples
+        if (help.Contains("\nExamples:", StringComparison.Ordinal))
+        {
+            expected = expected.Prepend("\nExamples:");
+        }
+
+        var missing = expected.Where(s => !head.Contains(s, StringComparison.Ordinal)).ToList();
+
+        await Assert.That(string.Join(",", missing)).IsEqualTo("");
+    }
+
+    [Test]
+    public async Task OverviewHeadHasTheTypicalRunTargetsAndPatterns()
+    {
+        var head = Head(Help.Overview);
+
+        await Assert.That(head).Contains("Typical run").And.Contains("Targets").And.Contains("<dir.vpk>:<pattern>");
     }
 
     private static string FirstLine(string text) => text.Split('\n')[0].TrimEnd('\r');
