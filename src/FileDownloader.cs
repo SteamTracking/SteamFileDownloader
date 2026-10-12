@@ -400,6 +400,11 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
             return false;
         }
 
+        // Directory files of several builds can need one archive, which is opened once with the chunks of all of them
+        partialFiles = [.. partialFiles
+            .GroupBy(static f => (f.Job, f.File))
+            .Select(static g => new PartialFile(g.Key.Job, g.Key.File, [.. g.SelectMany(static f => f.Chunks).Distinct()]))];
+
         var totalBytes = partialFiles.Sum(static f => f.Chunks.Sum(static c => c.UncompressedLength));
         var skippedBytes = 0L;
         var doneFiles = 0;
@@ -476,6 +481,12 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
     private async Task<(bool Success, long KeptBytes)> DownloadPartialFile(PartialFile partialFile)
     {
         var (job, file, chunks) = partialFile;
+
+        if (chunks.Count == 0)
+        {
+            return (true, 0);
+        }
+
         var path = OutputFiles.GetFinalPath(job, file.FileName);
         var length = (long)file.TotalSize;
 

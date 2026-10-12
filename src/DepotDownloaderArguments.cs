@@ -45,7 +45,8 @@ internal static class DepotDownloaderArguments
 
                     options = options with { App = appID };
                     break;
-                case "-depot" or "-manifest" when !ulong.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out _):
+                case "-depot" when !uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out _):
+                case "-manifest" when !ulong.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out _):
                     return Fail($"{args[i]} needs a numeric id, got \"{value}\".");
                 case "-depot":
                     depots.Add(value);

@@ -56,7 +56,7 @@ internal static class ArgumentParser
                 Log.Error($"Unknown option \"{arg}\". Options are {string.Join(", ", known)}. {usage}");
                 return null;
             }
-            else if (i + 1 >= optionArgs.Length)
+            else if (i + 1 >= optionArgs.Length || optionArgs[i + 1].StartsWith("--", StringComparison.Ordinal))
             {
                 Log.Error($"{arg} needs a value. {usage}");
                 return null;
@@ -99,6 +99,12 @@ internal static class ArgumentParser
     /// </summary>
     public static bool CheckOutputPath(string path, string option)
     {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            Log.Error($"{option} needs a folder, got an empty one.");
+            return false;
+        }
+
         if (!Path.IsPathRooted(path) || Path.IsPathFullyQualified(path))
         {
             return true;

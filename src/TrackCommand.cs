@@ -55,6 +55,12 @@ internal static class TrackCommand
             return null;
         }
 
+        if (options.ContainsKey("password") && options["username"] == "anonymous")
+        {
+            Log.Error($"--password can't be combined with --username anonymous. {Help.UsageHint("track")}");
+            return null;
+        }
+
         return new TrackArguments(
             appID,
             output,
@@ -102,7 +108,7 @@ internal static class TrackCommand
             }
         }
 
-        var (loggedOn, logOnExitCode) = await SteamSession.CreateLoggedOnAsync(GetCredentials(username, password), cacheDepotKeys: false, cancellationToken);
+        var (loggedOn, logOnExitCode) = await SteamSession.CreateLoggedOnAsync(GetCredentials(username, password), cacheDepotKeys: false, takesTargets: false, cancellationToken);
 
         if (loggedOn == null)
         {

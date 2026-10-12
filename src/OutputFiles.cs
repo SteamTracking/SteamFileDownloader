@@ -26,9 +26,20 @@ internal static partial class OutputFiles
     public static string GetFinalPath(ManifestJob job, string fileName)
     {
         var root = Path.GetFullPath(job.OutputFolder);
-        var path = Path.GetFullPath(Path.Combine(root, FileFilter.NormalizePath(fileName)));
+        var normalized = FileFilter.NormalizePath(fileName);
 
-        if (!path.StartsWith(Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        // NTFS would write "a:b" to the stream b of the file a
+        if (OperatingSystem.IsWindows() && normalized.Contains(':', StringComparison.Ordinal))
+        {
+            throw new InvalidDataException($"File name has a colon, which Windows doesn't allow: {fileName}");
+        }
+
+        var path = Path.GetFullPath(Path.Combine(root, normalized));
+
+        // A drive root already ends with a separator
+        var prefix = Path.EndsInDirectorySeparator(root) ? root : root + Path.DirectorySeparatorChar;
+
+        if (!path.StartsWith(prefix, StringComparison.Ordinal))
         {
             throw new InvalidDataException($"File path escapes the output folder: {fileName}");
         }

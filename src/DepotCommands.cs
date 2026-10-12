@@ -225,7 +225,7 @@ internal static class DepotCommands
         }
 
         var credentials = options.Anonymous ? LogOnCredentials.Anonymous : AccountStore.LoadCredentials(options.Username);
-        var (session, logOnExitCode) = await SteamSession.CreateLoggedOnAsync(credentials, cacheDepotKeys: true, cancellationToken);
+        var (session, logOnExitCode) = await SteamSession.CreateLoggedOnAsync(credentials, cacheDepotKeys: true, takesTargets: true, cancellationToken);
 
         if (session == null)
         {

@@ -163,7 +163,7 @@ internal static partial class DepotArgumentParser
 
         if (!depot.Equals("all", StringComparison.OrdinalIgnoreCase))
         {
-            if (!uint.TryParse(depot, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedDepot))
+            if (!uint.TryParse(depot, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedDepot) || parsedDepot == 0)
             {
                 return Invalid();
             }
@@ -174,7 +174,7 @@ internal static partial class DepotArgumentParser
         if (manifest.Length > 0 && !manifest.Equals("latest", StringComparison.OrdinalIgnoreCase))
         {
             // A manifest id only makes sense for one depot
-            if (depotID == null || !ulong.TryParse(manifest, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedManifest))
+            if (depotID == null || !ulong.TryParse(manifest, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedManifest) || parsedManifest == 0)
             {
                 return Invalid();
             }

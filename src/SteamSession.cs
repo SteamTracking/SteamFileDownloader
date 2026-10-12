@@ -60,6 +60,9 @@ internal sealed class SteamSession : IDisposable, IChunkSource
     // The get, ls and depots commands keep depot keys between runs
     public bool CacheDepotKeys { get; init; }
 
+    // The get and ls commands take any number of targets, so a run per target only adds logins
+    public bool TakesTargets { get; init; }
+
     /// <summary>
     /// The exit code for a run that failed: a rate limit or rejected login when logging in again after a lost
     /// connection caused it, since that explains the failures after it.
@@ -196,7 +199,7 @@ internal sealed class SteamSession : IDisposable, IChunkSource
 
         if (exitCode == ExitCodes.RateLimited)
         {
-            Log.Error($"Steam is rate limiting logins ({result}). Wait about 15 minutes, and put all targets in one run instead of one run per target.");
+            Log.Error($"Steam is rate limiting logins ({result}). Wait about 15 minutes{(TakesTargets ? ", and put all targets in one run instead of one run per target" : "")}.");
         }
         else if (exitCode == ExitCodes.NoAccess && credentials.RefreshToken != null)
         {
@@ -214,14 +217,14 @@ internal sealed class SteamSession : IDisposable, IChunkSource
     /// Creates a session and logs on. Returns no session with the exit code after explaining why; missing credentials
     /// were explained when they were looked up.
     /// </summary>
-    public static async Task<(SteamSession? Session, int ExitCode)> CreateLoggedOnAsync(LogOnCredentials? credentials, bool cacheDepotKeys, CancellationToken cancellationToken)
+    public static async Task<(SteamSession? Session, int ExitCode)> CreateLoggedOnAsync(LogOnCredentials? credentials, bool cacheDepotKeys, bool takesTargets, CancellationToken cancellationToken)
     {
         if (credentials == null)
         {
             return (null, ExitCodes.NoAccess);
         }
 
-        var session = new SteamSession(cancellationToken) { CacheDepotKeys = cacheDepotKeys };
+        var session = new SteamSession(cancellationToken) { CacheDepotKeys = cacheDepotKeys, TakesTargets = takesTargets };
         var exitCode = await session.LogOnAsync(credentials);
 
         if (exitCode != ExitCodes.Ok)
@@ -426,7 +429,12 @@ internal sealed class SteamSession : IDisposable, IChunkSource
                     && !server.SteamChinaOnly
                     && server.Type is "SteamCache" or "CDN")]);
 
-                break;
+                if (CdnServers.Count > 0)
+                {
+                    break;
+                }
+
+                Log.Info("Got no usable CDN servers.");
             }
             catch (Exception e) when (IsError(e))
             {

@@ -51,6 +51,11 @@ internal sealed partial class FileFilter
         {
             var filter = new FileFilter();
 
+            if (fileMatches is null || fileMatches.Contains(null))
+            {
+                throw new InvalidDataException($"Depot {depotID} has null where patterns are expected.");
+            }
+
             foreach (var fileMatch in fileMatches)
             {
                 if (filter.TryAddVpkPattern(fileMatch))
@@ -67,7 +72,7 @@ internal sealed partial class FileFilter
                 }
 
                 // Paths here are whole paths from the depot root, so globs match the whole path too
-                var pattern = fileMatch.StartsWith(RegexPrefix, StringComparison.Ordinal) ? fileMatch[RegexPrefix.Length..] : GlobToRegex(fileMatch);
+                var pattern = fileMatch.StartsWith(RegexPrefix, StringComparison.Ordinal) ? fileMatch[RegexPrefix.Length..] : GlobToRegex(NormalizePath(fileMatch));
 
                 filter.Patterns.Add(new FilePattern(fileMatch, new Regex($"^({pattern})$", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture)));
             }
