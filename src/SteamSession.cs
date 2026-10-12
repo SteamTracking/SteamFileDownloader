@@ -23,9 +23,10 @@ internal sealed record LogOnCredentials(string Username, string? Password = null
 }
 
 /// <summary>
-/// One Steam connection, used to get depot keys and manifests. Files themselves come from the CDN without it.
+/// One Steam connection, used to get depot keys and manifests, and the CDN client that manifests download from. As an
+/// <see cref="IChunkSource"/> it also downloads the chunks of files, which doesn't need the Steam connection.
 /// </summary>
-internal sealed class SteamSession : IDisposable
+internal sealed class SteamSession : IDisposable, IChunkSource
 {
     private const int MaxRetries = 7;
     private const int MaxCdnRetries = 5;
@@ -33,11 +34,6 @@ internal sealed class SteamSession : IDisposable
 
     // Each manifest mostly waits on a Steam request code and a CDN download
     private const int ManifestConcurrency = 16;
-
-    // How many CDN servers requests are spread over, and when one that fails has to sit out
-    private const int ActiveCdnServers = 8;
-    private const int CdnServerFailuresToBench = 3;
-    private static readonly TimeSpan CdnServerBenchTime = TimeSpan.FromSeconds(30);
 
     private readonly SteamClient SteamClient = new(SteamConfiguration.Create(static b => b.WithHttpClientFactory(CreateHttpClient)));
     private readonly CallbackManager Manager;
@@ -48,23 +44,20 @@ internal sealed class SteamSession : IDisposable
     private readonly CancellationToken CancellationToken;
     private readonly Dictionary<(uint DepotID, uint AppID), Task<(byte[]? Key, bool NoAccess, string? Problem)>> DepotKeys = [];
     private readonly Lock LazyLock = new();
-    private readonly Lock CdnServerLock = new();
-    private List<Server> CDNServers = [];
-    private (int Failures, long BenchedUntil)[] CdnServerHealth = [];
+    private readonly Client CdnClient;
     private Task<bool>? CdnServersTask;
     private LogOnCredentials? Credentials;
     private Task<bool>? RelogonTask;
     private int Relogons;
-    private uint NextCdnServer;
     private uint CellID;
     private volatile bool IsLoggedOn;
 
     private TaskCompletionSource<bool> ConnectedTcs = new();
     private TaskCompletionSource<SteamUser.LoggedOnCallback?> LoggedOnTcs = new();
 
-    public Client CDNClient { get; }
+    public CdnServerPool CdnServers { get; } = new(TimeProvider.System);
 
-    // The get and ls commands keep depot keys between runs
+    // The get, ls and depots commands keep depot keys between runs
     public bool CacheDepotKeys { get; init; }
 
     /// <summary>
@@ -80,7 +73,7 @@ internal sealed class SteamSession : IDisposable
         User = SteamClient.GetHandler<SteamUser>()!;
         Apps = SteamClient.GetHandler<SteamApps>()!;
 
-        CDNClient = new Client(SteamClient);
+        CdnClient = new Client(SteamClient);
         Content = SteamClient.GetHandler<SteamContent>()!;
 
         // A server that doesn't answer is given up on soon, since the retry goes to another one. A body gets much
@@ -123,7 +116,7 @@ internal sealed class SteamSession : IDisposable
     public void Dispose()
     {
         Disconnect();
-        CDNClient.Dispose();
+        CdnClient.Dispose();
         PumpCts.Dispose();
     }
 
@@ -215,6 +208,29 @@ internal sealed class SteamSession : IDisposable
         }
 
         return exitCode;
+    }
+
+    /// <summary>
+    /// Creates a session and logs on. Returns no session with the exit code after explaining why; missing credentials
+    /// were explained when they were looked up.
+    /// </summary>
+    public static async Task<(SteamSession? Session, int ExitCode)> CreateLoggedOnAsync(LogOnCredentials? credentials, bool cacheDepotKeys, CancellationToken cancellationToken)
+    {
+        if (credentials == null)
+        {
+            return (null, ExitCodes.NoAccess);
+        }
+
+        var session = new SteamSession(cancellationToken) { CacheDepotKeys = cacheDepotKeys };
+        var exitCode = await session.LogOnAsync(credentials);
+
+        if (exitCode != ExitCodes.Ok)
+        {
+            session.Dispose();
+            return (null, exitCode);
+        }
+
+        return (session, ExitCodes.Ok);
     }
 
     private async Task<EResult> LogOnWithRetriesAsync(LogOnCredentials credentials)
@@ -404,12 +420,11 @@ internal sealed class SteamSession : IDisposable
             {
                 var servers = await ContentServerDirectoryService.LoadAsync(SteamClient.Configuration, CellID, 100, CancellationToken);
 
-                CDNServers = [.. servers.Where(static server =>
+                CdnServers.SetServers([.. servers.Where(static server =>
                     server.AllowedAppIds.Length == 0
                     && !server.UseAsProxy
                     && !server.SteamChinaOnly
-                    && server.Type is "SteamCache" or "CDN")];
-                CdnServerHealth = new (int, long)[CDNServers.Count];
+                    && server.Type is "SteamCache" or "CDN")]);
 
                 break;
             }
@@ -419,7 +434,7 @@ internal sealed class SteamSession : IDisposable
             }
         }
 
-        if (CDNServers.Count == 0)
+        if (CdnServers.Count == 0)
         {
             Log.Error("Failed to get any Steam CDN servers. Check the network, or retry later.");
             return false;
@@ -428,66 +443,8 @@ internal sealed class SteamSession : IDisposable
         return true;
     }
 
-    /// <summary>
-    /// Takes turns between the best few servers that work, so one slow or overloaded server doesn't hold back the whole download.
-    /// </summary>
-    public Server GetContentServer(Server? avoid)
-    {
-        lock (CdnServerLock)
-        {
-            var now = Environment.TickCount64;
-            Span<int> usable = stackalloc int[ActiveCdnServers];
-            var count = 0;
-
-            // The directory lists the best servers for the cell first
-            for (var i = 0; i < CDNServers.Count && count < usable.Length; i++)
-            {
-                if (CdnServerHealth[i].BenchedUntil <= now && CDNServers[i] != avoid)
-                {
-                    usable[count++] = i;
-                }
-            }
-
-            if (count > 0)
-            {
-                return CDNServers[usable[(int)(NextCdnServer++ % (uint)count)]];
-            }
-
-            // Every server failed lately, so they all take turns, still skipping the one to avoid
-            var server = CDNServers[(int)(NextCdnServer++ % (uint)CDNServers.Count)];
-
-            return server == avoid && CDNServers.Count > 1 ? CDNServers[(int)(NextCdnServer++ % (uint)CDNServers.Count)] : server;
-        }
-    }
-
-    /// <summary>
-    /// A failed request, refusals included. A server that fails several with no success in between sits out for a while,
-    /// like a cache that refuses everything, but one that only fails some, like a cache that is slow to fetch old chunks
-    /// or one asked for a deleted chunk, keeps its turn.
-    /// </summary>
-    public void MarkContentServerAsBad(Server server)
-    {
-        lock (CdnServerLock)
-        {
-            ref var health = ref CdnServerHealth[CDNServers.IndexOf(server)];
-
-            // Requests that were under way when it was benched don't count towards the next time
-            if (health.BenchedUntil > Environment.TickCount64 || ++health.Failures < CdnServerFailuresToBench)
-            {
-                return;
-            }
-
-            health = (0, Environment.TickCount64 + (long)CdnServerBenchTime.TotalMilliseconds);
-        }
-    }
-
-    public void MarkContentServerAsGood(Server server)
-    {
-        lock (CdnServerLock)
-        {
-            CdnServerHealth[CDNServers.IndexOf(server)].Failures = 0;
-        }
-    }
+    public Task<int> DownloadChunkAsync(ManifestJob job, DepotManifest.ChunkData chunk, Server server, byte[] destination) =>
+        CdnClient.DownloadDepotChunkAsync(job.DepotID, chunk, server, destination, job.DepotKey);
 
     public async Task<KeyValue?> GetAppInfoAsync(uint appID) => (await GetAppInfosAsync([appID])).GetValueOrDefault(appID);
 
@@ -529,75 +486,6 @@ internal sealed class SteamSession : IDisposable
         }
 
         return appInfos;
-    }
-
-    /// <summary>
-    /// The depots in an app's "depots" section, skipping its other keys like "branches".
-    /// </summary>
-    public static IEnumerable<(uint ID, KeyValue Depot)> GetDepots(KeyValue depots)
-    {
-        foreach (var depot in depots.Children)
-        {
-            if (uint.TryParse(depot.Name, out var depotID))
-            {
-                yield return (depotID, depot);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Whether the app has the branch and its manifests are visible, since otherwise every depot would silently
-    /// fall back to public. Logs an error when not.
-    /// </summary>
-    public static bool CheckBranch(KeyValue depots, uint appID, string branch)
-    {
-        if (string.Equals(branch, "public", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        var branches = depots["branches"];
-        var branchInfo = branches[branch];
-
-        if (branchInfo == KeyValue.Invalid)
-        {
-            Log.Error($"App {appID} has no branch \"{branch}\". Its branches are: {string.Join(", ", branches.Children.Select(static b => b.Name))}.");
-            return false;
-        }
-
-        // Password protected branches only list their manifests to accounts with access
-        if (branchInfo["pwdrequired"].AsBoolean() && !GetDepots(depots).Any(d => d.Depot["manifests"][branch] != KeyValue.Invalid))
-        {
-            Log.Error($"Branch \"{branch}\" of app {appID} is password protected, which is not supported.");
-            return false;
-        }
-
-        return true;
-    }
-
-    /// <summary>
-    /// Gets the manifest id of a depot on a branch, falling back to public. Returns 0 when there is none.
-    /// </summary>
-    public static ulong GetManifestIdForBranch(KeyValue depot, ref string branch)
-    {
-        var manifests = depot["manifests"];
-        var manifestID = ParseManifestId(manifests[branch]);
-
-        if (manifestID == 0 && !string.Equals(branch, "public", StringComparison.OrdinalIgnoreCase))
-        {
-            manifestID = ParseManifestId(manifests["public"]);
-
-            if (manifestID != 0)
-            {
-                Log.Info($"Depot {depot.Name} has no manifest on branch \"{branch}\", using the one on \"public\".");
-                branch = "public";
-            }
-        }
-
-        return manifestID;
-
-        // Either the id itself, or a "gid" child
-        static ulong ParseManifestId(KeyValue manifest) => ulong.TryParse(manifest.Value ?? manifest["gid"].Value, out var id) ? id : 0;
     }
 
     /// <summary>
@@ -656,17 +544,17 @@ internal sealed class SteamSession : IDisposable
         for (var attempt = 0; attempt <= MaxCdnRetries; attempt++)
         {
             // Each attempt goes to another server than the last
-            var server = GetContentServer(lastServer);
+            var server = CdnServers.Get(lastServer);
             lastServer = server;
 
             try
             {
-                job.Manifest = await CDNClient.DownloadManifestAsync(job.DepotID, job.ManifestID, manifestRequestCode, server, job.DepotKey);
+                job.Manifest = await CdnClient.DownloadManifestAsync(job.DepotID, job.ManifestID, manifestRequestCode, server, job.DepotKey);
             }
             catch (Exception e) when (IsError(e))
             {
                 Log.Info($"[{job}] Failed to download the manifest from {server}: {DescribeError(e)} (attempt {attempt + 1}/{MaxCdnRetries + 1}).");
-                MarkContentServerAsBad(server);
+                CdnServers.MarkBad(server);
                 lastError = e;
 
                 if (!IsRefusal(e))
@@ -701,7 +589,7 @@ internal sealed class SteamSession : IDisposable
                 continue;
             }
 
-            MarkContentServerAsGood(server);
+            CdnServers.MarkGood(server);
             Log.Info($"[{job}] Downloaded the manifest: {job.Manifest.CreationTime:yyyy-MM-dd HH:mm:ss}, {job.Manifest.Files?.Count} files.");
 
             return;

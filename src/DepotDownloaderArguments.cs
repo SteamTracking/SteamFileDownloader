@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 
@@ -53,7 +54,7 @@ internal static class DepotDownloaderArguments
                     manifests.Add(value);
                     break;
                 case "-filelist":
-                    if (ArgumentParser.ReadLines(value, "-filelist") is not { } lines)
+                    if (ReadLines(value, "-filelist") is not { } lines)
                     {
                         return null;
                     }
@@ -134,6 +135,20 @@ internal static class DepotDownloaderArguments
         var allFiles = !manifestOnly && patterns.Count == 0;
 
         return new DepotArguments(manifestOnly ? "ls" : "get", options with { AllFiles = allFiles }, targets, patterns);
+    }
+
+    // Returns null after printing an error
+    private static string[]? ReadLines(string path, string option)
+    {
+        try
+        {
+            return File.ReadAllLines(path);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            Log.Error($"Failed to read {option} \"{path}\": {e.Message}");
+            return null;
+        }
     }
 
     private static DepotArguments? Fail(string message)

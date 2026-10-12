@@ -29,4 +29,29 @@ internal static class ExitCodes
             or EResult.TwoFactorCodeMismatch => NoAccess,
         _ => Failed,
     };
+
+    // The exit code of a finished get or ls run and the error that explains it, or null for success
+    public static (int ExitCode, string? Message) GetExitCode(bool failed, bool failedOtherwise, int sessionFailureExitCode, bool unmatched)
+    {
+        if (failed && sessionFailureExitCode != Failed)
+        {
+            return (sessionFailureExitCode, $"Exit code {sessionFailureExitCode}: logging in again after a lost connection failed (see above), so stdout is partial.");
+        }
+
+        if (failed)
+        {
+            var (exitCode, reason) = failedOtherwise
+                ? (Failed, "some targets or files failed")
+                : (NoDepotAccess, "this account has no access to some targets");
+
+            return (exitCode, $"Exit code {exitCode}: {reason}, so stdout is partial{(unmatched ? ", and a pattern matched nothing" : "")}.");
+        }
+
+        if (unmatched)
+        {
+            return (NoMatch, "Exit code 2: a pattern matched nothing.");
+        }
+
+        return (Ok, null);
+    }
 }

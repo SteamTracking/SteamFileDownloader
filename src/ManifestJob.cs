@@ -40,13 +40,29 @@ internal sealed class ManifestJob
 
     public override string ToString() => $"{DepotID}:{ManifestID}";
 
+    /// <summary>
+    /// The manifest's files with their normalized paths, without its directories.
+    /// </summary>
+    public IEnumerable<(DepotManifest.FileData File, string Path)> GetFiles()
+    {
+        foreach (var file in Manifest!.Files!)
+        {
+            if (!IsDirectory(file))
+            {
+                yield return (file, FileFilter.NormalizePath(file.FileName));
+            }
+        }
+    }
+
+    private static bool IsDirectory(DepotManifest.FileData file) => (file.Flags & EDepotFileFlag.Directory) != 0;
+
     private Dictionary<string, DepotManifest.FileData> IndexFiles()
     {
         var files = new Dictionary<string, DepotManifest.FileData>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var file in Manifest!.Files!)
+        foreach (var (file, path) in GetFiles())
         {
-            files[FileFilter.NormalizePath(file.FileName)] = file;
+            files[path] = file;
         }
 
         return files;

@@ -6,7 +6,6 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
-using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
@@ -26,13 +25,25 @@ internal record struct ChunkPlacement(DepotManifest.ChunkData Chunk, long Positi
 // Some chunks of a file, written at their own offsets with the rest of the file left empty
 internal sealed record PartialFile(ManifestJob Job, DepotManifest.FileData File, IReadOnlyCollection<DepotManifest.ChunkData> Chunks);
 
-internal sealed partial class FileDownloader(SteamSession session, CancellationToken cancellationToken) : IDisposable
+/// <summary>
+/// The CDN servers that chunks download from, and the downloads themselves.
+/// </summary>
+internal interface IChunkSource
+{
+    Task<bool> EnsureCdnServersAsync();
+
+    CdnServerPool CdnServers { get; }
+
+    /// <summary>
+    /// Downloads a chunk of the job's depot into the buffer. Returns its length.
+    /// </summary>
+    Task<int> DownloadChunkAsync(ManifestJob job, DepotManifest.ChunkData chunk, Server server, byte[] destination);
+}
+
+internal sealed class FileDownloader(IChunkSource session, CancellationToken cancellationToken) : IDisposable
 {
     // Chunks downloaded at once, which fills a gigabit line, while many more only slow down the last files
     private const int Connections = 64;
-
-    // Between the parts of a progress line
-    private const string Separator = " · ";
 
     private enum DownloadResult
     {
@@ -44,6 +55,9 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
 
     // When set, partial downloads go here instead of next to the file, so they never end up in the output folder
     public string? TempFolder { get; init; }
+
+    // The clock of the waits between chunk retries
+    public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
 
     // Most files are one chunk, and a file also holds its slot while it's hashed or written, so files can't be what limits downloads, only chunks are
     private readonly SemaphoreSlim SemaphorePerFile = new(Connections * 2, Connections * 2);
@@ -62,13 +76,6 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
         SemaphorePerFile.Dispose();
         SemaphorePerDownloadChunk.Dispose();
     }
-
-    public static bool IsDirectory(DepotManifest.FileData file) => (file.Flags & EDepotFileFlag.Directory) != 0;
-
-    /// <summary>
-    /// A file that can't be written, like on a full disk, locked by another program, or with a path that escapes the output folder.
-    /// </summary>
-    public static bool IsFileError(Exception e) => e is IOException or UnauthorizedAccessException or InvalidDataException;
 
     /// <summary>
     /// Identifies identical file contents across depots and manifests.
@@ -111,7 +118,7 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
             {
                 (fileState, finalPath) = await DownloadFile(fileJob.Job, fileJob.File, copyFrom);
             }
-            catch (Exception e) when (IsFileError(e))
+            catch (Exception e) when (OutputFiles.IsFileError(e))
             {
                 Log.Error($"[{fileJob.Job}] Failed to write {fileJob.File.FileName}: {e.Message}");
                 failedFiles.Add(fileJob);
@@ -135,7 +142,7 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
             return finalPath;
         }
 
-        (double, string) RenderProgress() => FormatProgress(
+        (double, string) RenderProgress() => DownloadProgress.FormatProgress(
             Interlocked.Read(ref DownloadedBytes) - startBytes,
             Interlocked.Read(ref skippedBytes),
             totalBytes,
@@ -151,14 +158,14 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
         }
 
         var groups = fileJobs.GroupBy(static f => GetHashKey(f.File)).ToList();
-        Log.Info($"Downloading {fileJobs.Count} files ({FormatSize(groups.Sum(static g => (long)g.First().File.TotalSize))})...");
+        Log.Info($"Downloading {fileJobs.Count} files ({DownloadProgress.FormatSize(groups.Sum(static g => (long)g.First().File.TotalSize))})...");
 
         await using (Log.StartProgress(RenderProgress))
         {
             await Task.WhenAll(groups.Select(RunHashGroup));
         }
 
-        Log.Info($"Files: {resultCounts[(int)DownloadResult.Success]} downloaded ({FormatTransfer(Interlocked.Read(ref DownloadedBytes) - startBytes, stopwatch.Elapsed)}), {resultCounts[(int)DownloadResult.Copied]} copied from identical files, {resultCounts[(int)DownloadResult.AlreadyValid]} already present.");
+        Log.Info($"Files: {resultCounts[(int)DownloadResult.Success]} downloaded ({DownloadProgress.FormatTransfer(Interlocked.Read(ref DownloadedBytes) - startBytes, stopwatch.Elapsed)}), {resultCounts[(int)DownloadResult.Copied]} copied from identical files, {resultCounts[(int)DownloadResult.AlreadyValid]} already present.");
         LogChunkErrors();
 
         LogFailures("files", failedFiles.Select(static f => $"{f.Job}/{FileFilter.NormalizePath(f.File.FileName)}"), "Running the same command again retries only those.");
@@ -186,7 +193,7 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
             var bytes = Interlocked.Read(ref DownloadedBytes) - startBytes;
             var finished = Volatile.Read(ref done);
 
-            return ((double)finished / items.Count, $"{FormatSize(bytes)} at {FormatSize((long)Speed(bytes, stopwatch.Elapsed))}/s{Separator}{finished} / {items.Count} {what}{FormatChunkErrorCount()}");
+            return ((double)finished / items.Count, $"{DownloadProgress.FormatSize(bytes)} at {DownloadProgress.FormatSize((long)DownloadProgress.Speed(bytes, stopwatch.Elapsed))}/s{DownloadProgress.Separator}{finished} / {items.Count} {what}{FormatChunkErrorCount()}");
         }
 
         await using (Log.StartProgress(RenderProgress))
@@ -200,7 +207,7 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
         }
     }
 
-    private string FormatChunkErrorCount() => ChunkErrorReasons.Values.Sum() is > 0 and var errors ? $"{Separator}{errors} chunk errors" : "";
+    private string FormatChunkErrorCount() => ChunkErrorReasons.Values.Sum() is > 0 and var errors ? $"{DownloadProgress.Separator}{errors} chunk errors" : "";
 
     /// <summary>
     /// Sums up the chunk errors since the last summary in one line, a warning when chunks failed for good.
@@ -241,51 +248,6 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
         _ => SteamSession.DescribeError(e),
     };
 
-    private static double Speed(long bytes, TimeSpan elapsed) => bytes / Math.Max(elapsed.TotalSeconds, 0.001);
-
-    // Bytes already on disk count as done, without being downloaded
-    private static (double Fraction, string Text) FormatProgress(long downloadedBytes, long skippedBytes, long totalBytes, TimeSpan elapsed, string count)
-    {
-        var doneBytes = downloadedBytes + skippedBytes;
-        var total = Math.Max(totalBytes, 1);
-        var speed = Speed(downloadedBytes, elapsed);
-        var left = speed > 0 ? $"{Separator}{FormatDuration((total - doneBytes) / speed)} left" : "";
-
-        return ((double)doneBytes / total, $"{FormatSize(doneBytes)} / {FormatSize(total)}{Separator}{FormatSize((long)speed)}/s{Separator}{count}{left}");
-    }
-
-    private static string FormatTransfer(long bytes, TimeSpan elapsed) => $"{FormatSize(bytes)} in {FormatDuration(elapsed.TotalSeconds)} at {FormatSize((long)Speed(bytes, elapsed))}/s";
-
-    private static string FormatDuration(double seconds) => TimeSpan.FromSeconds(Math.Min(seconds, TimeSpan.MaxValue.TotalSeconds / 2)) switch
-    {
-        { TotalHours: >= 1 } t => $"{(int)t.TotalHours}h {t.Minutes}m",
-        { TotalMinutes: >= 1 } t => $"{t.Minutes}m {t.Seconds}s",
-        var t => $"{t.Seconds}s",
-    };
-
-    private static string FormatSize(long bytes) => bytes switch
-    {
-        >= 1024L * 1024 * 1024 => $"{bytes / 1024.0 / 1024 / 1024:F1} GiB",
-        >= 1024 * 1024 => $"{bytes / 1024.0 / 1024:F1} MiB",
-        _ => $"{bytes / 1024.0:F1} KiB",
-    };
-
-    /// <summary>
-    /// Resolves a depot file name inside the job's output folder, refusing paths that escape it.
-    /// </summary>
-    public static string GetFinalPath(ManifestJob job, string fileName)
-    {
-        var root = Path.GetFullPath(job.OutputFolder);
-        var path = Path.GetFullPath(Path.Combine(root, FileFilter.NormalizePath(fileName)));
-
-        if (!path.StartsWith(Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar, StringComparison.Ordinal))
-        {
-            throw new InvalidDataException($"File path escapes the output folder: {fileName}");
-        }
-
-        return path;
-    }
-
     /// <summary>
     /// Where a file is written before it is complete. By default next to it, so an interrupted run leaves it
     /// where the next run overwrites it.
@@ -299,7 +261,7 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
         DepotManifest.FileData file,
         string? copyFrom)
     {
-        var finalPath = GetFinalPath(job, file.FileName);
+        var finalPath = OutputFiles.GetFinalPath(job, file.FileName);
 
         Directory.CreateDirectory(Path.GetDirectoryName(finalPath)!);
 
@@ -311,7 +273,7 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
                 return (DownloadResult.AlreadyValid, finalPath);
             }
 
-            await WriteFileAsync(finalPath, [], job.CreationTime, cancellationToken);
+            await OutputFiles.WriteFileAsync(finalPath, [], job.CreationTime, cancellationToken);
 
             return (DownloadResult.Success, finalPath);
         }
@@ -422,17 +384,6 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
     }
 
     /// <summary>
-    /// Writes a whole file, dated to the given time.
-    /// </summary>
-    public static async Task WriteFileAsync(string path, byte[] data, DateTime lastWriteTime, CancellationToken cancellationToken = default)
-    {
-        using var handle = File.OpenHandle(path, FileMode.Create, FileAccess.Write, FileShare.None, FileOptions.Asynchronous, data.Length);
-
-        await RandomAccess.WriteAsync(handle, data, 0, cancellationToken);
-        File.SetLastWriteTimeUtc(handle, lastWriteTime);
-    }
-
-    /// <summary>
     /// Downloads only some chunks of files into them at their own offsets, for VPK archives that VRF reads single entries from.
     /// The rest of each file stays empty, and sparse on file systems that support it. Chunks already in the file are kept.
     /// Returns false when any file failed.
@@ -456,14 +407,14 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
         var startBytes = Interlocked.Read(ref DownloadedBytes);
         var stopwatch = Stopwatch.StartNew();
 
-        (double, string) RenderProgress() => FormatProgress(
+        (double, string) RenderProgress() => DownloadProgress.FormatProgress(
             Interlocked.Read(ref DownloadedBytes) - startBytes,
             Interlocked.Read(ref skippedBytes),
             totalBytes,
             stopwatch.Elapsed,
             $"{Volatile.Read(ref doneFiles)} / {partialFiles.Count} archives{FormatChunkErrorCount()}");
 
-        Log.Info($"Downloading {partialFiles.Sum(static f => f.Chunks.Count)} chunks ({FormatSize(totalBytes)}) of {partialFiles.Count} VPK archives...");
+        Log.Info($"Downloading {partialFiles.Sum(static f => f.Chunks.Count)} chunks ({DownloadProgress.FormatSize(totalBytes)}) of {partialFiles.Count} VPK archives...");
 
         await using (Log.StartProgress(RenderProgress))
         {
@@ -475,7 +426,7 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
                     Interlocked.Add(ref skippedBytes, keptBytes);
                     return success;
                 }
-                catch (Exception e) when (IsFileError(e))
+                catch (Exception e) when (OutputFiles.IsFileError(e))
                 {
                     Log.Error($"[{partialFile.Job}] Failed to write {partialFile.File.FileName}: {e.Message}");
                     return false;
@@ -487,7 +438,7 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
             })));
         }
 
-        Log.Info($"VPK archives: {FormatTransfer(Interlocked.Read(ref DownloadedBytes) - startBytes, stopwatch.Elapsed)} downloaded, {FormatSize(skippedBytes)} already present.");
+        Log.Info($"VPK archives: {DownloadProgress.FormatTransfer(Interlocked.Read(ref DownloadedBytes) - startBytes, stopwatch.Elapsed)} downloaded, {DownloadProgress.FormatSize(skippedBytes)} already present.");
         LogChunkErrors();
 
         var failedFiles = partialFiles.Where((_, i) => !results[i]).Select(static f => FileFilter.NormalizePath(f.File.FileName)).ToList();
@@ -525,7 +476,7 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
     private async Task<(bool Success, long KeptBytes)> DownloadPartialFile(PartialFile partialFile)
     {
         var (job, file, chunks) = partialFile;
-        var path = GetFinalPath(job, file.FileName);
+        var path = OutputFiles.GetFinalPath(job, file.FileName);
         var length = (long)file.TotalSize;
 
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -537,7 +488,7 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
         // Linux leaves the gaps unallocated on its own, NTFS only in a sparse file
         if (existingLength == 0 && OperatingSystem.IsWindows())
         {
-            DeviceIoControl(handle, FsctlSetSparse, 0, 0, 0, 0, out _, 0);
+            OutputFiles.SetSparse(handle);
         }
 
         if (existingLength != length)
@@ -581,13 +532,6 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
 
         return (success, keptBytes);
     }
-
-    private const uint FsctlSetSparse = 0x900C4;
-
-    [LibraryImport("kernel32.dll", SetLastError = true)]
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool DeviceIoControl(SafeFileHandle device, uint ioControlCode, nint inBuffer, uint inBufferSize, nint outBuffer, uint outBufferSize, out uint bytesReturned, nint overlapped);
 
     // Returns false when any chunk failed
     private async Task<bool> DownloadChunks(
@@ -685,12 +629,12 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
             }
 
             buffer = ArrayPool<byte>.Shared.Rent((int)chunk.UncompressedLength);
-            var server = session.GetContentServer(avoid);
+            var server = session.CdnServers.Get(avoid);
             int written;
 
             try
             {
-                written = await session.CDNClient.DownloadDepotChunkAsync(job.DepotID, chunk, server, buffer, job.DepotKey);
+                written = await session.DownloadChunkAsync(job, chunk, server, buffer);
 
                 // SteamKit only checks an Adler-32 checksum. The chunk id is the SHA-1 of the data, and a file
                 // of chunks that match it needs no hashing after
@@ -703,11 +647,11 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
             {
                 ChunkErrorReasons.AddOrUpdate(DescribeChunkError(e), 1, static (_, count) => count + 1);
                 ChunkErrorServers.AddOrUpdate(server.Host ?? server.ToString(), 1, static (_, count) => count + 1);
-                session.MarkContentServerAsBad(server);
+                session.CdnServers.MarkBad(server);
                 return (e, server);
             }
 
-            session.MarkContentServerAsGood(server);
+            session.CdnServers.MarkGood(server);
 
             // Disk errors are not the server's fault, so they fail the file
             await RandomAccess.WriteAsync(handle, buffer.AsMemory(0, written), placement.Position, cancellationToken);
@@ -731,7 +675,7 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
     {
         try
         {
-            await Task.Delay(milliseconds, chunkCancellation);
+            await Task.Delay(TimeSpan.FromMilliseconds(milliseconds), TimeProvider, chunkCancellation);
             return true;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)

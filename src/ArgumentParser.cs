@@ -17,7 +17,7 @@ internal sealed record ParsedArguments(
 internal static class ArgumentParser
 {
     // Options of each command: ones followed by a value, and flags
-    private static readonly Dictionary<string, (string[] Values, string[] Flags)> CommandOptions = new()
+    internal static readonly Dictionary<string, (string[] Values, string[] Flags)> CommandOptions = new()
     {
         ["get"] = (["output", "branch", "username"], ["anonymous", "all-files"]),
         ["ls"] = (["output", "branch", "username"], ["anonymous"]),
@@ -78,6 +78,22 @@ internal static class ArgumentParser
     }
 
     /// <summary>
+    /// Rejects positional arguments and patterns, for commands that only take options. Returns false after printing an error.
+    /// </summary>
+    public static bool NoPositionals(ParsedArguments parsed, string command)
+    {
+        if (parsed.Positionals.Count == 0 && parsed.Patterns.Count == 0)
+        {
+            return true;
+        }
+
+        var argument = parsed.Positionals.Count > 0 ? parsed.Positionals[0] : "--";
+
+        Log.Error($"Unexpected argument \"{argument}\". {Help.UsageHint(command)}");
+        return false;
+    }
+
+    /// <summary>
     /// Rejects paths like "D:foo" or "\foo", which are relative to a drive's current folder or root. Shells like bash turn
     /// an unquoted D:\foo\bar into D:foobar, which would silently write somewhere else. Returns false after printing an error.
     /// </summary>
@@ -90,22 +106,6 @@ internal static class ArgumentParser
 
         Log.Error($"{option} \"{path}\" is relative to the current folder or root of a drive, likely a path whose backslashes the shell removed. Use forward slashes or quotes, like D:/SteamDepots.");
         return false;
-    }
-
-    /// <summary>
-    /// Reads the lines of a file named by an option. Returns null after printing an error.
-    /// </summary>
-    public static string[]? ReadLines(string path, string option)
-    {
-        try
-        {
-            return File.ReadAllLines(path);
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
-        {
-            Log.Error($"Failed to read {option} \"{path}\": {e.Message}");
-            return null;
-        }
     }
 
     /// <summary>

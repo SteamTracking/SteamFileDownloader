@@ -3,10 +3,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Text;
-using System.Text.Encodings.Web;
-using System.Text.Json;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using SteamKit2;
@@ -15,39 +11,10 @@ using ValvePak;
 namespace SteamFileDownloader;
 
 /// <summary>
-/// Options shared by the get, ls and depots commands.
+/// The get and ls commands: many depot manifests over one Steam login, with results on stdout.
 /// </summary>
-internal sealed record DepotOptions(
-    uint? App,
-    string? Output = null,
-    string Branch = "public",
-    bool Anonymous = false,
-    string? Username = null,
-    bool AllFiles = false,
-    bool Json = false);
-
-/// <summary>
-/// A parsed get, ls or depots command line.
-/// </summary>
-internal sealed record DepotArguments(
-    string Command,
-    DepotOptions Options,
-    List<string> Targets,
-    List<string> Patterns);
-
-/// <summary>
-/// The get, ls and depots commands: many depot manifests over one Steam login, with results on stdout.
-/// </summary>
-internal static partial class DepotCommands
+internal static class DepotCommands
 {
-    // DepotID null means every depot of the app, ManifestID null means the latest on the branch
-    private sealed record Target(
-        string Source,
-        uint AppID,
-        uint? DepotID,
-        ulong? ManifestID,
-        string Branch);
-
     // A matching manifest file with its normalized path. Requested is false for directory VPKs only needed for their entries,
     // and VpkPatterns are the VPK patterns that read entries from it
     private sealed record MatchedFile(
@@ -99,87 +66,8 @@ internal static partial class DepotCommands
         }
     }
 
-    // The manifest can follow a slash too, since app/depot/manifest is an easy mistake to make. Without an app, a slash
-    // means app/depot, so depot/manifest is never read as such
-    [GeneratedRegex(@"^(?:(?<app>\d+)/)?(?<depot>\d+|all)(?:[:/](?<manifest>\d+|latest))?(?:@(?<branch>[^@/:]+))?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex TargetRegex();
-
-    /// <summary>
-    /// Parses "[app] [options] [targets] [-- patterns]" for get, ls and depots. Options can go anywhere before "--".
-    /// Returns null after printing an error.
-    /// </summary>
-    public static DepotArguments? ParseArguments(string command, string[] args)
-    {
-        var parsed = ArgumentParser.Parse(command, args);
-
-        if (parsed == null)
-        {
-            return null;
-        }
-
-        var targets = parsed.Positionals;
-        uint? app = null;
-
-        // The app id is optional when every target names its own app
-        if (targets.Count > 0 && uint.TryParse(targets[0], NumberStyles.None, CultureInfo.InvariantCulture, out var firstApp))
-        {
-            app = firstApp;
-            targets = targets[1..];
-        }
-        else if (command == "depots")
-        {
-            Log.Error($"depots needs app ids, for example: {Help.ExeName} depots 730 570. {Help.UsageHint(command)}");
-            return null;
-        }
-
-        // A number first that no target uses was likely meant as a depot, which would otherwise be skipped silently
-        if (app != null && command != "depots" && targets.Count > 0 && targets.All(static t => TargetRegex().Match(t) is { Success: true } m && m.Groups["app"].Success))
-        {
-            Log.Error($"{app} is taken as the app id, but no target uses it, since a slash in a target means <app>/<depot>. If {app} is a depot, give it as <app>/{app}, and a manifest follows a colon, like <depot>:<manifest>.");
-            return null;
-        }
-
-        if (parsed.Options.ContainsKey("json") && parsed.Options.ContainsKey("branch"))
-        {
-            Log.Error("--json prints every branch, so it can't be combined with --branch.");
-            return null;
-        }
-
-        var misplacedOption = parsed.Patterns.FirstOrDefault(static p => p.StartsWith("--", StringComparison.Ordinal));
-
-        if (misplacedOption != null)
-        {
-            Log.Error($"\"{misplacedOption}\" is after --, which is only for patterns. Put options before --.");
-            return null;
-        }
-
-        var options = new DepotOptions(
-            app,
-            parsed.Options.GetValueOrDefault("output"),
-            parsed.Options.GetValueOrDefault("branch") ?? "public",
-            parsed.Options.ContainsKey("anonymous"),
-            parsed.Options.GetValueOrDefault("username"),
-            parsed.Options.ContainsKey("all-files"),
-            parsed.Options.ContainsKey("json"));
-
-        return new DepotArguments(command, options, targets, parsed.Patterns);
-    }
-
     public static async Task<int> GetAsync(DepotArguments arguments, CancellationToken cancellationToken)
     {
-        // Whole depots can be tens of gigabytes, so downloading every file has to be asked for
-        if (arguments.Patterns.Count == 0 && !arguments.Options.AllFiles)
-        {
-            Log.Error($"get needs patterns after --, like: {Help.ExeName} get 730 2347771:latest -- server.dll. Use ls to see a manifest's files, or --all-files to download every file.");
-            return ExitCodes.Failed;
-        }
-
-        if (arguments.Patterns.Count > 0 && arguments.Options.AllFiles)
-        {
-            Log.Error("--all-files downloads every file, so it can't be combined with patterns.");
-            return ExitCodes.Failed;
-        }
-
         var (run, exitCode) = await PrepareAsync(arguments, cancellationToken);
 
         if (run == null)
@@ -253,7 +141,7 @@ internal static partial class DepotCommands
             }
         }
 
-        SetFolderTimes(paths);
+        OutputFiles.SetFolderTimes(paths);
 
         return Finish(run, downloads: true);
     }
@@ -301,160 +189,9 @@ internal static partial class DepotCommands
             }
         }
 
-        SetFolderTimes(dirFiles.Select(static f => (f.Job, f.Path)));
+        OutputFiles.SetFolderTimes(dirFiles.Select(static f => (f.Job, f.Path)));
 
         return Finish(run, downloads: false);
-    }
-
-    /// <summary>
-    /// Lists the depots of apps with their manifest on a branch, and the apps' branches on stderr.
-    /// With --json, prints everything Steam has on the apps' depots and branches instead.
-    /// </summary>
-    public static async Task<int> ListDepotsAsync(DepotArguments arguments, CancellationToken cancellationToken)
-    {
-        var options = arguments.Options;
-        var appIDs = new List<uint> { options.App!.Value };
-
-        // The other arguments are more apps
-        foreach (var arg in arguments.Targets)
-        {
-            if (!uint.TryParse(arg, NumberStyles.None, CultureInfo.InvariantCulture, out var appID))
-            {
-                Log.Error($"Unexpected argument \"{arg}\", depots takes app ids. {Help.UsageHint("depots")}");
-                return ExitCodes.Failed;
-            }
-
-            if (!appIDs.Contains(appID))
-            {
-                appIDs.Add(appID);
-            }
-        }
-
-        var (loggedOn, logOnExitCode) = await LogOnAsync(options, cancellationToken);
-
-        if (loggedOn == null)
-        {
-            return logOnExitCode;
-        }
-
-        using var session = loggedOn;
-
-        var appInfos = await session.GetAppInfosAsync(appIDs);
-        session.Disconnect();
-
-        // Apps without info were already reported
-        var depotsByApp = appIDs.Where(appInfos.ContainsKey).Select(appID => (AppID: appID, Depots: appInfos[appID]["depots"])).ToList();
-        var success = depotsByApp.Count == appIDs.Count;
-
-        if (options.Json)
-        {
-            Log.Result(ToJson(depotsByApp));
-        }
-        else
-        {
-            foreach (var (appID, depots) in depotsByApp)
-            {
-                success &= ListAppDepots(appID, depots, options.Branch);
-            }
-        }
-
-        return success ? ExitCodes.Ok : ExitCodes.Failed;
-    }
-
-    // Returns false after an error
-    private static bool ListAppDepots(uint appID, KeyValue depots, string branchName)
-    {
-        if (!SteamSession.CheckBranch(depots, appID, branchName))
-        {
-            return false;
-        }
-
-        var branches = depots["branches"].Children
-            .Select(static b => $"{b.Name} (build {b["buildid"].Value}{(b["pwdrequired"].AsBoolean() ? ", password" : "")}{FormatTime(b["timeupdated"].AsLong())})");
-
-        Log.Info("");
-        Log.Info($"App {appID} branches: {string.Join(", ", branches)}");
-
-        if (!SteamSession.GetDepots(depots).Any())
-        {
-            Log.Error($"App {appID} has no depots. DLC and tools often keep their files in depots of their parent app.");
-            return false;
-        }
-
-        foreach (var (depotID, depot) in SteamSession.GetDepots(depots))
-        {
-            var branch = branchName;
-            var manifestID = SteamSession.GetManifestIdForBranch(depot, ref branch);
-            var config = depot["config"];
-            var notes = new List<string>();
-
-            AddNote("name", depot["name"].Value);
-            AddNote("os", config["oslist"].Value);
-            AddNote("arch", config["osarch"].Value);
-            AddNote("language", config["language"].Value);
-            AddNote("dlc", depot["dlcappid"].Value);
-            AddNote("shared from app", depot["depotfromapp"].Value);
-
-            if (branch != branchName)
-            {
-                notes.Add($"manifest from {branch}");
-            }
-
-            Log.Result($"{appID}\t{depotID}\t{(manifestID == 0 ? "-" : manifestID.ToString(CultureInfo.InvariantCulture))}\t{depot["maxsize"].Value ?? "-"}\t{string.Join(", ", notes)}");
-
-            void AddNote(string name, string? value)
-            {
-                if (!string.IsNullOrEmpty(value))
-                {
-                    notes.Add($"{name} {value}");
-                }
-            }
-        }
-
-        return true;
-
-        static string FormatTime(long unixTime) => unixTime > 0 ? $", {DateTimeOffset.FromUnixTimeSeconds(unixTime):yyyy-MM-dd}" : "";
-    }
-
-    // An object per app with its whole depots section. Values are strings as Steam sends them, keys with children are objects
-    private static string ToJson(List<(uint AppID, KeyValue Depots)> depotsByApp)
-    {
-        using var stream = new MemoryStream();
-
-        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
-        {
-            writer.WriteStartObject();
-
-            foreach (var (appID, depots) in depotsByApp)
-            {
-                writer.WritePropertyName(appID.ToString(CultureInfo.InvariantCulture));
-                WriteObject(writer, depots);
-            }
-
-            writer.WriteEndObject();
-        }
-
-        return Encoding.UTF8.GetString(stream.ToArray());
-
-        static void WriteObject(Utf8JsonWriter writer, KeyValue keyValue)
-        {
-            writer.WriteStartObject();
-
-            foreach (var child in keyValue.Children)
-            {
-                if (child.Value == null)
-                {
-                    writer.WritePropertyName(child.Name ?? "");
-                    WriteObject(writer, child);
-                }
-                else
-                {
-                    writer.WriteString(child.Name ?? "", child.Value);
-                }
-            }
-
-            writer.WriteEndObject();
-        }
     }
 
     /// <summary>
@@ -467,18 +204,12 @@ internal static partial class DepotCommands
 
         foreach (var arg in arguments.Targets)
         {
-            if (ParseTarget(arg, arguments) is not { } target)
+            if (DepotArgumentParser.ParseTarget(arg, arguments) is not { } target)
             {
                 return (null, ExitCodes.Failed);
             }
 
             targets.Add(target);
-        }
-
-        if (targets.Count == 0)
-        {
-            Log.Error($"No targets, expected [<app>] <target>..., like: {Help.ExeName} {arguments.Command} 730 2347771:latest");
-            return (null, ExitCodes.Failed);
         }
 
         FileFilter filter;
@@ -493,7 +224,8 @@ internal static partial class DepotCommands
             return (null, ExitCodes.Failed);
         }
 
-        var (session, logOnExitCode) = await LogOnAsync(options, cancellationToken);
+        var credentials = options.Anonymous ? LogOnCredentials.Anonymous : AccountStore.LoadCredentials(options.Username);
+        var (session, logOnExitCode) = await SteamSession.CreateLoggedOnAsync(credentials, cacheDepotKeys: true, cancellationToken);
 
         if (session == null)
         {
@@ -527,28 +259,6 @@ internal static partial class DepotCommands
         MatchFiles(run);
 
         return (run, ExitCodes.Ok);
-    }
-
-    // Returns a logged on session, or null with the exit code after explaining why
-    private static async Task<(SteamSession? Session, int ExitCode)> LogOnAsync(DepotOptions options, CancellationToken cancellationToken)
-    {
-        var credentials = options.Anonymous ? LogOnCredentials.Anonymous : AccountStore.LoadCredentials(options.Username);
-
-        if (credentials == null)
-        {
-            return (null, ExitCodes.NoAccess);
-        }
-
-        var session = new SteamSession(cancellationToken) { CacheDepotKeys = true };
-        var exitCode = await session.LogOnAsync(credentials);
-
-        if (exitCode != ExitCodes.Ok)
-        {
-            session.Dispose();
-            return (null, exitCode);
-        }
-
-        return (session, ExitCodes.Ok);
     }
 
     private static async Task ResolveJobsAsync(Run run, List<Target> targets)
@@ -609,7 +319,7 @@ internal static partial class DepotCommands
                 continue;
             }
 
-            if (!SteamSession.CheckBranch(depots, target.AppID, target.Branch))
+            if (!AppInfo.CheckBranch(depots, target.AppID, target.Branch))
             {
                 run.Fail($"{target.Source} (branch {target.Branch})");
                 continue;
@@ -620,10 +330,10 @@ internal static partial class DepotCommands
                 var allJobs = new List<ManifestJob>();
 
                 // Shared depots are listed under the app that owns them
-                foreach (var (depotID, depot) in SteamSession.GetDepots(depots).Where(static d => d.Depot["depotfromapp"].Value == null))
+                foreach (var (depotID, depot) in AppInfo.GetDepots(depots).Where(static d => d.Depot["depotfromapp"].Value == null))
                 {
                     var branch = target.Branch;
-                    var manifestID = SteamSession.GetManifestIdForBranch(depot, ref branch);
+                    var manifestID = AppInfo.GetManifestIdForBranch(depot, ref branch);
 
                     if (manifestID != 0)
                     {
@@ -655,7 +365,7 @@ internal static partial class DepotCommands
             }
 
             var manifestBranch = target.Branch;
-            var latestID = SteamSession.GetManifestIdForBranch(depotInfo, ref manifestBranch);
+            var latestID = AppInfo.GetManifestIdForBranch(depotInfo, ref manifestBranch);
 
             if (latestID == 0)
             {
@@ -686,14 +396,8 @@ internal static partial class DepotCommands
         {
             var matches = new List<MatchedFile>();
 
-            foreach (var file in job.Manifest!.Files!)
+            foreach (var (file, path) in job.GetFiles())
             {
-                if (FileDownloader.IsDirectory(file))
-                {
-                    continue;
-                }
-
-                var path = FileFilter.NormalizePath(file.FileName);
                 var matching = filter.GetMatchingPatterns(path);
                 var requested = listAll || matching.Count > 0;
 
@@ -759,43 +463,6 @@ internal static partial class DepotCommands
         }
     }
 
-    /// <summary>
-    /// Dates the folders of the files, up to their manifest's folder, to when the manifest was created, like the files, so builds sort by date.
-    /// Only once everything is written, since writing a file in a folder changes the folder's date.
-    /// </summary>
-    private static void SetFolderTimes(IEnumerable<(ManifestJob Job, string Path)> files)
-    {
-        var folders = new Dictionary<string, ManifestJob>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var (job, path) in files)
-        {
-            var folder = Path.GetDirectoryName(path);
-
-            // Stops at a folder that is already added, since its parents are too
-            while (folder != null && folder.Length >= job.OutputFolder.Length && folders.TryAdd(folder, job))
-            {
-                folder = Path.GetDirectoryName(folder);
-            }
-        }
-
-        foreach (var (folder, job) in folders)
-        {
-            try
-            {
-                var info = new DirectoryInfo(folder);
-
-                if (info.LastWriteTimeUtc != job.CreationTime)
-                {
-                    info.LastWriteTimeUtc = job.CreationTime;
-                }
-            }
-            catch (Exception e) when (FileDownloader.IsFileError(e))
-            {
-                Log.Warn($"[{job}] Failed to set the date of {folder}: {e.Message}");
-            }
-        }
-    }
-
     private static int Finish(Run run, bool downloads)
     {
         foreach (var (target, jobs) in run.AllTargets)
@@ -850,94 +517,13 @@ internal static partial class DepotCommands
             }
         }
 
-        if (run.Failed && run.Session.FailureExitCode != ExitCodes.Failed)
+        var (exitCode, message) = ExitCodes.GetExitCode(run.Failed, run.FailedOtherwise, run.Session.FailureExitCode, unmatched.Count > 0);
+
+        if (message != null)
         {
-            Log.Error($"Exit code {run.Session.FailureExitCode}: logging in again after a lost connection failed (see above), so stdout is partial.");
-            return run.Session.FailureExitCode;
+            Log.Error(message);
         }
 
-        if (run.Failed)
-        {
-            var (exitCode, reason) = run.FailedOtherwise
-                ? (ExitCodes.Failed, "some targets or files failed")
-                : (ExitCodes.NoDepotAccess, "this account has no access to some targets");
-
-            Log.Error($"Exit code {exitCode}: {reason}, so stdout is partial{(unmatched.Count > 0 ? ", and a pattern matched nothing" : "")}.");
-            return exitCode;
-        }
-
-        if (unmatched.Count > 0)
-        {
-            Log.Error("Exit code 2: a pattern matched nothing.");
-            return ExitCodes.NoMatch;
-        }
-
-        return ExitCodes.Ok;
-    }
-
-    // Returns null after printing an error
-    private static Target? ParseTarget(string arg, DepotArguments arguments)
-    {
-        var match = TargetRegex().Match(arg);
-
-        if (!match.Success)
-        {
-            return Invalid();
-        }
-
-        uint appID;
-
-        if (match.Groups["app"].Success)
-        {
-            if (!uint.TryParse(match.Groups["app"].ValueSpan, NumberStyles.None, CultureInfo.InvariantCulture, out appID))
-            {
-                return Invalid();
-            }
-        }
-        else if (arguments.Options.App is { } app)
-        {
-            appID = app;
-        }
-        else
-        {
-            Log.Error($"Target \"{arg}\" has no app. Put the app id before the targets, like \"{Help.ExeName} {arguments.Command} 730 {arg}\", or in the target, like 730/{arg}.");
-            return null;
-        }
-
-        uint? depotID = null;
-        ulong? manifestID = null;
-        var depot = match.Groups["depot"].Value;
-        var manifest = match.Groups["manifest"].Value;
-
-        if (!depot.Equals("all", StringComparison.OrdinalIgnoreCase))
-        {
-            if (!uint.TryParse(depot, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedDepot))
-            {
-                return Invalid();
-            }
-
-            depotID = parsedDepot;
-        }
-
-        if (manifest.Length > 0 && !manifest.Equals("latest", StringComparison.OrdinalIgnoreCase))
-        {
-            // A manifest id only makes sense for one depot
-            if (depotID == null || !ulong.TryParse(manifest, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedManifest))
-            {
-                return Invalid();
-            }
-
-            manifestID = parsedManifest;
-        }
-
-        var branch = match.Groups["branch"].Success ? match.Groups["branch"].Value : arguments.Options.Branch;
-
-        return new Target(arg, appID, depotID, manifestID, branch);
-
-        Target? Invalid()
-        {
-            Log.Error($"Invalid target \"{arg}\", expected [<app>/]<depot>[:<manifest>|:latest][@<branch>] or all, like 2347771:8344780363095656278 or 570/373303@beta. A manifest follows a colon, or a slash only after an app (570/373303/<manifest>). Patterns go after --.");
-            return null;
-        }
+        return exitCode;
     }
 }

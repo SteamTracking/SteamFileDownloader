@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Reflection;
 using System.Text;
 using System.Threading;
@@ -69,7 +68,7 @@ internal static class Program
         // stdout carries the results
         Log.UseStdoutForResults();
 
-        var arguments = command == "dd" ? DepotDownloaderArguments.Parse(args) : DepotCommands.ParseArguments(command, args);
+        var arguments = command == "dd" ? DepotDownloaderArguments.Parse(args) : DepotArgumentParser.ParseArguments(command, args);
 
         if (arguments == null)
         {
@@ -80,7 +79,7 @@ internal static class Program
         {
             "get" => await DepotCommands.GetAsync(arguments, cancellationToken),
             "ls" => await DepotCommands.ListAsync(arguments, cancellationToken),
-            _ => await DepotCommands.ListDepotsAsync(arguments, cancellationToken),
+            _ => await DepotsCommand.ListDepotsAsync(arguments, cancellationToken),
         };
     }
 
@@ -88,7 +87,7 @@ internal static class Program
     {
         var parsed = ArgumentParser.Parse("login", args);
 
-        if (parsed == null || !NoPositionals(parsed, "login"))
+        if (parsed == null || !ArgumentParser.NoPositionals(parsed, "login"))
         {
             return ExitCodes.Failed;
         }
@@ -99,50 +98,9 @@ internal static class Program
     // The GameTracking command, which downloads the files in files.json
     private static async Task<int> RunTrackAsync(string[] args, CancellationToken cancellationToken)
     {
-        var parsed = ArgumentParser.Parse("track", args);
+        var arguments = TrackCommand.ParseArguments(args);
 
-        if (parsed == null || !NoPositionals(parsed, "track"))
-        {
-            return ExitCodes.Failed;
-        }
-
-        var options = parsed.Options;
-
-        if (!options.TryGetValue("appid", out var appText) || !uint.TryParse(appText, NumberStyles.None, CultureInfo.InvariantCulture, out var appID) || !options.TryGetValue("output", out var output))
-        {
-            Log.Error($"track needs --appid <app> and --output <dir>. {Help.UsageHint("track")}");
-            return ExitCodes.Failed;
-        }
-
-        if (options.ContainsKey("password") && !options.ContainsKey("username"))
-        {
-            Log.Error($"--password needs --username. Without both, the last saved login is used. {Help.UsageHint("track")}");
-            return ExitCodes.Failed;
-        }
-
-        return await TrackCommand.RunAsync(
-            appID,
-            output,
-            options.GetValueOrDefault("username"),
-            options.GetValueOrDefault("password"),
-            options.GetValueOrDefault("branch") ?? "public",
-            options.GetValueOrDefault("manifests"),
-            options.ContainsKey("save-manifest"),
-            options.ContainsKey("save-all-manifests"),
-            cancellationToken);
-    }
-
-    private static bool NoPositionals(ParsedArguments parsed, string command)
-    {
-        if (parsed.Positionals.Count == 0 && parsed.Patterns.Count == 0)
-        {
-            return true;
-        }
-
-        var argument = parsed.Positionals.Count > 0 ? parsed.Positionals[0] : "--";
-
-        Log.Error($"Unexpected argument \"{argument}\". {Help.UsageHint(command)}");
-        return false;
+        return arguments == null ? ExitCodes.Failed : await TrackCommand.RunAsync(arguments, cancellationToken);
     }
 
     private static int UnknownCommand(string argument)

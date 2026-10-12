@@ -175,7 +175,7 @@ internal static class VpkReader
         {
             try
             {
-                var path = FileDownloader.GetFinalPath(job, $"{outputFolder}/{match.Path}");
+                var path = OutputFiles.GetFinalPath(job, $"{outputFolder}/{match.Path}");
 
                 if (IsAlreadyExtracted(match.Entry, path))
                 {
@@ -185,7 +185,7 @@ internal static class VpkReader
 
                 pending.Add((match.Entry, path));
             }
-            catch (Exception e) when (FileDownloader.IsFileError(e))
+            catch (Exception e) when (OutputFiles.IsFileError(e))
             {
                 Log.Error($"[{job}] Failed to extract {outputFolder}/{match.Path}: {e.Message}");
                 success = false;
@@ -244,11 +244,11 @@ internal static class VpkReader
                 }
 
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                await FileDownloader.WriteFileAsync(path, data, job.CreationTime);
+                await OutputFiles.WriteFileAsync(path, data, job.CreationTime);
                 paths.Add(path);
             }
         }
-        catch (Exception e) when (FileDownloader.IsFileError(e))
+        catch (Exception e) when (OutputFiles.IsFileError(e))
         {
             Log.Error($"[{job}] Failed to extract entries of archive {archive.Key} of {dirFileName}: {e.Message}");
             success = false;
@@ -293,7 +293,7 @@ internal static class VpkReader
         }
 
         // Next to the directory file's job, since directory files of several builds can share an archive of another depot
-        var path = downloader.GetPartialPath(FileDownloader.GetFinalPath(job, archiveFile.FileName));
+        var path = downloader.GetPartialPath(OutputFiles.GetFinalPath(job, archiveFile.FileName));
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 
         var downloaded = false;
@@ -321,7 +321,7 @@ internal static class VpkReader
     }
 
     // The chunks of an archive that overlap the entries, ordered by offset
-    private static List<DepotManifest.ChunkData> FindChunks(DepotManifest.FileData archiveFile, IEnumerable<PackageEntry> entries)
+    internal static List<DepotManifest.ChunkData> FindChunks(DepotManifest.FileData archiveFile, IEnumerable<PackageEntry> entries)
     {
         var chunks = archiveFile.Chunks.OrderBy(static c => c.Offset).ToArray();
         var needed = new HashSet<DepotManifest.ChunkData>();
@@ -340,7 +340,7 @@ internal static class VpkReader
     }
 
     // Index of the first item, sorted by chunk offset, whose chunk ends after the given offset
-    private static int FindFirstChunkEnding<T>(T[] items, ulong offset, Func<T, DepotManifest.ChunkData> getChunk)
+    internal static int FindFirstChunkEnding<T>(T[] items, ulong offset, Func<T, DepotManifest.ChunkData> getChunk)
     {
         int low = 0, high = items.Length;
 

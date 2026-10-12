@@ -12,21 +12,63 @@ using SteamKit2;
 namespace SteamFileDownloader;
 
 /// <summary>
+/// A parsed track command line.
+/// </summary>
+internal sealed record TrackArguments(
+    uint AppID,
+    string Output,
+    string? Username,
+    string? Password,
+    string Branch,
+    string? ManifestsFolder,
+    bool SaveManifest,
+    bool SaveAllManifests);
+
+/// <summary>
 /// Downloads the files listed in files.json from the latest manifests of a branch, used by GameTracking.
 /// </summary>
 internal static class TrackCommand
 {
-    public static async Task<int> RunAsync(
-        uint appID,
-        string output,
-        string? username,
-        string? password,
-        string branch,
-        string? manifestsFolder,
-        bool saveManifest,
-        bool saveAllManifests,
-        CancellationToken cancellationToken)
+    /// <summary>
+    /// Parses the options of track. Returns null after printing an error.
+    /// </summary>
+    public static TrackArguments? ParseArguments(string[] args)
     {
+        var parsed = ArgumentParser.Parse("track", args);
+
+        if (parsed == null || !ArgumentParser.NoPositionals(parsed, "track"))
+        {
+            return null;
+        }
+
+        var options = parsed.Options;
+
+        if (!options.TryGetValue("appid", out var appText) || !uint.TryParse(appText, NumberStyles.None, CultureInfo.InvariantCulture, out var appID) || !options.TryGetValue("output", out var output))
+        {
+            Log.Error($"track needs --appid <app> and --output <dir>. {Help.UsageHint("track")}");
+            return null;
+        }
+
+        if (options.ContainsKey("password") && !options.ContainsKey("username"))
+        {
+            Log.Error($"--password needs --username. Without both, the last saved login is used. {Help.UsageHint("track")}");
+            return null;
+        }
+
+        return new TrackArguments(
+            appID,
+            output,
+            options.GetValueOrDefault("username"),
+            options.GetValueOrDefault("password"),
+            options.GetValueOrDefault("branch") ?? "public",
+            options.GetValueOrDefault("manifests"),
+            options.ContainsKey("save-manifest"),
+            options.ContainsKey("save-all-manifests"));
+    }
+
+    public static async Task<int> RunAsync(TrackArguments arguments, CancellationToken cancellationToken)
+    {
+        var (appID, output, username, password, branch, manifestsFolder, saveManifest, saveAllManifests) = arguments;
         saveManifest |= saveAllManifests;
 
         var outputPath = Path.GetFullPath(output);
@@ -53,27 +95,21 @@ internal static class TrackCommand
             {
                 manifestIds = ManifestWriter.ReadManifestIds(manifestsFolder);
             }
-            catch (Exception e) when (FileDownloader.IsFileError(e))
+            catch (Exception e) when (OutputFiles.IsFileError(e))
             {
                 Log.Error($"Failed to read the manifests in {manifestsFolder}: {e.Message}");
                 return ExitCodes.Failed;
             }
         }
 
-        var credentials = GetCredentials(username, password);
+        var (loggedOn, logOnExitCode) = await SteamSession.CreateLoggedOnAsync(GetCredentials(username, password), cacheDepotKeys: false, cancellationToken);
 
-        if (credentials == null)
-        {
-            return ExitCodes.NoAccess;
-        }
-
-        using var session = new SteamSession(cancellationToken);
-        var logOnExitCode = await session.LogOnAsync(credentials);
-
-        if (logOnExitCode != ExitCodes.Ok)
+        if (loggedOn == null)
         {
             return logOnExitCode;
         }
+
+        using var session = loggedOn;
 
         // Manifests come from the CDN too, so its server list loads while the app info does
         _ = session.EnsureCdnServersAsync();
@@ -87,14 +123,14 @@ internal static class TrackCommand
 
         var depots = appInfo["depots"];
 
-        if (!SteamSession.GetDepots(depots).Any())
+        if (!AppInfo.GetDepots(depots).Any())
         {
             Log.Error($"App {appID} has no depots.");
             return ExitCodes.Failed;
         }
 
         // Falling back to public would save public files under this branch's build id
-        if (!SteamSession.CheckBranch(depots, appID, branch))
+        if (!AppInfo.CheckBranch(depots, appID, branch))
         {
             return ExitCodes.Failed;
         }
@@ -119,7 +155,7 @@ internal static class TrackCommand
         // Find the tracked depots (in files.json), or all of them when saving all manifests or for VPK entries
         var manifestJobs = new List<ManifestJob>();
 
-        foreach (var (depotID, depot) in SteamSession.GetDepots(depots))
+        foreach (var (depotID, depot) in AppInfo.GetDepots(depots))
         {
             var filter = filters.GetValueOrDefault(depotID);
 
@@ -142,7 +178,7 @@ internal static class TrackCommand
             var manifestBranch = branch;
             var manifestID = manifestIds != null
                 ? manifestIds.GetValueOrDefault(depotID)
-                : SteamSession.GetManifestIdForBranch(depot, ref manifestBranch);
+                : AppInfo.GetManifestIdForBranch(depot, ref manifestBranch);
 
             // Depots like DLC and other branches often have no manifest, which is only a problem for tracked ones
             if (manifestID == 0)
@@ -248,7 +284,7 @@ internal static class TrackCommand
     }
 
     // The files to download, and the VPK patterns of the directory files among them
-    private static (List<FileJob> Files, Dictionary<DepotManifest.FileData, IReadOnlyList<VpkPattern>> VpkDirectories) CollectFiles(List<ManifestJob> jobs)
+    internal static (List<FileJob> Files, Dictionary<DepotManifest.FileData, IReadOnlyList<VpkPattern>> VpkDirectories) CollectFiles(List<ManifestJob> jobs)
     {
         var fileJobs = new List<FileJob>();
         var vpkDirectories = new Dictionary<DepotManifest.FileData, IReadOnlyList<VpkPattern>>();
@@ -259,14 +295,8 @@ internal static class TrackCommand
             var matchedDirs = new HashSet<VpkPattern>();
             var matchedPatterns = new HashSet<FilePattern>();
 
-            foreach (var file in job.Manifest!.Files!)
+            foreach (var (file, path) in job.GetFiles())
             {
-                if (FileDownloader.IsDirectory(file))
-                {
-                    continue;
-                }
-
-                var path = FileFilter.NormalizePath(file.FileName);
                 var vpkPatterns = filter.GetVpkPatterns(path);
 
                 // Directory files of VPK entries are downloaded whole, for VRF to read the entries with
