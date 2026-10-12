@@ -379,6 +379,15 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
 
     private static bool HasExpectedSize(string path, DepotManifest.FileData file) => new FileInfo(path) is { Exists: true } info && info.Length == (long)file.TotalSize;
 
+    // A chunk's id is the SHA-1 of its data
+    private static bool IsChunkData(ReadOnlySpan<byte> data, DepotManifest.ChunkData chunk)
+    {
+        Span<byte> hash = stackalloc byte[SHA1.HashSizeInBytes];
+        SHA1.HashData(data, hash);
+
+        return hash.SequenceEqual(chunk.ChunkID);
+    }
+
     private async Task<bool> HasExpectedHash(string path, DepotManifest.FileData file) => HasExpectedSize(path, file) && await HashMatches(path, file);
 
     private async Task<bool> HashMatches(string path, DepotManifest.FileData file)
@@ -549,7 +558,7 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
 
                 if ((long)chunk.Offset + data.Length <= existingLength
                     && await RandomAccess.ReadAsync(handle, data, (long)chunk.Offset, cancellationToken) == data.Length
-                    && SHA1.HashData(data.Span).SequenceEqual(chunk.ChunkID))
+                    && IsChunkData(data.Span, chunk))
                 {
                     keptBytes += data.Length;
                     continue;
@@ -685,7 +694,7 @@ internal sealed partial class FileDownloader(SteamSession session, CancellationT
 
                 // SteamKit only checks an Adler-32 checksum. The chunk id is the SHA-1 of the data, and a file
                 // of chunks that match it needs no hashing after
-                if (!SHA1.HashData(buffer.AsSpan(0, written)).SequenceEqual(chunk.ChunkID))
+                if (!IsChunkData(buffer.AsSpan(0, written), chunk))
                 {
                     throw new InvalidDataException("the chunk does not match its hash");
                 }
