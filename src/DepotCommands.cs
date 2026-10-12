@@ -813,6 +813,7 @@ internal static partial class DepotCommands
 
         // Patterns can only be judged against manifests that were downloaded
         var unmatched = run.Matches.Count > 0 ? run.MatchCounts.Where(static p => p.Value == 0).Select(static p => p.Key).ToList() : [];
+        var skipped = run.Jobs.Where(static j => j.Optional && j.NoAccess).Select(static j => j.DepotID.ToString(CultureInfo.InvariantCulture)).ToList();
 
         foreach (var pattern in unmatched)
         {
@@ -820,12 +821,11 @@ internal static partial class DepotCommands
         }
 
         // One closing line, so the outcome is clear without reading the whole log
-        var skipped = run.Jobs.Count(static j => j.Optional && j.NoAccess);
         var notes = new List<string>();
 
-        if (skipped > 0)
+        if (skipped.Count > 0)
         {
-            notes.Add($"{skipped} depots without access skipped");
+            notes.Add($"skipped without access: {Log.JoinFirst(skipped)}");
         }
 
         // A target without a match is fine, like a build from before the file existed

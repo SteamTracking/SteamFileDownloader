@@ -69,7 +69,27 @@ internal static class ArgumentParser
             }
         }
 
+        if (options.TryGetValue("output", out var output) && !CheckOutputPath(output, "--output"))
+        {
+            return null;
+        }
+
         return new ParsedArguments(options, positionals, patterns);
+    }
+
+    /// <summary>
+    /// Rejects paths like "D:foo" or "\foo", which are relative to a drive's current folder or root. Shells like bash turn
+    /// an unquoted D:\foo\bar into D:foobar, which would silently write somewhere else. Returns false after printing an error.
+    /// </summary>
+    public static bool CheckOutputPath(string path, string option)
+    {
+        if (!Path.IsPathRooted(path) || Path.IsPathFullyQualified(path))
+        {
+            return true;
+        }
+
+        Log.Error($"{option} \"{path}\" is relative to the current folder or root of a drive, likely a path whose backslashes the shell removed. Use forward slashes or quotes, like D:/SteamDepots.");
+        return false;
     }
 
     /// <summary>

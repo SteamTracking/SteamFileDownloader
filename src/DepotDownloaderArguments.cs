@@ -75,6 +75,11 @@ internal static class DepotDownloaderArguments
                     patterns.AddRange(filePatterns);
                     break;
                 case "-dir":
+                    if (!ArgumentParser.CheckOutputPath(value, "-dir"))
+                    {
+                        return null;
+                    }
+
                     options = options with { Output = value };
                     break;
                 case "-branch" or "-beta":

@@ -39,7 +39,11 @@ internal static class Help
 
           Depot paths use forward slashes. A target without a match is fine (like a build before the
           file existed); a pattern that matches nothing in any target is an error (exit code 2).
+          Quote patterns with characters the shell expands, like * ? ( | $.
         """;
+
+    // Near the top of the help, since the full exit codes are at the end, past where a truncated read stops
+    private static string ExitCodesSummary => "Exit codes: 0 ok, 1 failed, 2 a pattern matched nothing, 3 log in again, 4 rate limited, 5 no access (see the end).";
 
     private static string LoginOptions => """
           --username <name>   saved login to use instead of the last one
@@ -96,6 +100,10 @@ internal static class Help
           {ExeName} track --appid <app> --output <dir>        download the files in ./files.json (GameTracking)
           {ExeName} <command> --help                          details and examples
           {ExeName} --version                                 print the version
+
+        Typical run, with every target in one call and rows of downloaded files on stdout:
+          {ExeName} get 730 2347771 2347773 --output D:/SteamDepots -- server.dll "regex:lib(tier0|engine2)\.so$"
+        {ExitCodesSummary}
 
         {Targets}
 
@@ -186,6 +194,8 @@ internal static class Help
         Usage:
           {ExeName} ls [<app>] <target>... [-- <pattern>...]
 
+        {ExitCodesSummary}
+
         Without patterns every file is listed. stdout has one tab-separated row per file:
           depot  manifest  sha1  size  path
         and one per VPK entry, for which only the _dir.vpk is downloaded, to <output>/<depot>/<manifest>/:
@@ -218,6 +228,8 @@ internal static class Help
         Usage:
           {ExeName} get [<app>] <target>... -- <pattern>...
           {ExeName} get [<app>] <target>... --all-files     every file, which can be tens of gigabytes per depot
+
+        {ExitCodesSummary}
 
         Files go to <output>/<depot>/<manifest>/<path>. VPK entries go to a folder named after
         the _dir.vpk without .vpk, like 2347770/7820179980365915207/game/core/pak01_dir/scripts/scenes.vdata_c,
