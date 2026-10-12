@@ -62,7 +62,7 @@ internal static partial class DepotCache
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
                 // Like another process writing it at the same time, the key is still used for this run
-                Log.Warn($"Could not cache the depot key for {depotID}: {e.Message}");
+                Log.Warn($"Failed to cache the depot key of depot {depotID}: {e.Message}");
             }
         }
     }

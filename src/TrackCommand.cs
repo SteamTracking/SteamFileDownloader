@@ -105,12 +105,12 @@ internal static class TrackCommand
 
         if (manifestIds != null)
         {
-            Log.Info($"Using the manifests in {manifestsFolder}, steam_buildid.txt won't be written");
+            Log.Info($"Using the manifest ids in {manifestsFolder}, so steam_buildid.txt won't be written.");
         }
         else if (int.TryParse(depots["branches"][branch]["buildid"].Value, out var parsedBuildId))
         {
             buildId = parsedBuildId;
-            Log.Info($"Branch \"{branch}\": build {parsedBuildId}");
+            Log.Info($"Branch \"{branch}\" is on build {parsedBuildId}.");
         }
 
         // Archives of VPKs can be in other depots than their directory file, so VPK entries need every manifest
@@ -149,7 +149,7 @@ internal static class TrackCommand
             {
                 if (filter != null)
                 {
-                    Log.Warn($"No manifest found for depot {depotID} in {manifestSource}");
+                    Log.Warn($"Depot {depotID} in files.json has no manifest in {manifestSource}, so it is skipped.");
                 }
 
                 continue;
@@ -166,8 +166,6 @@ internal static class TrackCommand
                 Optional = filter == null,
                 FailureIsFine = filter == null,
             });
-
-            Log.Info($"Found depot {depotID}: manifest {manifestID}{(filter != null ? "" : " (manifest only)")}");
         }
 
         foreach (var depotID in filters.Keys.Where(id => depots[id.ToString(CultureInfo.InvariantCulture)] == KeyValue.Invalid))
@@ -189,13 +187,11 @@ internal static class TrackCommand
         {
             foreach (var job in manifestJobs.Where(job => job.Manifest != null && (job.Filter != null || saveAllManifests)))
             {
-                writeFailed |= !TryWrite($"manifest of depot {job.DepotID}", () => ManifestWriter.DumpToTextFile(outputPath, job));
+                writeFailed |= !TryWrite($"the manifest of depot {job.DepotID}", () => ManifestWriter.DumpToTextFile(outputPath, job));
             }
         }
 
         // Done with Steam, disconnect before downloading files from CDN
-        Log.Info("");
-        Log.Info("Disconnecting from Steam...");
         session.Disconnect();
 
         var downloadTimer = Stopwatch.StartNew();
@@ -209,19 +205,13 @@ internal static class TrackCommand
 
         // A tracked depot without its manifest is missing all of its files
         var failedDepots = manifestJobs.Where(static job => !job.Optional && job.Manifest == null).Select(static job => job.DepotID).ToList();
-
-        if (failedDepots.Count > 0)
-        {
-            Log.Error($"Failed to get the manifests of tracked depots {string.Join(", ", failedDepots)}, so their files were not downloaded.");
-            allSucceeded = false;
-        }
+        allSucceeded &= failedDepots.Count == 0;
 
         if (allSucceeded && buildId.HasValue)
         {
             allSucceeded = TryWrite("steam_buildid.txt", () => File.WriteAllText(Path.Combine(outputPath, "steam_buildid.txt"), buildId.Value.ToString(CultureInfo.InvariantCulture)));
         }
 
-        Log.Info("");
         Log.Info($"Done in {downloadTimer.Elapsed:hh\\:mm\\:ss}.");
 
         if (allSucceeded)
@@ -229,7 +219,17 @@ internal static class TrackCommand
             return ExitCodes.Ok;
         }
 
-        return session.FailureExitCode;
+        // Running again right away would hit the same rate limit or rejected login
+        if (session.FailureExitCode != ExitCodes.Failed)
+        {
+            Log.Error($"Exit code {session.FailureExitCode}: logging in again after a lost connection failed (see above), so some manifests and their files are missing.");
+            return session.FailureExitCode;
+        }
+
+        var missing = failedDepots.Count > 0 ? $" Tracked depots {string.Join(", ", failedDepots)} have no manifest, so none of their files were downloaded." : "";
+        Log.Error($"Exit code 1: some manifests or files failed, see the errors above.{missing} Running the same command again retries only those{(buildId.HasValue ? ", and then writes steam_buildid.txt" : "")}.");
+
+        return ExitCodes.Failed;
     }
 
     // Like a full disk or a file locked by another program
@@ -242,7 +242,7 @@ internal static class TrackCommand
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            Log.Error($"Failed to write the {what}: {e.Message}");
+            Log.Error($"Failed to write {what}: {e.Message}");
             return false;
         }
     }
@@ -257,6 +257,7 @@ internal static class TrackCommand
         {
             var filter = job.Filter!;
             var matchedDirs = new HashSet<VpkPattern>();
+            var matchedPatterns = new HashSet<FilePattern>();
 
             foreach (var file in job.Manifest!.Files!)
             {
@@ -275,10 +276,19 @@ internal static class TrackCommand
                     matchedDirs.UnionWith(vpkPatterns);
                 }
 
-                if (vpkPatterns.Count > 0 || filter.IsMatch(path))
+                var matching = filter.GetMatchingPatterns(path);
+                matchedPatterns.UnionWith(matching);
+
+                if (vpkPatterns.Count > 0 || matching.Count > 0)
                 {
                     fileJobs.Add(new FileJob(job, file));
                 }
+            }
+
+            // Like a typo, a file that moved to another depot, or one that an older build doesn't have yet
+            foreach (var pattern in filter.Patterns.Except(matchedPatterns))
+            {
+                Log.Warn($"\"{pattern.Source}\" in files.json matched no file in depot {job.DepotID}.");
             }
 
             foreach (var pattern in filter.VpkPatterns.Except(matchedDirs))
@@ -333,13 +343,13 @@ internal static class TrackCommand
             success &= found;
             archives.AddRange(dirArchives);
 
-            Log.Info($"[{job}] {dirFileName}: {entries.Count} entries in {dirArchives.Count} archives");
+            Log.Info($"[{job}] {dirFileName}: {entries.Count} entries in {dirArchives.Count} archives.");
         }
 
         // Like a typo, or entries that were moved or removed
         foreach (var pattern in readPatterns.Except(matchedPatterns))
         {
-            Log.Warn($"\"{pattern.Source}\" in files.json matched no VPK entries.");
+            Log.Warn($"\"{pattern.Source}\" in files.json matched no VPK entry.");
         }
 
         return await fileDownloader.DownloadPartialFiles(archives) && success;

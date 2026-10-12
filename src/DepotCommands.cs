@@ -18,7 +18,7 @@ namespace SteamFileDownloader;
 /// Options shared by the get, ls and depots commands.
 /// </summary>
 internal sealed record DepotOptions(
-    uint App,
+    uint? App,
     string? Output = null,
     string Branch = "public",
     bool Anonymous = false,
@@ -30,6 +30,7 @@ internal sealed record DepotOptions(
 /// A parsed get, ls or depots command line.
 /// </summary>
 internal sealed record DepotArguments(
+    string Command,
     DepotOptions Options,
     List<string> Targets,
     List<string> Patterns);
@@ -66,14 +67,17 @@ internal static partial class DepotCommands
         public List<string> FailedTargets = [];
 
         // The jobs of each all target, whose depots fail quietly one by one, but not all of them
-        public Dictionary<string, List<ManifestJob>> AllTargets = [];
+        public Dictionary<Target, List<ManifestJob>> AllTargets = [];
         public int Rows;
         public bool Failed;
+
+        // Something failed other than Steam giving no access
+        public bool FailedOtherwise;
 
         // Whole depots are thousands of files, which nobody asked to see one by one
         public bool HideRows;
 
-        public void Fail(string? target = null)
+        public void Fail(string? target = null, bool noAccess = false)
         {
             if (target != null)
             {
@@ -81,6 +85,7 @@ internal static partial class DepotCommands
             }
 
             Failed = true;
+            FailedOtherwise |= !noAccess;
         }
 
         public void WriteRow(ManifestJob job, params string[] columns)
@@ -94,11 +99,13 @@ internal static partial class DepotCommands
         }
     }
 
-    [GeneratedRegex(@"^(?:(?<app>\d+)/)?(?<depot>\d+|all)(?::(?<manifest>\d+|latest))?(?:@(?<branch>[^@/:]+))?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    // The manifest can follow a slash too, since app/depot/manifest is an easy mistake to make. Without an app, a slash
+    // means app/depot, so depot/manifest is never read as such
+    [GeneratedRegex(@"^(?:(?<app>\d+)/)?(?<depot>\d+|all)(?:[:/](?<manifest>\d+|latest))?(?:@(?<branch>[^@/:]+))?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex TargetRegex();
 
     /// <summary>
-    /// Parses "app [options] [targets] [-- patterns]" for get, ls and depots. Options can go anywhere before "--".
+    /// Parses "[app] [options] [targets] [-- patterns]" for get, ls and depots. Options can go anywhere before "--".
     /// Returns null after printing an error.
     /// </summary>
     public static DepotArguments? ParseArguments(string command, string[] args)
@@ -110,9 +117,25 @@ internal static partial class DepotCommands
             return null;
         }
 
-        if (parsed.Positionals.Count == 0 || !uint.TryParse(parsed.Positionals[0], NumberStyles.None, CultureInfo.InvariantCulture, out var app))
+        var targets = parsed.Positionals;
+        uint? app = null;
+
+        // The app id is optional when every target names its own app
+        if (targets.Count > 0 && uint.TryParse(targets[0], NumberStyles.None, CultureInfo.InvariantCulture, out var firstApp))
         {
-            Log.Error($"{command} needs an app id first, for example: {Help.ExeName} {command} 730 ... {Help.UsageHint(command)}");
+            app = firstApp;
+            targets = targets[1..];
+        }
+        else if (command == "depots")
+        {
+            Log.Error($"depots needs app ids, for example: {Help.ExeName} depots 730 570. {Help.UsageHint(command)}");
+            return null;
+        }
+
+        // A number first that no target uses was likely meant as a depot, which would otherwise be skipped silently
+        if (app != null && command != "depots" && targets.Count > 0 && targets.All(static t => TargetRegex().Match(t) is { Success: true } m && m.Groups["app"].Success))
+        {
+            Log.Error($"{app} is taken as the app id, but no target uses it, since a slash in a target means <app>/<depot>. If {app} is a depot, give it as <app>/{app}, and a manifest follows a colon, like <depot>:<manifest>.");
             return null;
         }
 
@@ -139,7 +162,7 @@ internal static partial class DepotCommands
             parsed.Options.ContainsKey("all-files"),
             parsed.Options.ContainsKey("json"));
 
-        return new DepotArguments(options, parsed.Positionals[1..], parsed.Patterns);
+        return new DepotArguments(command, options, targets, parsed.Patterns);
     }
 
     public static async Task<int> GetAsync(DepotArguments arguments, CancellationToken cancellationToken)
@@ -200,7 +223,7 @@ internal static partial class DepotCommands
         try
         {
             // Directories extract in parallel, the shared chunk limit keeps the total in check
-            var results = await Task.WhenAll(directories.Select(d => VpkReader.ExtractAsync(downloader, run.Jobs, d.Job, d.DirFileName, d.Package, d.Matches)));
+            var results = await downloader.RunWithProgress("directory files", directories, d => VpkReader.ExtractAsync(downloader, run.Jobs, d.Job, d.DirFileName, d.Package, d.Matches));
 
             for (var i = 0; i < directories.Count; i++)
             {
@@ -214,6 +237,12 @@ internal static partial class DepotCommands
                     run.WriteRow(directories[i].Job, path);
                     paths.Add((directories[i].Job, path));
                 }
+            }
+
+            if (directories.Count > 0)
+            {
+                Log.Info($"VPK entries: {results.Sum(static r => r.Paths.Count)} from {directories.Count} directory files.");
+                downloader.LogChunkErrors();
             }
         }
         finally
@@ -284,7 +313,7 @@ internal static partial class DepotCommands
     public static async Task<int> ListDepotsAsync(DepotArguments arguments, CancellationToken cancellationToken)
     {
         var options = arguments.Options;
-        var appIDs = new List<uint> { options.App };
+        var appIDs = new List<uint> { options.App!.Value };
 
         // The other arguments are more apps
         foreach (var arg in arguments.Targets)
@@ -438,11 +467,8 @@ internal static partial class DepotCommands
 
         foreach (var arg in arguments.Targets)
         {
-            var target = ParseTarget(arg, options);
-
-            if (target == null)
+            if (ParseTarget(arg, arguments) is not { } target)
             {
-                Log.Error($"Invalid target \"{arg}\", expected [<app>/]<depot>[:<manifest>|:latest][@<branch>] or all, like 2347771:8344780363095656278 or 570/373303@beta. Patterns go after --.");
                 return (null, ExitCodes.Failed);
             }
 
@@ -451,7 +477,7 @@ internal static partial class DepotCommands
 
         if (targets.Count == 0)
         {
-            Log.Error($"No targets, expected <app> <target>..., like: {Help.ExeName} ls 730 2347771:latest");
+            Log.Error($"No targets, expected [<app>] <target>..., like: {Help.ExeName} {arguments.Command} 730 2347771:latest");
             return (null, ExitCodes.Failed);
         }
 
@@ -492,7 +518,7 @@ internal static partial class DepotCommands
         // Depots of all targets that the account can't access are expected, errors are not
         foreach (var job in run.Jobs.Where(static j => j.Manifest == null && !(j.Optional && j.NoAccess)))
         {
-            run.Fail(job.ToString());
+            run.Fail(job.ToString(), job.NoAccess);
         }
 
         // Files come from the CDN, which does not need the Steam connection
@@ -612,8 +638,8 @@ internal static partial class DepotCommands
                 }
                 else
                 {
-                    Log.Info($"Target {target.Source}: {allJobs.Count} depots of app {target.AppID} with a manifest on \"{target.Branch}\"");
-                    run.AllTargets[target.Source] = allJobs;
+                    Log.Info($"Target {target.Source}: {allJobs.Count} depots of app {target.AppID} with a manifest on \"{target.Branch}\".");
+                    run.AllTargets[target] = allJobs;
                 }
 
                 continue;
@@ -623,7 +649,7 @@ internal static partial class DepotCommands
 
             if (depotInfo == KeyValue.Invalid)
             {
-                Log.Error($"Depot {target.DepotID} is not in app {target.AppID}, so its latest manifest is unknown. Check with \"{Help.ExeName} depots {target.AppID}\", or give <depot>:<manifest>.");
+                Log.Error($"Depot {target.DepotID} is not in app {target.AppID}, so its latest manifest is unknown. Check with \"{Help.ExeName} depots {target.AppID}\", name its app as <app>/<depot>, or give <depot>:<manifest>.");
                 run.Fail($"{target.Source} (not in app {target.AppID})");
                 continue;
             }
@@ -641,7 +667,6 @@ internal static partial class DepotCommands
                 continue;
             }
 
-            Log.Info($"Depot {target.DepotID}: latest manifest on \"{manifestBranch}\" is {latestID}");
             AddJob(target, target.DepotID.Value, latestID, manifestBranch, optional: false);
         }
     }
@@ -669,15 +694,12 @@ internal static partial class DepotCommands
                 }
 
                 var path = FileFilter.NormalizePath(file.FileName);
-                var requested = listAll;
+                var matching = filter.GetMatchingPatterns(path);
+                var requested = listAll || matching.Count > 0;
 
-                foreach (var pattern in filter.Patterns)
+                foreach (var pattern in matching)
                 {
-                    if (pattern.Regex.IsMatch(path))
-                    {
-                        run.MatchCounts[pattern.Source]++;
-                        requested = true;
-                    }
+                    run.MatchCounts[pattern.Source]++;
                 }
 
                 var vpkPatterns = filter.GetVpkPatterns(path);
@@ -686,11 +708,6 @@ internal static partial class DepotCommands
                 {
                     matches.Add(new MatchedFile(file, path, requested, vpkPatterns));
                 }
-            }
-
-            if (matches.Count == 0 && !job.Optional)
-            {
-                Log.Info($"[{job}] No files matched");
             }
 
             run.Matches[job] = matches;
@@ -781,12 +798,16 @@ internal static partial class DepotCommands
 
     private static int Finish(Run run, bool downloads)
     {
-        foreach (var (source, jobs) in run.AllTargets)
+        foreach (var (target, jobs) in run.AllTargets)
         {
             if (jobs.All(static j => j.Manifest == null))
             {
-                Log.Error($"None of the {jobs.Count} depots of {source} could be downloaded; this account likely has no access to them.");
-                run.Fail($"{source} (no access)");
+                var noAccess = jobs.All(static j => j.NoAccess);
+
+                Log.Error(noAccess
+                    ? $"None of the {jobs.Count} depots of target {target.Source} could be downloaded; this account likely has no access to them."
+                    : $"None of the {jobs.Count} depots of target {target.Source} could be downloaded; see the errors above.");
+                run.Fail(noAccess ? $"{target.Source} (no access)" : target.Source, noAccess);
             }
         }
 
@@ -800,18 +821,32 @@ internal static partial class DepotCommands
 
         // One closing line, so the outcome is clear without reading the whole log
         var skipped = run.Jobs.Count(static j => j.Optional && j.NoAccess);
+        var notes = new List<string>();
 
-        Log.Info($"Done: {run.Rows} {(run.HideRows ? "files" : "results")} from {run.Matches.Count} of {run.Jobs.Count} manifests{(skipped > 0 ? $" ({skipped} depots without access skipped)" : "")}.{(downloads ? $" Files are in {run.OutputRoot}" : "")}");
+        if (skipped > 0)
+        {
+            notes.Add($"{skipped} depots without access skipped");
+        }
+
+        // A target without a match is fine, like a build from before the file existed
+        var withoutMatches = run.Matches.Where(static m => m.Value.Count == 0 && !m.Key.Optional).Select(static m => m.Key.ToString()).ToList();
+
+        if (withoutMatches.Count > 0)
+        {
+            notes.Add($"nothing matched in {Log.JoinFirst(withoutMatches)}");
+        }
+
+        Log.Info($"Done: {run.Rows} {(run.HideRows ? "files" : "rows")} from {run.Matches.Count} of {run.Jobs.Count} manifests{(notes.Count > 0 ? $" ({string.Join("; ", notes)})" : "")}.{(downloads ? $" Files are in {run.OutputRoot}" : "")}");
 
         if (run.FailedTargets.Count > 0)
         {
-            Log.Error($"Failed targets: {string.Join(", ", run.FailedTargets)}. They have no rows on stdout because they failed, not because their files don't exist. See the errors above.");
+            Log.Error($"Failed targets: {string.Join(", ", run.FailedTargets)}. They have no rows on stdout because they failed, not because their files don't exist; see the errors above.");
 
             var usernames = AccountStore.GetUsernames();
 
             if (usernames.Count > 1)
             {
-                Log.Info($"If another account owns this content, switch with --username ({string.Join(", ", usernames)}).");
+                Log.Info($"If another saved login owns this content, pick it with --username ({string.Join(", ", usernames)}).");
             }
         }
 
@@ -823,8 +858,12 @@ internal static partial class DepotCommands
 
         if (run.Failed)
         {
-            Log.Error($"Exit code 1: some targets or files failed, so stdout is partial{(unmatched.Count > 0 ? ", and a pattern matched nothing" : "")}.");
-            return ExitCodes.Failed;
+            var (exitCode, reason) = run.FailedOtherwise
+                ? (ExitCodes.Failed, "some targets or files failed")
+                : (ExitCodes.NoDepotAccess, "this account has no access to some targets");
+
+            Log.Error($"Exit code {exitCode}: {reason}, so stdout is partial{(unmatched.Count > 0 ? ", and a pattern matched nothing" : "")}.");
+            return exitCode;
         }
 
         if (unmatched.Count > 0)
@@ -836,19 +875,32 @@ internal static partial class DepotCommands
         return ExitCodes.Ok;
     }
 
-    private static Target? ParseTarget(string arg, DepotOptions options)
+    // Returns null after printing an error
+    private static Target? ParseTarget(string arg, DepotArguments arguments)
     {
         var match = TargetRegex().Match(arg);
 
         if (!match.Success)
         {
-            return null;
+            return Invalid();
         }
 
-        var appID = options.App;
+        uint appID;
 
-        if (match.Groups["app"].Success && !uint.TryParse(match.Groups["app"].ValueSpan, NumberStyles.None, CultureInfo.InvariantCulture, out appID))
+        if (match.Groups["app"].Success)
         {
+            if (!uint.TryParse(match.Groups["app"].ValueSpan, NumberStyles.None, CultureInfo.InvariantCulture, out appID))
+            {
+                return Invalid();
+            }
+        }
+        else if (arguments.Options.App is { } app)
+        {
+            appID = app;
+        }
+        else
+        {
+            Log.Error($"Target \"{arg}\" has no app. Put the app id before the targets, like \"{Help.ExeName} {arguments.Command} 730 {arg}\", or in the target, like 730/{arg}.");
             return null;
         }
 
@@ -861,7 +913,7 @@ internal static partial class DepotCommands
         {
             if (!uint.TryParse(depot, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedDepot))
             {
-                return null;
+                return Invalid();
             }
 
             depotID = parsedDepot;
@@ -872,14 +924,20 @@ internal static partial class DepotCommands
             // A manifest id only makes sense for one depot
             if (depotID == null || !ulong.TryParse(manifest, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedManifest))
             {
-                return null;
+                return Invalid();
             }
 
             manifestID = parsedManifest;
         }
 
-        var branch = match.Groups["branch"].Success ? match.Groups["branch"].Value : options.Branch;
+        var branch = match.Groups["branch"].Success ? match.Groups["branch"].Value : arguments.Options.Branch;
 
         return new Target(arg, appID, depotID, manifestID, branch);
+
+        Target? Invalid()
+        {
+            Log.Error($"Invalid target \"{arg}\", expected [<app>/]<depot>[:<manifest>|:latest][@<branch>] or all, like 2347771:8344780363095656278 or 570/373303@beta. A manifest follows a colon, or a slash only after an app (570/373303/<manifest>). Patterns go after --.");
+            return null;
+        }
     }
 }

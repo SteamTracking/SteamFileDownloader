@@ -78,11 +78,11 @@ internal static class Secrets
             try
             {
                 File.Move(path, broken, overwrite: true);
-                outcome = $"moved it to {broken}";
+                outcome = $"so it was moved to {broken}";
             }
             catch (Exception moveError) when (moveError is IOException or UnauthorizedAccessException)
             {
-                outcome = $"and could not move it aside: {moveError.Message}";
+                outcome = $"and moving it aside failed: {moveError.Message}";
             }
 
             Log.Warn($"{path} is not valid JSON ({e.Message}), {outcome}");

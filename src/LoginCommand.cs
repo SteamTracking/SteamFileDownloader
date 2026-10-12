@@ -39,7 +39,7 @@ internal static class LoginCommand
 
         if (!await session.ConnectAsync())
         {
-            Log.Error("Could not connect to Steam. Check the network, or retry in a few minutes if Steam is down.");
+            Log.Error("Failed to connect to Steam. Check the network, or retry in a few minutes if Steam is down.");
             return ExitCodes.Failed;
         }
 

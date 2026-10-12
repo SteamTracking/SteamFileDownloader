@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 
@@ -13,15 +12,14 @@ namespace SteamFileDownloader;
 internal static class DepotDownloaderArguments
 {
     /// <summary>
-    /// Returns the command (get or ls) and its arguments, or null after printing an error.
+    /// Returns the arguments of the get or ls command it runs as, or null after printing an error.
     /// </summary>
-    public static (string Command, DepotArguments Arguments)? Parse(string[] args)
+    public static DepotArguments? Parse(string[] args)
     {
-        uint? app = null;
         var depots = new List<string>();
         var manifests = new List<string>();
         var patterns = new List<string>();
-        var options = new DepotOptions(0);
+        var options = new DepotOptions(null);
         var manifestOnly = false;
 
         for (var i = 0; i < args.Length; i++)
@@ -44,7 +42,7 @@ internal static class DepotDownloaderArguments
                         return Fail($"-app needs a numeric app id, got \"{value}\".");
                     }
 
-                    app = appID;
+                    options = options with { App = appID };
                     break;
                 case "-depot" or "-manifest" when !ulong.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out _):
                     return Fail($"{args[i]} needs a numeric id, got \"{value}\".");
@@ -55,25 +53,26 @@ internal static class DepotDownloaderArguments
                     manifests.Add(value);
                     break;
                 case "-filelist":
-                    string[] lines;
-
-                    try
+                    if (ArgumentParser.ReadLines(value, "-filelist") is not { } lines)
                     {
-                        lines = File.ReadAllLines(value);
-                    }
-                    catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-                    {
-                        return Fail($"Could not read file list \"{value}\": {e.Message}");
+                        return null;
                     }
 
-                    // DepotDownloader's file lists are exact paths and "regex:" lines. Paths with a folder match exactly here too,
-                    // but a bare name is a file in the root there, rather than in any folder
-                    patterns.AddRange(lines
+                    // DepotDownloader's file lists are "regex:" lines and exact paths from the depot root, even for a bare
+                    // name, and without globs
+                    var filePatterns = lines
                         .Select(static l => l.Trim())
                         .Where(static l => l.Length > 0)
-                        .Select(static l => l.StartsWith("regex:", StringComparison.Ordinal) || FileFilter.NormalizePath(l).Contains('/', StringComparison.Ordinal)
-                            ? l
-                            : $"regex:^{Regex.Escape(FileFilter.NormalizePath(l))}$"));
+                        .Select(static l => l.StartsWith("regex:", StringComparison.Ordinal) ? l : $"regex:^{Regex.Escape(FileFilter.NormalizePath(l))}$")
+                        .ToList();
+
+                    // A list without entries downloads nothing in DepotDownloader, rather than every file
+                    if (filePatterns.Count == 0)
+                    {
+                        return Fail($"The file list \"{value}\" has no entries.");
+                    }
+
+                    patterns.AddRange(filePatterns);
                     break;
                 case "-dir":
                     options = options with { Output = value };
@@ -111,9 +110,9 @@ internal static class DepotDownloaderArguments
             i++;
         }
 
-        if (app == null)
+        if (options.App == null)
         {
-            return Fail("DepotDownloader commands need -app <id>.");
+            return Fail("DepotDownloader commands need -app <app>.");
         }
 
         if (manifests.Count > depots.Count)
@@ -126,18 +125,13 @@ internal static class DepotDownloaderArguments
             ? ["all"]
             : depots.Select((depot, index) => index < manifests.Count ? $"{depot}:{manifests[index]}" : depot).ToList();
 
-        var command = manifestOnly ? "ls" : "get";
-
         // Without a file list DepotDownloader downloads every file
         var allFiles = !manifestOnly && patterns.Count == 0;
-        var arguments = new DepotArguments(options with { App = app.Value, AllFiles = allFiles }, targets, patterns);
 
-        Log.Info($"Equivalent command, which takes many targets in one run: {Help.ExeName} {command} {app}{(options.Output != null ? $" --output \"{options.Output}\"" : "")}{(options.Branch != "public" ? $" --branch {options.Branch}" : "")}{(allFiles ? " --all-files" : "")} {string.Join(' ', targets)}{(patterns.Count > 0 ? " -- " + string.Join(' ', patterns.Select(static p => $"'{p}'")) : "")}");
-
-        return (command, arguments);
+        return new DepotArguments(manifestOnly ? "ls" : "get", options with { AllFiles = allFiles }, targets, patterns);
     }
 
-    private static (string, DepotArguments)? Fail(string message)
+    private static DepotArguments? Fail(string message)
     {
         Log.Error($"{message} {Help.UsageHint("dd")}");
         return null;

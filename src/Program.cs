@@ -68,16 +68,14 @@ internal static class Program
         // stdout carries the results
         Log.UseStdoutForResults();
 
-        var (resolvedCommand, arguments) = command == "dd"
-            ? DepotDownloaderArguments.Parse(args) ?? default
-            : (command, DepotCommands.ParseArguments(command, args));
+        var arguments = command == "dd" ? DepotDownloaderArguments.Parse(args) : DepotCommands.ParseArguments(command, args);
 
         if (arguments == null)
         {
             return ExitCodes.Failed;
         }
 
-        return resolvedCommand switch
+        return arguments.Command switch
         {
             "get" => await DepotCommands.GetAsync(arguments, cancellationToken),
             "ls" => await DepotCommands.ListAsync(arguments, cancellationToken),
@@ -111,7 +109,7 @@ internal static class Program
 
         if (!options.TryGetValue("appid", out var appText) || !uint.TryParse(appText, NumberStyles.None, CultureInfo.InvariantCulture, out var appID) || !options.TryGetValue("output", out var output))
         {
-            Log.Error($"track needs --appid <id> and --output <dir>. {Help.UsageHint("track")}");
+            Log.Error($"track needs --appid <app> and --output <dir>. {Help.UsageHint("track")}");
             return ExitCodes.Failed;
         }
 

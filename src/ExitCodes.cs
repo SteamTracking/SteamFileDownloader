@@ -10,6 +10,9 @@ internal static class ExitCodes
     public const int NoAccess = 3;
     public const int RateLimited = 4;
 
+    // Steam gave no depot key or manifest request code for some targets, and nothing else failed
+    public const int NoDepotAccess = 5;
+
     public static int FromLogOnResult(EResult result) => result switch
     {
         EResult.OK => Ok,

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 
 namespace SteamFileDownloader;
@@ -60,13 +61,31 @@ internal static class ArgumentParser
                 Log.Error($"{arg} needs a value. {usage}");
                 return null;
             }
-            else
+            else if (!options.TryAdd(name, optionArgs[++i]))
             {
-                options[name] = optionArgs[++i];
+                // Keeping only one of them would silently drop the other
+                Log.Error($"{arg} is given more than once. {usage}");
+                return null;
             }
         }
 
         return new ParsedArguments(options, positionals, patterns);
+    }
+
+    /// <summary>
+    /// Reads the lines of a file named by an option. Returns null after printing an error.
+    /// </summary>
+    public static string[]? ReadLines(string path, string option)
+    {
+        try
+        {
+            return File.ReadAllLines(path);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            Log.Error($"Failed to read {option} \"{path}\": {e.Message}");
+            return null;
+        }
     }
 
     /// <summary>

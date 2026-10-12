@@ -10,7 +10,7 @@ Typical uses are datamining and reverse engineering Source 2 games like Counter-
 - **Many targets per run**: builds, depots and apps over one Steam login, which avoids Steam's login rate limit.
 - **Listing without downloading**: names, sizes and SHA-1 hashes, to compare builds.
 - **Partial VPK downloads**: list a VPK's entries, or extract them by downloading only the chunks they span.
-- **No repeat downloads**: files already downloaded are checked and kept, and ones identical in another build are copied.
+- **No repeat downloads**: files already downloaded are checked and kept, and ones identical in another build are copied, so running a failed command again retries only what failed.
 - **Saved logins**: log in once with a QR code from the Steam mobile app. Tokens are encrypted for the Windows user.
 - **DepotDownloader compatible**: `dd` runs an existing DepotDownloader command line.
 - **Agent friendly**: running it without arguments prints the full usage, exit codes say what went wrong, and parallel runs on one account don't disconnect each other.
@@ -57,29 +57,34 @@ Run `SteamFileDownloader` without arguments, or `SteamFileDownloader <command> -
 
 ## Targets and patterns
 
-Targets are `[<app>/]<depot>[:<manifest>|:latest][@<branch>]`, where `<depot>` can be `all` for every depot of the app. Patterns go after `--` and ignore case:
+Targets are `[<app>/]<depot>[:<manifest>|:latest][@<branch>]`, where `<depot>` can be `all` for every depot of the app, and `<app>/<depot>/<manifest>` works too. The app id before the targets can be left out when every target names its app, like `get 730/2347771 570/373303 -- resourcecompiler.dll`. `depots <app>` shows the latest manifests, and old manifest ids are in the history of a GameTracking `manifests/` folder.
+
+Patterns go after `--` and ignore case:
 
 - A path with a slash matches exactly; a bare name matches that file in any folder.
+- Globs: `*` and `?` match within a folder and `**` across folders, like `*.vpk` or `game/**/bin/**`.
 - `regex:` matches anywhere in the path, like DepotDownloader's file lists.
 - `<path>_dir.vpk:<entry pattern>` selects entries inside that VPK, with the same rules for both parts. Entries are extracted to a folder named after the directory file, like `game/core/pak01_dir/`.
 
 Files go to `<output>/<depot>/<manifest>/`, by default under `depots` in the current folder. Reuse the same output folder, since files already in it, or identical in another manifest of the depot, aren't downloaded again. Files and folders are dated to when their manifest was created, so builds sort by date.
 
+stdout has only results, as tab-separated rows (one JSON object for `depots --json`), and everything else goes to stderr. A run that fails still prints the rows of what succeeded.
+
 ## Logins and rate limits
 
-Run `login` once per account to save several. The last one is the default, and `--username <name>` picks another for content only that account owns.
+Run `login` once per account to save several. The last one is the default, `--username <name>` picks another for content only that account owns, and `--anonymous` is enough for some free apps. `login` needs a person to scan the QR code or type the password, so agents ask the user to run it.
 
 Each login uses a random login id, so parallel runs on one account don't disconnect each other. Steam rate limits logins, so put many targets in one run.
 
 ## DepotDownloader commands
 
-`dd` runs a DepotDownloader command line as `get`, or as `ls` with `-manifest-only`, and prints the equivalent command:
+`dd` runs a DepotDownloader command line as `get`, or as `ls` with `-manifest-only`:
 
 ```bash
 SteamFileDownloader dd -app 730 -depot 2347771 -manifest 8344780363095656278 -filelist files.txt
 ```
 
-It uses `-app`, `-depot`, `-manifest`, `-filelist`, `-dir`, `-branch`, `-username` (a saved login) and `-manifest-only`, and skips other flags like `-remember-password` or `-loginid`. `-os` and `-language` don't filter depots, so pick them with `-depot`. Password protected branches (`-branchpassword`) are not supported. Files keep the `<output>/<depot>/<manifest>/` layout.
+It uses `-app`, `-depot`, `-manifest`, `-filelist`, `-dir`, `-branch`, `-username` (a saved login) and `-manifest-only`, and skips other flags like `-remember-password` or `-loginid`. `-os` and `-language` don't filter depots, so pick them with `-depot`. Password protected branches (`-branchpassword`) are not supported. `-filelist` lines are exact paths from the depot root, without globs, or `regex:` patterns, like in DepotDownloader. Files keep the `<output>/<depot>/<manifest>/` layout.
 
 ## Exit codes
 
@@ -87,9 +92,10 @@ It uses `-app`, `-depot`, `-manifest`, `-filelist`, `-dir`, `-branch`, `-usernam
 |---|---|
 | `0` | Success |
 | `1` | Something failed: arguments, a manifest or a download |
-| `2` | A pattern matched nothing in any target |
-| `3` | No saved login, or Steam rejected it (run `login` again) |
-| `4` | Steam is rate limiting logins, wait about 15 minutes |
+| `2` | A pattern matched nothing in any target, and nothing failed |
+| `3` | No saved login, or Steam rejected the login: a person has to run `login`, or for `track` with `--password`, check the credentials |
+| `4` | Steam is rate limiting logins: wait about 15 minutes |
+| `5` | Only access failed: Steam gave no depot key or manifest request code for some targets. Another account may own them (`--username`), or the manifest is on another branch or in another app |
 
 ## GameTracking
 
@@ -132,8 +138,11 @@ To download an older build with the same file patterns, pass `--manifests` with 
 
 Each entry is one of:
 - **A file path**, matched exactly.
+- **A glob** for the whole path, where `*` and `?` match within a folder and `**` across folders, like `game/**/bin/win64/*.dll`.
 - **`regex:`** followed by a regex for the whole path.
 - **`<path>_dir.vpk:<entry pattern>`**, entries inside that VPK, with the same rules as the patterns of `get`. A bare `pak01_dir.vpk` matches it in any folder.
+
+Paths, globs and regexes are case-sensitive, while VPK entry patterns ignore case like the patterns of `get` and `ls`. A pattern that matches nothing is a warning, not an error.
 
 For VPK entries, the `_dir.vpk` is downloaded whole, and only the chunks of its `_NNN.vpk` archives that hold the entries are written into them, at their offsets. [VRF](https://github.com/ValveResourceFormat/ValveResourceFormat) then extracts those entries from the `_dir.vpk` as if the archives were complete:
 
@@ -150,9 +159,10 @@ This command is meant for fresh checkouts. It doesn't diff against earlier downl
 
 - **Startup**: `files.json` is loaded before connecting, so a broken one fails fast.
 - **Login**: anonymous, with the username and password, or with a saved login. Steam Guard prompts don't work headless.
-- **CDN servers**: `SteamCache` and `CDN` servers for the cell id, without proxies, China-only or app-restricted ones. A server that errors is swapped for the next one.
+- **CDN servers**: `SteamCache` and `CDN` servers for the cell id, without proxies, China-only or app-restricted ones. Requests take turns over the best 8, and a server that fails 3 requests with no success in between, refusals included, sits out for 30 seconds.
 - **Depots**: from the app's PICS info, the depots in `files.json`, or all of them with `--save-all-manifests` or VPK entries. Shared depots (`depotfromapp`) are skipped. A depot without a manifest on the branch uses `public`, but a branch the app doesn't have, or a password protected one, fails the run.
 - **Manifests**: downloaded with the depot key and a manifest request code, with retries. A 401, 403 or 404 is retried once on another server with a new request code. Failures of depots not in `files.json` are only logged.
-- **Download**: after disconnecting from Steam, files download concurrently from the CDN. Identical files are downloaded once and copied. Each chunk is checked against its SHA-1 and written into a file in the system temp folder, which is moved into place once complete.
+- **Download**: after disconnecting from Steam, files download from the CDN, 64 chunks at a time. Identical files are downloaded once and copied. Each chunk is checked against its SHA-1 and written into a file in the system temp folder, which is moved into place once complete. Failed chunks are retried on other servers for about two minutes, or until two servers refuse them, and their errors are summed up in one line.
+- **Output**: messages go to stdout, and warnings and errors to stderr, as `::warning::` and `::error::` lines when `CI` is set. Without a terminal, a `Progress:` line comes every 30 seconds.
 - **VPKs**: for VPK entries, the `_dir.vpk` is downloaded and read first, then only the chunks of its archives that hold the entries. Chunks already in the archives with the right SHA-1 are kept.
 - **Completion**: when everything succeeded, `steam_buildid.txt` gets the branch's build id and the exit code is 0, otherwise 1 (or 3 or 4 when logging in again after a lost connection failed).

@@ -26,7 +26,7 @@ internal sealed partial class FileFilter
     // "<dir.vpk>:<entry>" entries, only the needed chunks of archives are downloaded
     public List<VpkPattern> VpkPatterns { get; } = [];
 
-    public bool IsMatch(string path) => Patterns.Any(p => p.Regex.IsMatch(path));
+    public List<FilePattern> GetMatchingPatterns(string path) => [.. Patterns.Where(p => p.Regex.IsMatch(path))];
 
     // The VPK patterns whose directory file this is
     public IReadOnlyList<VpkPattern> GetVpkPatterns(string path) => VpkPatterns.Count == 0 ? [] : [.. VpkPatterns.Where(p => p.Dir.IsMatch(path))];
@@ -38,7 +38,7 @@ internal sealed partial class FileFilter
     }
 
     /// <summary>
-    /// Loads files.json, which maps depot ids to exact file names, "regex:" patterns and VPK entry patterns.
+    /// Loads files.json, which maps depot ids to case-sensitive paths, globs and "regex:" patterns, and VPK entry patterns.
     /// </summary>
     public static Dictionary<uint, FileFilter> LoadFilesJson(string path)
     {
@@ -63,10 +63,11 @@ internal sealed partial class FileFilter
                 {
                     var extensions = string.Join('|', fileMatch["vpk:".Length..].Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries));
 
-                    throw new InvalidDataException($"\"{fileMatch}\" in depot {depotID} is no longer supported. VPK entry patterns download only the chunks the entries are in: \"pak01_dir.vpk:regex:\\\\.({extensions})$\".");
+                    throw new InvalidDataException($"\"{fileMatch}\" in depot {depotID} is no longer supported. Use \"pak01_dir.vpk:regex:\\\\.({extensions})$\" instead, which downloads only the chunks the entries are in.");
                 }
 
-                var pattern = fileMatch.StartsWith(RegexPrefix, StringComparison.Ordinal) ? fileMatch[RegexPrefix.Length..] : Regex.Escape(fileMatch);
+                // Paths here are whole paths from the depot root, so globs match the whole path too
+                var pattern = fileMatch.StartsWith(RegexPrefix, StringComparison.Ordinal) ? fileMatch[RegexPrefix.Length..] : GlobToRegex(fileMatch);
 
                 filter.Patterns.Add(new FilePattern(fileMatch, new Regex($"^({pattern})$", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture)));
             }
@@ -86,6 +87,15 @@ internal sealed partial class FileFilter
 
         foreach (var pattern in patterns)
         {
+            if (pattern.StartsWith('/'))
+            {
+                Log.Warn($"Pattern \"{pattern}\" starts with /, but depot paths are relative to the depot, so it matches as \"{NormalizePath(pattern)}\".");
+            }
+            else if (WindowsPathRegex().IsMatch(NormalizePath(pattern)))
+            {
+                Log.Warn($"Pattern \"{pattern}\" is a Windows path, which no depot path matches. Git Bash turns arguments that start with / into Windows paths, so leave out the leading slash.");
+            }
+
             if (!filter.TryAddVpkPattern(pattern))
             {
                 filter.Patterns.Add(new FilePattern(pattern, ParsePattern(pattern)));
@@ -113,7 +123,10 @@ internal sealed partial class FileFilter
         return true;
     }
 
-    // Exact paths when there is a slash, otherwise a file name in any folder, or an unanchored regex like DepotDownloader's
+    [GeneratedRegex(@"^[A-Za-z]:/")]
+    private static partial Regex WindowsPathRegex();
+
+    // Exact paths or globs when there is a slash, otherwise a file name in any folder, or an unanchored regex like DepotDownloader's
     private static Regex ParsePattern(string pattern)
     {
         string regex;
@@ -125,11 +138,22 @@ internal sealed partial class FileFilter
         else
         {
             pattern = NormalizePath(pattern);
-            regex = pattern.Contains('/', StringComparison.Ordinal) ? $"^{Regex.Escape(pattern)}$" : $"(^|/){Regex.Escape(pattern)}$";
+            regex = $"{(pattern.Contains('/', StringComparison.Ordinal) ? "^" : "(^|/)")}{GlobToRegex(pattern)}$";
         }
 
         return new Regex(regex, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
+
+    [GeneratedRegex(@"(\*\*/)+")]
+    private static partial Regex RepeatedGlobstarRegex();
+
+    // "**/" is any number of folders, "**" anything, "*" anything within a folder, and "?" one character. Text without them
+    // stays literal. Repeated "**/" mean the same as one, and each would make the regex backtrack a lot more
+    private static string GlobToRegex(string glob) => Regex.Escape(RepeatedGlobstarRegex().Replace(glob, "**/"))
+        .Replace(@"\*\*/", "(.*/)?", StringComparison.Ordinal)
+        .Replace(@"\*\*", ".*", StringComparison.Ordinal)
+        .Replace(@"\*", "[^/]*", StringComparison.Ordinal)
+        .Replace(@"\?", "[^/]", StringComparison.Ordinal);
 
     public static string NormalizePath(string path) => path.Replace('\\', '/').TrimStart('/');
 }
