@@ -79,7 +79,7 @@ internal static class Program
 
         return arguments.Command switch
         {
-            "get" or "ls" => await DepotCommands.RunAsync(arguments, cancellationToken),
+            "get" or "ls" => await GetCommand.RunAsync(arguments, cancellationToken),
             "workshop get" or "workshop ls" => await WorkshopCommands.RunAsync(
                 new WorkshopArguments(arguments.Command, arguments.Options, [.. arguments.Targets.Select(static t => new WorkshopTarget(t, ulong.Parse(t, CultureInfo.InvariantCulture), null))], arguments.Patterns),
                 cancellationToken),

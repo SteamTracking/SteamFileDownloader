@@ -275,7 +275,7 @@ internal static class WorkshopCommands
     /// Runs workshop ls or get: the items' manifests go through the get and ls pipeline.
     /// </summary>
     public static Task<int> RunAsync(WorkshopArguments arguments, CancellationToken cancellationToken) =>
-        DepotCommands.RunAsync(arguments.Options, arguments.Patterns, list: arguments.Command == "workshop ls", async run =>
+        GetCommand.RunAsync(arguments.Options, arguments.Patterns, list: arguments.Command == "workshop ls", async run =>
         {
             try
             {
@@ -298,7 +298,7 @@ internal static class WorkshopCommands
     /// Adds a job per item, with collections expanded. Items of collections are like the depots of an "all" target:
     /// skipped with a note when they have no files, and the collection fails only when none of them can be downloaded.
     /// </summary>
-    internal static async Task ResolveJobsAsync(DepotCommands.Run run, IWorkshopSource source, List<WorkshopTarget> targets, CancellationToken cancellationToken)
+    internal static async Task ResolveJobsAsync(GetCommand.Run run, IWorkshopSource source, List<WorkshopTarget> targets, CancellationToken cancellationToken)
     {
         var details = await Workshop.GetDetailsAsync(source, targets.Select(static t => t.ItemID));
         var candidates = new List<Candidate>();

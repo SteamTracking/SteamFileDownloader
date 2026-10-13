@@ -39,7 +39,7 @@ public class ManifestJobTests
     public async Task ManifestAddedTwiceIsOneJobThatCountsWhenAnyTargetNamedIt()
     {
         using var temp = new TempDirectory();
-        var run = new DepotCommands.Run { Filter = FileFilter.FromPatterns([]), Session = null!, OutputRoot = temp.Path };
+        var run = new GetCommand.Run { Filter = FileFilter.FromPatterns([]), Session = null!, OutputRoot = temp.Path };
 
         var fromAll = run.AddJob(730, 731, 333, "public", optional: true, temp.Path);
         var explicitJob = run.AddJob(730, 731, 333, "public", optional: false, temp.Path);

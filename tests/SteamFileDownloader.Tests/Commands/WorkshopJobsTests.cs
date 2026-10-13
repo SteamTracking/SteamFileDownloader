@@ -5,11 +5,11 @@ namespace SteamFileDownloader.Tests;
 
 public class WorkshopJobsTests
 {
-    private static async Task<DepotCommands.Run> Resolve(FakeWorkshopSource source, params string[] items)
+    private static async Task<GetCommand.Run> Resolve(FakeWorkshopSource source, params string[] items)
     {
         // A folder that doesn't exist, so no earlier downloads are found to reuse
         var outputRoot = Path.Combine(Path.GetTempPath(), "SteamFileDownloader.Tests", Guid.NewGuid().ToString("N"));
-        var run = new DepotCommands.Run { Filter = FileFilter.FromPatterns([]), Session = null!, OutputRoot = outputRoot };
+        var run = new GetCommand.Run { Filter = FileFilter.FromPatterns([]), Session = null!, OutputRoot = outputRoot };
         var targets = items.Select(static i => WorkshopArgumentParser.ParseTarget(i)!).ToList();
 
         await WorkshopCommands.ResolveJobsAsync(run, source, targets, CancellationToken.None);
@@ -17,7 +17,7 @@ public class WorkshopJobsTests
         return run;
     }
 
-    private static ManifestJob Job(DepotCommands.Run run, ulong itemID) => run.Jobs.Single(j => j.ItemID == itemID);
+    private static ManifestJob Job(GetCommand.Run run, ulong itemID) => run.Jobs.Single(j => j.ItemID == itemID);
 
     [Test]
     public async Task ItemIsTheManifestInTheAppsWorkshopDepot()

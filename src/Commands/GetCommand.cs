@@ -13,7 +13,7 @@ namespace SteamFileDownloader;
 /// <summary>
 /// The get and ls commands: many depot manifests over one Steam login, with results on stdout.
 /// </summary>
-internal static class DepotCommands
+internal static class GetCommand
 {
     // A matching manifest file with its normalized path. Requested is false for directory VPKs only needed for their entries,
     // and VpkPatterns are the VPK patterns that read entries from it
