@@ -495,7 +495,7 @@ internal static class Help
         Log in with each account to save several. The last one is the default, and --username picks
         another for content only that account owns. Logging in again replaces the account's token and
         revokes the old one, but login --username only makes a saved login that still works the default.
-        Tokens are encrypted for the Windows user.
+        Tokens are encrypted for the Windows user, and runs renew them in their last 30 days.
 
         Saved logins: {AccountStore.FilePath}
 

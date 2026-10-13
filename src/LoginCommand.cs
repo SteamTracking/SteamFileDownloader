@@ -93,6 +93,7 @@ internal static class LoginCommand
                     }
 
                     Console.WriteLine($"{saved.Username} is already logged in, and is now the default. To log in again anyway, run \"{Help.ExeName} login remove {saved.Username}\" first.");
+                    await session.RenewSavedLoginAsync();
 
                     return ExitCodes.Ok;
                 }

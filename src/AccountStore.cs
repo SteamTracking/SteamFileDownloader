@@ -108,6 +108,18 @@ internal static partial class AccountStore
     });
 
     /// <summary>
+    /// Replaces a saved account's token with a renewed one, keeping the default. Does nothing when the account was
+    /// removed meanwhile.
+    /// </summary>
+    public static void Renew(string username, string refreshToken, string? path = null) => Update(path, stored =>
+    {
+        if (stored.Accounts.ContainsKey(username))
+        {
+            stored.Accounts[username] = Secrets.Protect(refreshToken);
+        }
+    });
+
+    /// <summary>
     /// Forgets accounts. Without a default afterwards, a single remaining account becomes the default, and with
     /// several there is none until the next login. Returns the default, or null when there is none.
     /// </summary>

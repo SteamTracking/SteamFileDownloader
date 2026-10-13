@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -236,6 +237,42 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     }
 
     /// <summary>
+    /// When logged on with a saved login in its last 30 days, asks Steam for a new token, so it keeps working without
+    /// a new QR code. A failure only warns, since the old token still works until it expires.
+    /// </summary>
+    public async Task RenewSavedLoginAsync()
+    {
+        if (Credentials is not { RefreshToken: { } refreshToken } credentials
+            || AccountStore.GetExpiry(refreshToken) is not { } expiry
+            || expiry > DateTimeOffset.UtcNow.AddDays(30)
+            || SteamClient.SteamID is not { } steamID)
+        {
+            return;
+        }
+
+        try
+        {
+            var renewed = await SteamClient.Authentication.GenerateAccessTokenForAppAsync(steamID, refreshToken, allowRenewal: true).WaitAsync(CancellationToken);
+
+            // Steam decides whether to renew
+            if (string.IsNullOrEmpty(renewed.RefreshToken))
+            {
+                return;
+            }
+
+            AccountStore.Renew(credentials.Username, renewed.RefreshToken);
+            Credentials = credentials with { RefreshToken = renewed.RefreshToken };
+
+            var newExpiry = AccountStore.GetExpiry(renewed.RefreshToken);
+            Log.Info($"Renewed the saved login for {credentials.Username}{(newExpiry is { } date ? $", it now expires {AccountStore.FormatDate(date)}" : "")}.");
+        }
+        catch (Exception e) when (IsError(e) || e is IOException or UnauthorizedAccessException)
+        {
+            Log.Warn($"Renewing the saved login for {credentials.Username} failed ({DescribeError(e)}); it still works until {AccountStore.FormatDate(expiry)}.");
+        }
+    }
+
+    /// <summary>
     /// Creates a session and logs on. Returns no session with the exit code after explaining why; missing credentials
     /// were explained when they were looked up.
     /// </summary>
@@ -254,6 +291,9 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
             session.Dispose();
             return (null, exitCode);
         }
+
+        // Not in LogOnAsync, so relogons during the run don't try again
+        await session.RenewSavedLoginAsync();
 
         return (session, ExitCodes.Ok);
     }

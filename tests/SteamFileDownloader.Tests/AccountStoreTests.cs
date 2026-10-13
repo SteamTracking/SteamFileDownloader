@@ -89,6 +89,29 @@ public class AccountStoreTests
         await Assert.That(AccountStore.LoadCredentials(username)?.IsAnonymous).IsTrue();
     }
 
+    [Test]
+    public async Task RenewingKeepsTheDefaultAndCasing()
+    {
+        using var temp = new TempDirectory();
+        var path = SaveAll(temp, "First", "b");
+
+        AccountStore.Renew("first", "renewed", path);
+
+        await Assert.That(Describe(path)).IsEqualTo("b:default:token-b,First:-:renewed");
+    }
+
+    [Test]
+    public async Task RenewingARemovedAccountDoesNothing()
+    {
+        using var temp = new TempDirectory();
+        var path = SaveAll(temp, "a");
+
+        AccountStore.Remove(["a"], path);
+        AccountStore.Renew("a", "renewed", path);
+
+        await Assert.That(Describe(path)).IsEqualTo("");
+    }
+
     private static string Jwt(string payload) =>
         $"eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.{Base64Url.EncodeToString(Encoding.UTF8.GetBytes(payload))}.c2lnbmF0dXJl";
 
