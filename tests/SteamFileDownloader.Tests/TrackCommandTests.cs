@@ -29,6 +29,7 @@ public class TrackCommandTests
     public async Task AnonymousWithAPasswordIsRejected()
     {
         await Assert.That(TrackCommand.ParseArguments(["--appid", "1", "--output", "out", "--username", "anonymous", "--password", "x"])).IsNull();
+        await Assert.That(TrackCommand.ParseArguments(["--appid", "1", "--output", "out", "--username", "Anonymous", "--password", "x"])).IsNull();
         await Assert.That(TrackCommand.ParseArguments(["--appid", "1", "--output", "out", "--username", "anonymous"])?.Username).IsEqualTo("anonymous");
     }
 
@@ -121,5 +122,33 @@ public class TrackCommandTests
         var (files, _) = TrackCommand.CollectFiles([first, second]);
 
         await Assert.That(files.Select(static f => $"{f.Job.DepotID}/{f.File.FileName}")).IsEquivalentTo(["1/a.dll", "2/b.dll"]);
+    }
+
+    [Test]
+    public async Task MissingOutputIsReported()
+    {
+        await Assert.That(TrackCommand.ParseArguments(["--appid", "730"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("track needs --output <dir>");
+    }
+
+    [Test]
+    public async Task MissingAppIdIsReported()
+    {
+        await Assert.That(TrackCommand.ParseArguments(["--output", "."])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("track needs --appid <app>");
+    }
+
+    [Test]
+    public async Task NonNumericAppIdIsReported()
+    {
+        await Assert.That(TrackCommand.ParseArguments(["--appid", "cs2", "--output", "."])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("--appid needs a numeric app id, got \"cs2\".");
+    }
+
+    [Test]
+    public async Task NumericPositionalIsPointedAtAppId()
+    {
+        await Assert.That(TrackCommand.ParseArguments(["730", "--output", "."])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("track takes the app as --appid, like: ").And.Contains("track --appid 730 --output .");
     }
 }

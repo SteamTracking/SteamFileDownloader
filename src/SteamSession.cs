@@ -20,7 +20,9 @@ internal sealed record LogOnCredentials(string Username, string? Password = null
 {
     public static LogOnCredentials Anonymous { get; } = new("anonymous");
 
-    public bool IsAnonymous => Username == "anonymous";
+    public bool IsAnonymous => IsAnonymousName(Username);
+
+    public static bool IsAnonymousName(string? username) => string.Equals(username, "anonymous", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>
@@ -240,7 +242,7 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     }
 
     /// <summary>
-    /// Logs on with --anonymous, or a saved login picked by --username.
+    /// Logs on with --anonymous, or a saved login picked by --username, which may be anonymous.
     /// </summary>
     public static Task<(SteamSession? Session, int ExitCode)> CreateLoggedOnAsync(DepotOptions options, bool takesTargets, CancellationToken cancellationToken)
     {

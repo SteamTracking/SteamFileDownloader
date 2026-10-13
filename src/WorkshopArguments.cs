@@ -45,6 +45,13 @@ internal static partial class WorkshopArgumentParser
     /// </summary>
     public static WorkshopArguments? Parse(string[] args)
     {
+        // An item given where the subcommand goes
+        if (args.Length > 0 && (ulong.TryParse(args[0], NumberStyles.None, CultureInfo.InvariantCulture, out _) || UrlRegex().IsMatch(args[0])))
+        {
+            Log.Error($"workshop needs a subcommand before the item, like: {Help.ExeName} workshop info {args[0]} or {Help.ExeName} workshop ls {args[0]}.");
+            return null;
+        }
+
         if (args.Length == 0 || !Subcommands.Contains(args[0]))
         {
             Log.Error($"{(args.Length == 0 ? "workshop needs a subcommand" : $"Unknown workshop subcommand \"{args[0]}\"")}, expected {string.Join(", ", Subcommands)}. {Help.UsageHint("workshop")}");
@@ -60,11 +67,9 @@ internal static partial class WorkshopArgumentParser
         }
 
         var usage = Help.UsageHint(command);
-        var takesPatterns = args[0] is "ls" or "get";
 
-        if (!takesPatterns && parsed.Patterns.Count > 0)
+        if (args[0] is not ("ls" or "get") && !ArgumentParser.NoPatterns(parsed, command))
         {
-            Log.Error($"{command} takes no patterns after --. {usage}");
             return null;
         }
 
@@ -98,9 +103,21 @@ internal static partial class WorkshopArgumentParser
 
         if (args[0] == "search")
         {
-            if (parsed.Positionals.Count < 2 || !uint.TryParse(parsed.Positionals[0], NumberStyles.None, CultureInfo.InvariantCulture, out var app) || app == 0)
+            if (parsed.Positionals.Count == 0)
             {
                 Log.Error($"workshop search needs an app id and text, like: {Help.ExeName} workshop search 730 de_dust2. {usage}");
+                return null;
+            }
+
+            if (!uint.TryParse(parsed.Positionals[0], NumberStyles.None, CultureInfo.InvariantCulture, out var app) || app == 0)
+            {
+                Log.Error($"The app id goes first, like: {Help.ExeName} workshop search {SearchExample(parsed.Positionals)}. {usage}");
+                return null;
+            }
+
+            if (parsed.Positionals.Count == 1)
+            {
+                Log.Error($"workshop search {app} needs text after the app id, like: {Help.ExeName} workshop search {app} de_dust2. {usage}");
                 return null;
             }
 
@@ -109,7 +126,7 @@ internal static partial class WorkshopArgumentParser
 
         if (parsed.Positionals.Count == 0)
         {
-            Log.Error($"No items, expected <item>..., like: {Help.ExeName} {command} 3070715607. {usage}");
+            Log.Error($"{command} needs item ids or URLs, like: {Help.ExeName} {command} 3070715607. \"{Help.ExeName} workshop search <app> <text>\" finds items. {usage}");
             return null;
         }
 
@@ -117,14 +134,8 @@ internal static partial class WorkshopArgumentParser
 
         foreach (var arg in parsed.Positionals)
         {
-            if (ParseTarget(arg) is not { } target)
+            if (ParseTarget(arg, itemOnly: args[0] == "info") is not { } target)
             {
-                return null;
-            }
-
-            if (args[0] == "info" && target.ManifestID != null)
-            {
-                Log.Error($"workshop info takes items without a manifest, got \"{arg}\". Its versions are listed with --history.");
                 return null;
             }
 
@@ -145,8 +156,16 @@ internal static partial class WorkshopArgumentParser
         return int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var limit) && limit > 0 ? limit : null;
     }
 
-    // Returns null after printing an error
-    internal static WorkshopTarget? ParseTarget(string arg)
+    // The search arguments with an app id typed after the text moved first, or 730 when there is none
+    private static string SearchExample(List<string> positionals)
+    {
+        var app = positionals.Find(static p => uint.TryParse(p, NumberStyles.None, CultureInfo.InvariantCulture, out var id) && id != 0);
+
+        return $"{app ?? "730"} {string.Join(' ', positionals.Where(p => p != app))}";
+    }
+
+    // Returns null after printing an error. With itemOnly, items with a manifest are rejected
+    internal static WorkshopTarget? ParseTarget(string arg, bool itemOnly = false)
     {
         var url = UrlRegex().Match(arg);
 
@@ -177,13 +196,24 @@ internal static partial class WorkshopArgumentParser
             return new WorkshopTarget(arg, itemID, null);
         }
 
-        return ulong.TryParse(manifest, NumberStyles.None, CultureInfo.InvariantCulture, out var manifestID) && manifestID != 0
-            ? new WorkshopTarget(arg, itemID, manifestID)
-            : Invalid();
+        if (!ulong.TryParse(manifest, NumberStyles.None, CultureInfo.InvariantCulture, out var manifestID) || manifestID == 0)
+        {
+            return Invalid();
+        }
+
+        if (itemOnly)
+        {
+            Log.Error($"workshop info takes items without a manifest, got \"{arg}\". Its versions are listed with --history.");
+            return null;
+        }
+
+        return new WorkshopTarget(arg, itemID, manifestID);
 
         WorkshopTarget? Invalid()
         {
-            Log.Error($"Invalid item \"{arg}\", expected <item>[:<manifest>|:latest] or an item's URL, like 3070715607 or 3070715607:<manifest>. Patterns go after --.");
+            Log.Error(itemOnly
+                ? $"Invalid item \"{arg}\", expected an item id or URL, like 3070715607. \"{Help.ExeName} workshop search <app> <text>\" finds items by text."
+                : $"Invalid item \"{arg}\", expected <item>[:<manifest>|:latest] or an item's URL, like 3070715607 or 3070715607:<manifest>. Patterns go after --.");
             return null;
         }
     }

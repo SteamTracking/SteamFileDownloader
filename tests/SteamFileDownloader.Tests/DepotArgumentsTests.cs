@@ -28,6 +28,13 @@ public class DepotArgumentsTests
     }
 
     [Test]
+    public async Task AppWithoutTargetsPointsAtTheDepotsCommand()
+    {
+        await Assert.That(DepotArgumentParser.ParseArguments("ls", ["2347771"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("ls 2347771 needs targets after the app id").And.Contains("put its app first");
+    }
+
+    [Test]
     public async Task AppIdNoTargetUsesIsRejected()
     {
         await Assert.That(DepotArgumentParser.ParseArguments("get", ["2347771", "730/2347771", "--", "a"])).IsNull();
@@ -86,10 +93,14 @@ public class DepotArgumentsTests
         await Assert.That(defaults).IsNotNull();
         await Assert.That(defaults!.Options).IsEqualTo(new DepotOptions(730));
 
-        var all = DepotArgumentParser.ParseArguments("get", ["730", "1", "--output", "out", "--branch", "beta", "--username", "me", "--anonymous", "--all-files"]);
+        var all = DepotArgumentParser.ParseArguments("get", ["730", "1", "--output", "out", "--branch", "beta", "--username", "me", "--all-files"]);
 
         await Assert.That(all).IsNotNull();
-        await Assert.That(all!.Options).IsEqualTo(new DepotOptions(730, "out", "beta", true, "me", true));
+        await Assert.That(all!.Options).IsEqualTo(new DepotOptions(730, "out", "beta", false, "me", true));
+
+        var anonymous = DepotArgumentParser.ParseArguments("get", ["730", "1", "--anonymous", "--all-files"]);
+
+        await Assert.That(anonymous!.Options.Anonymous).IsTrue();
     }
 
     [Test]
@@ -238,5 +249,47 @@ public class DepotArgumentsTests
         var target = DepotArgumentParser.ParseTarget("2347771:5", Arguments(730));
 
         await Assert.That(target).IsEqualTo(new Target("2347771:5", 730, 2347771, 5, "public"));
+    }
+
+    [Test]
+    public async Task MissingTargetsAreReportedBeforeMissingPatterns()
+    {
+        await Assert.That(DepotArgumentParser.ParseArguments("get", ["730"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("get 730 needs targets after the app id");
+    }
+
+    [Test]
+    public async Task NoAppAndNoTargetsGivesAnExample()
+    {
+        await Assert.That(DepotArgumentParser.ParseArguments("ls", [])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("ls needs an app id and targets, like: ").And.Contains("ls 730 2347771.");
+    }
+
+    [Test]
+    public async Task PatternsWithoutDoubleDashArePointedOut()
+    {
+        await Assert.That(DepotArgumentParser.ParseArguments("get", ["730", "2347771", "server.dll"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("\"server.dll\" is not a target; patterns go after --");
+    }
+
+    [Test]
+    public async Task AppIdNoTargetUsesNamesTheTarget()
+    {
+        await Assert.That(DepotArgumentParser.ParseArguments("ls", ["2347771", "730/2347773/55"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("\"730/2347773/55\" reads as app 730 and depot 2347773, so the app id 2347771 is unused");
+    }
+
+    [Test]
+    public async Task DepotsNamesTheNonNumericAppId()
+    {
+        await Assert.That(DepotArgumentParser.ParseArguments("depots", ["cs2"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("\"cs2\" is not an app id");
+    }
+
+    [Test]
+    public async Task DepotsRejectsPatterns()
+    {
+        await Assert.That(DepotArgumentParser.ParseArguments("depots", ["730", "--", "server.dll"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("depots takes no patterns after --");
     }
 }

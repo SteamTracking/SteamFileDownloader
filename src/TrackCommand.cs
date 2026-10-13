@@ -36,16 +36,39 @@ internal static class TrackCommand
     {
         var parsed = ArgumentParser.Parse("track", args);
 
-        if (parsed == null || !ArgumentParser.NoPositionals(parsed, "track"))
+        if (parsed == null)
+        {
+            return null;
+        }
+
+        if (parsed.Positionals.Count > 0 && uint.TryParse(parsed.Positionals[0], NumberStyles.None, CultureInfo.InvariantCulture, out _))
+        {
+            Log.Error($"track takes the app as --appid, like: {Help.ExeName} track --appid {parsed.Positionals[0]} --output . {Help.UsageHint("track")}");
+            return null;
+        }
+
+        if (!ArgumentParser.NoPositionals(parsed, "track"))
         {
             return null;
         }
 
         var options = parsed.Options;
 
-        if (!options.TryGetValue("appid", out var appText) || !uint.TryParse(appText, NumberStyles.None, CultureInfo.InvariantCulture, out var appID) || !options.TryGetValue("output", out var output))
+        if (!options.TryGetValue("output", out var output))
         {
-            Log.Error($"track needs --appid <app> and --output <dir>. {Help.UsageHint("track")}");
+            Log.Error($"track needs --output <dir>, like: {Help.ExeName} track --appid 730 --output . {Help.UsageHint("track")}");
+            return null;
+        }
+
+        if (!options.TryGetValue("appid", out var appText))
+        {
+            Log.Error($"track needs --appid <app>, like: {Help.ExeName} track --appid 730 --output . {Help.UsageHint("track")}");
+            return null;
+        }
+
+        if (!uint.TryParse(appText, NumberStyles.None, CultureInfo.InvariantCulture, out var appID))
+        {
+            Log.Error($"--appid needs a numeric app id, got \"{appText}\". {Help.UsageHint("track")}");
             return null;
         }
 
@@ -55,7 +78,7 @@ internal static class TrackCommand
             return null;
         }
 
-        if (options.ContainsKey("password") && options["username"] == "anonymous")
+        if (options.ContainsKey("password") && LogOnCredentials.IsAnonymousName(options["username"]))
         {
             Log.Error($"--password can't be combined with --username anonymous. {Help.UsageHint("track")}");
             return null;
@@ -394,11 +417,6 @@ internal static class TrackCommand
     // GameTracking passes a username and password, locally a saved login is enough
     private static LogOnCredentials? GetCredentials(string? username, string? password)
     {
-        if (username == "anonymous")
-        {
-            return LogOnCredentials.Anonymous;
-        }
-
         if (username != null && password != null)
         {
             return new LogOnCredentials(username, password);

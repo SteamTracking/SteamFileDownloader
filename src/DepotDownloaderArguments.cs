@@ -37,7 +37,11 @@ internal static class DepotDownloaderArguments
                 case "-manifest-only":
                     manifestOnly = true;
                     continue;
-                case "-app" or "-depot" or "-manifest" or "-pubfile" or "-ugc" or "-filelist" or "-dir" or "-branch" or "-beta" when value == null:
+                case var _ when args[i].StartsWith("--", StringComparison.Ordinal):
+                    return Fail("dd takes DepotDownloader's single-dash options, like -app 730.");
+                case var _ when !args[i].StartsWith('-'):
+                    return Fail($"Unexpected argument \"{args[i]}\"; dd takes options like -app 730.");
+                case "-app" or "-depot" or "-manifest" or "-pubfile" or "-ugc" or "-filelist" or "-dir" or "-branch" or "-beta" or "-username" or "-user" when value == null:
                     return Fail($"{args[i]} needs a value.");
                 case "-app":
                     if (!uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var appID))
@@ -47,9 +51,8 @@ internal static class DepotDownloaderArguments
 
                     options = options with { App = appID };
                     break;
-                case "-depot" when !uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out _):
-                case "-manifest" or "-pubfile" or "-ugc" when !ulong.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var id) || id == 0:
-                    return Fail($"{args[i]} needs a numeric id, got \"{value}\".");
+                case "-depot" or "-manifest" or "-pubfile" or "-ugc" when InvalidId(name, value) is { } invalid:
+                    return Fail(invalid);
                 case "-pubfile":
                     pubfile = value;
                     break;
@@ -97,7 +100,7 @@ internal static class DepotDownloaderArguments
                     break;
                 case "-branchpassword" or "-betapassword":
                     return Fail("Password protected branches are not supported.");
-                case "-username" or "-user" when value != null:
+                case "-username" or "-user":
                     options = options with { Username = value };
                     break;
                 case "-os" or "-osarch" or "-language" or "-all-platforms" or "-all-archs" or "-all-languages" or "-lowviolence":
@@ -147,7 +150,7 @@ internal static class DepotDownloaderArguments
 
         if (options.App == null)
         {
-            return Fail("DepotDownloader commands need -app <app>.");
+            return Fail($"dd needs -app <app>, like: {Help.ExeName} dd -app 730 -depot 2347771.");
         }
 
         if (manifests.Count > depots.Count)
@@ -182,5 +185,21 @@ internal static class DepotDownloaderArguments
     {
         Log.Error($"{message} {Help.UsageHint("dd")}");
         return null;
+    }
+
+    // Why the value of an id option is invalid, or null for a nonzero number that fits the id
+    private static string? InvalidId(string option, string value)
+    {
+        var id = option == "-depot"
+            ? uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var depotID) ? depotID : (ulong?)null
+            : ulong.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var otherID) ? otherID : null;
+
+        return id switch
+        {
+            null => $"{option} needs a numeric id, got \"{value}\".",
+            0 when option == "-depot" => $"-depot needs a nonzero depot id, got \"{value}\". \"{Help.ExeName} depots <app>\" lists an app's depots.",
+            0 => $"{option} needs a nonzero {(option == "-pubfile" ? "item" : "manifest")} id, got \"{value}\".",
+            _ => null,
+        };
     }
 }

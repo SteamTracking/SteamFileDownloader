@@ -117,4 +117,25 @@ public class ArgumentParserTests
         await Assert.That(ArgumentParser.CheckOutputPath(path, "--output")).IsEqualTo(accepted);
         await Assert.That(ArgumentParser.Parse("get", ["--output", path]) != null).IsEqualTo(accepted);
     }
+
+    [Test]
+    public async Task SingleDashOptionIsRejected()
+    {
+        await Assert.That(ArgumentParser.Parse("get", ["730", "-o", "out"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("Unknown option \"-o\"; options start with --");
+    }
+
+    [Test]
+    public async Task EqualsSignBetweenOptionAndValueIsExplained()
+    {
+        await Assert.That(ArgumentParser.Parse("get", ["--output=out"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("\"--output=out\": give the value after a space, like --output out.");
+    }
+
+    [Test]
+    public async Task AnonymousCannotBeCombinedWithUsername()
+    {
+        await Assert.That(ArgumentParser.Parse("get", ["--anonymous", "--username", "me"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("--anonymous and --username can't be combined.");
+    }
 }

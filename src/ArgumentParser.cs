@@ -37,6 +37,8 @@ internal static class ArgumentParser
         var positionals = new List<string>();
         var (optionArgs, patterns) = SplitPatterns(args);
         var usage = Help.UsageHint(command);
+        var known = valueOptions.Select(static o => $"--{o} <value>").Concat(flags.Select(static f => $"--{f}")).ToList();
+        var optionList = known.Count > 0 ? $"Options are {string.Join(", ", known)}." : $"{command} takes no options.";
 
         for (var i = 0; i < optionArgs.Length; i++)
         {
@@ -44,11 +46,25 @@ internal static class ArgumentParser
 
             if (!arg.StartsWith("--", StringComparison.Ordinal))
             {
+                // Options are all double-dash, so a single dash is a mistyped option rather than a target
+                if (arg.Length > 1 && arg[0] == '-')
+                {
+                    Log.Error($"Unknown option \"{arg}\"; options start with --. {optionList} {usage}");
+                    return null;
+                }
+
                 positionals.Add(arg);
                 continue;
             }
 
             var name = arg[2..];
+            var equals = name.IndexOf('=', StringComparison.Ordinal);
+
+            if (equals > 0 && valueOptions.Contains(name[..equals], StringComparer.OrdinalIgnoreCase))
+            {
+                Log.Error($"\"{arg}\": give the value after a space, like --{name[..equals]} {name[(equals + 1)..]}. {usage}");
+                return null;
+            }
 
             if (flags.Contains(name, StringComparer.OrdinalIgnoreCase))
             {
@@ -56,8 +72,7 @@ internal static class ArgumentParser
             }
             else if (!valueOptions.Contains(name, StringComparer.OrdinalIgnoreCase))
             {
-                var known = valueOptions.Select(static o => $"--{o} <value>").Concat(flags.Select(static f => $"--{f}"));
-                Log.Error($"Unknown option \"{arg}\". Options are {string.Join(", ", known)}. {usage}");
+                Log.Error($"Unknown option \"{arg}\". {optionList} {usage}");
                 return null;
             }
             else if (i + 1 >= optionArgs.Length || optionArgs[i + 1].StartsWith("--", StringComparison.Ordinal))
@@ -71,6 +86,12 @@ internal static class ArgumentParser
                 Log.Error($"{arg} is given more than once. {usage}");
                 return null;
             }
+        }
+
+        if (options.ContainsKey("anonymous") && options.ContainsKey("username"))
+        {
+            Log.Error($"--anonymous and --username can't be combined. {usage}");
+            return null;
         }
 
         if (options.TryGetValue("output", out var output) && !CheckOutputPath(output, "--output"))
@@ -111,6 +132,20 @@ internal static class ArgumentParser
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Rejects patterns, for commands that take none. Returns false after printing an error.
+    /// </summary>
+    public static bool NoPatterns(ParsedArguments parsed, string command)
+    {
+        if (parsed.Patterns.Count == 0)
+        {
+            return true;
+        }
+
+        Log.Error($"{command} takes no patterns after --. {Help.UsageHint(command)}");
+        return false;
     }
 
     /// <summary>

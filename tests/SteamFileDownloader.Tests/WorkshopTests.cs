@@ -304,4 +304,55 @@ public class WorkshopTests
     {
         await Assert.That(Workshop.CleanText(text)).IsEqualTo(expected);
     }
+
+    [Test]
+    public async Task SearchWithoutTextNamesTheApp()
+    {
+        await Assert.That(WorkshopArgumentParser.Parse(["search", "730"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("workshop search 730 needs text after the app id");
+    }
+
+    [Test]
+    public async Task SearchWithTextFirstSaysTheAppGoesFirst()
+    {
+        await Assert.That(WorkshopArgumentParser.Parse(["search", "de", "dust2"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("The app id goes first, like: ").And.Contains("workshop search 730 de dust2.");
+    }
+
+    [Test]
+    public async Task SearchWithTheAppAfterTheTextMovesItFirst()
+    {
+        await Assert.That(WorkshopArgumentParser.Parse(["search", "de_dust2", "570"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("workshop search 570 de_dust2.");
+    }
+
+    [Test]
+    public async Task MissingItemsPointAtSearch()
+    {
+        await Assert.That(WorkshopArgumentParser.Parse(["info"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("workshop info needs item ids or URLs");
+    }
+
+    [Test]
+    [Arguments("3070715607")]
+    [Arguments("https://steamcommunity.com/sharedfiles/filedetails/?id=3070715607")]
+    public async Task ItemInPlaceOfTheSubcommandIsExplained(string item)
+    {
+        await Assert.That(WorkshopArgumentParser.Parse([item])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("workshop needs a subcommand before the item");
+    }
+
+    [Test]
+    public async Task InvalidItemOfInfoPointsAtSearch()
+    {
+        await Assert.That(WorkshopArgumentParser.Parse(["info", "abc"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("Invalid item \"abc\", expected an item id or URL");
+    }
+
+    [Test]
+    public async Task InvalidItemOfLsKeepsTheTargetSyntax()
+    {
+        await Assert.That(WorkshopArgumentParser.Parse(["ls", "abc"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("expected <item>[:<manifest>|:latest]");
+    }
 }

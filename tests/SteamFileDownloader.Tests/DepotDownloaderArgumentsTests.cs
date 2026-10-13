@@ -252,4 +252,64 @@ public class DepotDownloaderArgumentsTests
             await Assert.That(result!.Options.Output).IsEqualTo(dir);
         }
     }
+
+    [Test]
+    public async Task DoubleDashArgumentIsRejected()
+    {
+        await Assert.That(DepotDownloaderArguments.Parse(["--app", "730"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("dd takes DepotDownloader's single-dash options, like -app 730.");
+    }
+
+    [Test]
+    public async Task BareValueIsRejected()
+    {
+        await Assert.That(DepotDownloaderArguments.Parse(["730"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("Unexpected argument \"730\"; dd takes options like -app 730.");
+    }
+
+    [Test]
+    [Arguments("-username")]
+    [Arguments("-user")]
+    public async Task UsernameNeedsAValue(string option)
+    {
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", option])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains($"{option} needs a value.");
+    }
+
+    [Test]
+    public async Task ZeroDepotIsRejected()
+    {
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-depot", "0"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("-depot needs a nonzero depot id, got \"0\".");
+    }
+
+    [Test]
+    public async Task NonNumericDepotIsRejected()
+    {
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-depot", "abc"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("-depot needs a numeric id, got \"abc\".");
+    }
+
+    [Test]
+    public async Task ZeroManifestIsRejected()
+    {
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-depot", "1", "-manifest", "0"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("-manifest needs a nonzero manifest id, got \"0\".");
+    }
+
+    [Test]
+    [Arguments("-ugc", "manifest")]
+    [Arguments("-pubfile", "item")]
+    public async Task ZeroWorkshopIdIsRejected(string option, string kind)
+    {
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", option, "0"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains($"{option} needs a nonzero {kind} id, got \"0\".");
+    }
+
+    [Test]
+    public async Task MissingAppShowsAnExample()
+    {
+        await Assert.That(DepotDownloaderArguments.Parse(["-depot", "1"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("dd needs -app <app>, like: ").And.Contains("dd -app 730 -depot 2347771.");
+    }
 }

@@ -31,11 +31,16 @@ internal static partial class AccountStore
     public static string FilePath { get; } = Path.Combine(Secrets.AppDataFolder, "account.json");
 
     /// <summary>
-    /// Credentials of the given saved login, or the last one logged in when no username is given.
-    /// Returns null with an error explaining how to log in.
+    /// Credentials of the given saved login, or the last one logged in when no username is given, or anonymous ones
+    /// for the username anonymous. Returns null with an error explaining how to log in.
     /// </summary>
     public static LogOnCredentials? LoadCredentials(string? username)
     {
+        if (LogOnCredentials.IsAnonymousName(username))
+        {
+            return LogOnCredentials.Anonymous;
+        }
+
         var stored = Read();
 
         if ((username ?? stored.LastUsername) is not { } wanted || !stored.Accounts.TryGetValue(wanted, out var refreshToken))

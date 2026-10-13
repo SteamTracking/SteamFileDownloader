@@ -79,14 +79,30 @@ internal static partial class DepotArgumentParser
         }
         else if (command == "depots")
         {
-            Log.Error($"depots needs app ids, for example: {Help.ExeName} depots 730 570. {Help.UsageHint(command)}");
+            Log.Error(targets.Count > 0
+                ? $"\"{targets[0]}\" is not an app id; depots takes app ids, like: {Help.ExeName} depots 730 570. The app id is the number in the app's store page URL. {Help.UsageHint(command)}"
+                : $"depots needs app ids, for example: {Help.ExeName} depots 730 570. {Help.UsageHint(command)}");
+            return null;
+        }
+
+        if (command == "depots" && !ArgumentParser.NoPatterns(parsed, command))
+        {
             return null;
         }
 
         // A number first that no target uses was likely meant as a depot, which would otherwise be skipped silently
         if (app != null && command != "depots" && targets.Count > 0 && targets.All(static t => TargetRegex().Match(t) is { Success: true } m && m.Groups["app"].Success))
         {
-            Log.Error($"{app} is taken as the app id, but no target uses it, since a slash in a target means <app>/<depot>. If {app} is a depot, give it as <app>/{app}, and a manifest follows a colon, like <depot>:<manifest>.");
+            var slashTarget = TargetRegex().Match(targets[0]);
+            var targetApp = slashTarget.Groups["app"].Value;
+            var targetDepot = slashTarget.Groups["depot"].Value;
+
+            // Manifest ids don't fit in 32 bits like depot ids do, so a larger one after the slash is a manifest
+            var manifestHint = uint.TryParse(targetDepot, NumberStyles.None, CultureInfo.InvariantCulture, out _)
+                ? "A manifest follows a colon, like <depot>:<manifest>."
+                : $"A manifest follows a colon, like: {Help.ExeName} {command} {app} {targetApp}:{targetDepot}.";
+
+            Log.Error($"\"{targets[0]}\" reads as app {targetApp} and depot {targetDepot}, so the app id {app} is unused. {manifestHint} If {app} is a depot, give it as <app>/{app}.");
             return null;
         }
 
@@ -96,15 +112,24 @@ internal static partial class DepotArgumentParser
             return null;
         }
 
-        if (!ArgumentParser.CheckPatterns(parsed, get: command == "get",
-            $"get needs patterns after --, like: {Help.ExeName} get 730 2347771:latest -- server.dll. Use ls to see a manifest's files, or --all-files to download every file."))
+        if (command is "get" or "ls" && targets.Count == 0)
         {
+            Log.Error(app == null
+                ? $"{command} needs an app id and targets, like: {Help.ExeName} {(command == "get" ? "get 730 2347771 -- server.dll" : "ls 730 2347771")}. \"{Help.ExeName} depots <app>\" lists an app's depots."
+                : $"{command} {app} needs targets after the app id, like: {Help.ExeName} {command} {app} all. If {app} is a depot, put its app first, like: {Help.ExeName} {command} 730 {app}. \"{Help.ExeName} depots <app>\" lists an app's depots.");
             return null;
         }
 
-        if (command is "get" or "ls" && targets.Count == 0)
+        // Without patterns, a target that isn't one is most likely a file name that belongs after --
+        if (command is "get" or "ls" && parsed.Patterns.Count == 0 && targets.FirstOrDefault(static t => !TargetRegex().IsMatch(t)) is { } misplaced)
         {
-            Log.Error($"No targets, expected [<app>] <target>..., like: {Help.ExeName} {command} 730 2347771:latest");
+            Log.Error($"\"{misplaced}\" is not a target; patterns go after --, like: {Help.ExeName} {command} 730 2347771 -- {misplaced}.");
+            return null;
+        }
+
+        if (!ArgumentParser.CheckPatterns(parsed, get: command == "get",
+            $"get needs patterns after --, like: {Help.ExeName} get 730 2347771:latest -- server.dll. Use ls to see a manifest's files, or --all-files to download every file."))
+        {
             return null;
         }
 
