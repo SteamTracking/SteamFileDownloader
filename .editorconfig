@@ -18,7 +18,7 @@ dotnet_diagnostic.IDE0046.severity = none # if to conditional expression
 dotnet_diagnostic.IDE0058.severity = none # unused expression values
 dotnet_diagnostic.IDE0061.severity = none # expression bodied local functions
 dotnet_diagnostic.IDE0072.severity = none # populate switch, EResult has hundreds of values
-dotnet_diagnostic.IDE0130.severity = none # sources are in src/ without a matching namespace
+dotnet_diagnostic.IDE0130.severity = none # one namespace across the source folders
 dotnet_diagnostic.IDE0210.severity = none # top-level statements
 
 # Not applicable to a command line tool
