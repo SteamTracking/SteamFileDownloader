@@ -486,12 +486,15 @@ internal static class Help
         Usage:
           {ExeName} login                      show a QR code to scan in the Steam mobile app
           {ExeName} login --username <name>    use a password and Steam Guard code instead
+          {ExeName} login list                 list saved logins (see login list --help)
+          {ExeName} login remove <name>...     revoke saved logins and forget them (see login remove --help)
 
         Scan the QR code in the Steam mobile app (Steam Guard tab, scan icon). A person has to scan it
         or type the password, so an agent should ask the user to run this.
 
         Log in with each account to save several. The last one is the default, and --username picks
-        another for content only that account owns. Logging in again replaces the account's token.
+        another for content only that account owns. Logging in again replaces the account's token and
+        revokes the old one, but login --username only makes a saved login that still works the default.
         Tokens are encrypted for the Windows user.
 
         Saved logins: {AccountStore.FilePath}
@@ -501,6 +504,43 @@ internal static class Help
           1  something failed, see stderr
           3  Steam rejected the login
           4  Steam is rate limiting logins: wait about 15 minutes
+        """;
+
+    public static string LoginList => $"""
+        Lists saved logins, without logging in to Steam.
+
+        Usage:
+          {ExeName} login list
+        stdout has a tab-separated row per saved login: username  default or -  expiry date (UTC)
+
+        stderr has a warning for each expired login, and each one another Windows user or machine saved;
+        log in again with those accounts.
+
+        Saved logins: {AccountStore.FilePath}
+
+        Exit codes:
+          0  success
+          1  something failed, see stderr
+        """;
+
+    public static string LoginRemove => $"""
+        Revokes saved logins with Steam, so copies of their tokens stop working too, and forgets them.
+
+        Usage:
+          {ExeName} login remove <name>...
+
+        Examples:
+          {ExeName} login remove myaccount
+
+        Revoking takes only the token, so it needs no Steam login. When it fails, the login is still removed
+        here, with a warning that a copy of the token keeps working until it expires. Removing the default
+        leaves a single remaining login as the default; with several left, log in again to pick one.
+
+        Saved logins: {AccountStore.FilePath}
+
+        Exit codes:
+          0  success, also when revoking failed
+          1  a name has no saved login, or the saved logins can't be written
         """;
 
     /// <summary>
@@ -519,8 +559,8 @@ internal static class Help
         var commandHelp = GetCommandHelp(name);
         var bare = args.Length == name.Count(static c => c == ' ') + 1;
 
-        // A bare command, or --help anywhere before the patterns. A bare login is the QR code login, not a request for help
-        if ((commandHelp != null && bare && name != "login") || Array.Exists(ArgumentParser.SplitPatterns(args).Options, IsHelp))
+        // A bare command, or --help anywhere before the patterns. Commands that need no arguments run bare instead
+        if ((commandHelp != null && bare && name is not ("login" or "login list")) || Array.Exists(ArgumentParser.SplitPatterns(args).Options, IsHelp))
         {
             Console.WriteLine(commandHelp ?? Overview);
             return true;
@@ -536,6 +576,8 @@ internal static class Help
         "depots" => Depots,
         "dd" => DepotDownloader,
         "login" => Login,
+        "login list" => LoginList,
+        "login remove" => LoginRemove,
         "track" => Track,
         "workshop" => Workshop,
         "workshop info" => WorkshopInfo,
@@ -546,8 +588,7 @@ internal static class Help
     };
 
     // The first argument, or the first two for a subcommand
-    private static string GetCommandName(string[] args) =>
-        args.Length > 1 && ArgumentParser.CommandOptions.ContainsKey($"{args[0]} {args[1]}") ? $"{args[0]} {args[1]}" : args[0];
+    private static string GetCommandName(string[] args) => ArgumentParser.GetCommandName(args[0], args[1..]);
 
     private static bool IsHelp(string arg) => arg is "-h" or "--help" or "-?" or "/?";
 }

@@ -199,7 +199,24 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     {
         Credentials = credentials;
 
-        var result = await LogOnWithRetriesAsync(credentials);
+        return ExplainLogOnResult(await LogOnWithRetriesAsync(credentials), credentials);
+    }
+
+    /// <summary>
+    /// Connects and logs on with retries like <see cref="LogOnAsync"/>, but leaves explaining a failure to the caller.
+    /// </summary>
+    public Task<EResult> TryLogOnAsync(LogOnCredentials credentials)
+    {
+        Credentials = credentials;
+
+        return LogOnWithRetriesAsync(credentials);
+    }
+
+    /// <summary>
+    /// The exit code of a logon result, after explaining a failure.
+    /// </summary>
+    public int ExplainLogOnResult(EResult result, LogOnCredentials credentials)
+    {
         var exitCode = ExitCodes.FromLogOnResult(result);
 
         if (exitCode == ExitCodes.RateLimited)

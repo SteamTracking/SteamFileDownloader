@@ -58,6 +58,13 @@ public class ArgumentParserTests
     }
 
     [Test]
+    public async Task UnknownOptionOfACommandWithoutOptionsSaysSo()
+    {
+        await Assert.That(ArgumentParser.Parse("login list", ["--username", "x"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("login list takes no options.");
+    }
+
+    [Test]
     public async Task ValueOptionWithoutValueIsRejected()
     {
         await Assert.That(ArgumentParser.Parse("get", ["730", "--output"])).IsNull();

@@ -52,13 +52,14 @@ internal static partial class WorkshopArgumentParser
             return null;
         }
 
-        if (args.Length == 0 || !Subcommands.Contains(args[0]))
+        var command = ArgumentParser.GetCommandName("workshop", args);
+
+        if (command == "workshop")
         {
             Log.Error($"{(args.Length == 0 ? "workshop needs a subcommand" : $"Unknown workshop subcommand \"{args[0]}\"")}, expected {string.Join(", ", Subcommands)}. {Help.UsageHint("workshop")}");
             return null;
         }
 
-        var command = $"workshop {args[0]}";
         var parsed = ArgumentParser.Parse(command, args[1..]);
 
         if (parsed == null)

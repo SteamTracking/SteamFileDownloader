@@ -15,6 +15,8 @@ public partial class HelpTests
         "ls" => Help.Ls,
         "depots" => Help.Depots,
         "login" => Help.Login,
+        "login list" => Help.LoginList,
+        "login remove" => Help.LoginRemove,
         "track" => Help.Track,
         "workshop info" => Help.WorkshopInfo,
         "workshop search" => Help.WorkshopSearch,
@@ -95,6 +97,8 @@ public partial class HelpTests
 
     [Test]
     [Arguments("login")]
+    [Arguments("login list")]
+    [Arguments("login remove someone")]
     [Arguments("--version")]
     [Arguments("get 730 1 -- --help")]
     [Arguments("get 730 1 -- server.dll")]
@@ -112,6 +116,9 @@ public partial class HelpTests
     [Arguments("get 1 -h", "get")]
     [Arguments("ls 730 /? 1", "ls")]
     [Arguments("help get", "get")]
+    [Arguments("login list --help", "login list")]
+    [Arguments("login remove", "login remove")]
+    [Arguments("help login remove", "login remove")]
     [Arguments("--help track", "track")]
     [Arguments("help", "overview")]
     [Arguments("bogus --help", "overview")]
@@ -153,6 +160,8 @@ public partial class HelpTests
             ["depots"] = Help.Depots,
             ["dd"] = Help.DepotDownloader,
             ["login"] = Help.Login,
+            ["login list"] = Help.LoginList,
+            ["login remove"] = Help.LoginRemove,
             ["track"] = Help.Track,
             ["workshop"] = Help.Workshop,
             ["workshop info"] = Help.WorkshopInfo,

@@ -23,12 +23,20 @@ internal static class ArgumentParser
         ["ls"] = (["output", "branch", "username"], ["anonymous"]),
         ["depots"] = (["branch", "username"], ["anonymous", "json"]),
         ["login"] = (["username"], []),
+        ["login list"] = ([], []),
+        ["login remove"] = ([], []),
         ["track"] = (["appid", "output", "username", "password", "branch", "manifests"], ["save-manifest", "save-all-manifests"]),
         ["workshop info"] = (["limit", "username"], ["history", "json", "anonymous"]),
         ["workshop search"] = (["limit", "username"], ["anonymous"]),
         ["workshop ls"] = (["output", "username"], ["anonymous"]),
         ["workshop get"] = (["output", "username"], ["anonymous", "all-files"]),
     };
+
+    /// <summary>
+    /// The command with its subcommand, like "workshop info", when the arguments after it start with one.
+    /// </summary>
+    public static string GetCommandName(string command, string[] args) =>
+        args.Length > 0 && CommandOptions.ContainsKey($"{command} {args[0]}") ? $"{command} {args[0]}" : command;
 
     public static ParsedArguments? Parse(string command, string[] args)
     {

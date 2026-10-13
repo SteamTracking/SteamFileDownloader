@@ -96,6 +96,8 @@ SteamFileDownloader workshop get 3070715607 3070715607:5179645662803098587 -- "*
 
 Run `login` once per account to save several. The last one is the default, `--username <name>` picks another for content only that account owns, and `--anonymous` is enough for some free apps. `login` needs a person to scan the QR code or type the password, so agents ask the user to run it.
 
+Logging in again with the QR code replaces the account's token and revokes the old one; `login --username` only makes a saved login that still works the default. `login list` prints each saved login, whether it is the default, and when its token expires. `login remove <name>...` revokes the tokens with Steam, so copies of them stop working too, and forgets them.
+
 Each login uses a random login id, so parallel runs on one account don't disconnect each other. Steam rate limits logins, so put many targets in one run.
 
 ## DepotDownloader commands

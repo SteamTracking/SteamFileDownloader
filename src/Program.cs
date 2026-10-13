@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
@@ -110,14 +109,19 @@ internal static class Program
 
     private static async Task<int> RunLoginAsync(string[] args, CancellationToken cancellationToken)
     {
-        var parsed = ArgumentParser.Parse("login", args);
+        var arguments = LoginCommand.ParseArguments(args);
 
-        if (parsed == null || !ArgumentParser.NoPositionals(parsed, "login"))
+        if (arguments == null)
         {
             return ExitCodes.Failed;
         }
 
-        return await LoginCommand.RunAsync(parsed.Options.GetValueOrDefault("username"), cancellationToken);
+        return arguments.Command switch
+        {
+            "login list" => LoginCommand.List(),
+            "login remove" => await LoginCommand.RemoveAsync(arguments.Usernames, cancellationToken),
+            _ => await LoginCommand.RunAsync(arguments.Username, cancellationToken),
+        };
     }
 
     // The GameTracking command, which downloads the files in files.json

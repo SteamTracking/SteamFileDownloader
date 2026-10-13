@@ -1,13 +1,18 @@
 using System;
+using System.Buffers.Text;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace SteamFileDownloader;
 
 internal sealed record SavedAccount(string Username, string RefreshToken);
+
+internal sealed record SavedLogin(string Username, bool IsDefault, string? RefreshToken);
 
 /// <summary>
 /// Keeps refresh tokens from the login command so later runs never prompt. Tokens are DPAPI encrypted on Windows.
@@ -47,6 +52,13 @@ internal static partial class AccountStore
         {
             var saved = stored.Accounts.Keys;
 
+            // Left after removing the default of several accounts
+            if (username == null && saved.Count > 0)
+            {
+                Log.Error($"No default login (saved: {string.Join(", ", saved)}). Pick one with --username, or run \"{Help.ExeName} login\" to log in again and make that account the default.");
+                return null;
+            }
+
             Log.Error($"No saved login{(username == null ? "" : $" for {username}")}{(saved.Count > 0 ? $" (saved: {string.Join(", ", saved)})" : "")}. Run \"{Help.ExeName} login\"{(username == null ? "" : " with that account")} to save one; it needs a person to scan a QR code.");
             return null;
         }
@@ -54,38 +66,119 @@ internal static partial class AccountStore
         // Use the casing it was saved with
         var savedUsername = stored.Accounts.Keys.First(k => k.Equals(wanted, StringComparison.OrdinalIgnoreCase));
 
-        try
+        if (TryUnprotect(refreshToken) is not { } decrypted)
         {
-            return new LogOnCredentials(savedUsername, RefreshToken: Secrets.Unprotect(refreshToken));
-        }
-        catch (CryptographicException)
-        {
-            Log.Error($"The saved login for {savedUsername} can't be decrypted, since another Windows user or machine saved it. Run \"{Help.ExeName} login\" again with that account; it needs a person to scan a QR code.");
+            Log.Error($"{CantDecrypt(savedUsername)} Run \"{Help.ExeName} login\" again with that account; it needs a person to scan a QR code.");
             return null;
         }
+
+        return new LogOnCredentials(savedUsername, RefreshToken: decrypted);
     }
 
     public static IReadOnlyCollection<string> GetUsernames() => Read().Accounts.Keys;
 
     /// <summary>
+    /// Every saved login, the default first, then by username. RefreshToken is null when it can't be decrypted.
+    /// </summary>
+    public static List<SavedLogin> GetLogins(string? path = null)
+    {
+        var stored = Read(path);
+
+        return [.. stored.Accounts
+            .Select(a => new SavedLogin(a.Key, a.Key.Equals(stored.LastUsername, StringComparison.OrdinalIgnoreCase), TryUnprotect(a.Value)))
+            .OrderByDescending(static l => l.IsDefault)
+            .ThenBy(static l => l.Username, StringComparer.OrdinalIgnoreCase)];
+    }
+
+    /// <summary>
+    /// The saved login of a username, in any casing, or null when there is none.
+    /// </summary>
+    public static SavedLogin? Find(string username, string? path = null) =>
+        GetLogins(path).Find(l => l.Username.Equals(username, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
     /// Adds or replaces an account and makes it the default.
     /// </summary>
-    public static void Save(SavedAccount account)
+    public static void Save(SavedAccount account, string? path = null) => Update(path, stored =>
     {
-        var stored = Read();
-
         // Steam usernames ignore case, so replace an existing entry with different casing
         stored.Accounts.Remove(account.Username);
         stored.Accounts[account.Username] = Secrets.Protect(account.RefreshToken);
         stored.LastUsername = account.Username;
+    });
 
-        Secrets.WriteJson(FilePath, stored, AccountJsonContext.Default.StoredAccounts);
+    /// <summary>
+    /// Forgets accounts. Without a default afterwards, a single remaining account becomes the default, and with
+    /// several there is none until the next login. Returns the default, or null when there is none.
+    /// </summary>
+    public static string? Remove(IEnumerable<string> usernames, string? path = null) => Update(path, stored =>
+    {
+        foreach (var username in usernames)
+        {
+            stored.Accounts.Remove(username);
+        }
+
+        if (stored.LastUsername == null || !stored.Accounts.ContainsKey(stored.LastUsername))
+        {
+            stored.LastUsername = stored.Accounts.Count == 1 ? stored.Accounts.Keys.First() : null;
+        }
+    }).LastUsername;
+
+    public static string CantDecrypt(string username) => $"The saved login for {username} can't be decrypted, since another Windows user or machine saved it.";
+
+    public static string FormatDate(DateTimeOffset date) => date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// When a refresh token stops working, read from the JWT's exp claim. Null when the token isn't a readable JWT.
+    /// </summary>
+    public static DateTimeOffset? GetExpiry(string refreshToken)
+    {
+        var parts = refreshToken.Split('.');
+
+        if (parts.Length != 3)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var payload = JsonDocument.Parse(Base64Url.DecodeFromChars(parts[1]));
+
+            return payload.RootElement.TryGetProperty("exp", out var exp) && exp.TryGetInt64(out var seconds)
+                ? DateTimeOffset.FromUnixTimeSeconds(seconds)
+                : null;
+        }
+        catch (Exception e) when (e is FormatException or JsonException or ArgumentOutOfRangeException or InvalidOperationException)
+        {
+            return null;
+        }
     }
 
-    private static StoredAccounts Read()
+    private static string? TryUnprotect(string stored)
     {
-        var stored = Secrets.ReadJson(FilePath, AccountJsonContext.Default.StoredAccounts);
+        try
+        {
+            return Secrets.Unprotect(stored);
+        }
+        catch (CryptographicException)
+        {
+            return null;
+        }
+    }
+
+    private static StoredAccounts Read(string? path = null)
+    {
+        var stored = Secrets.ReadJson(path ?? FilePath, AccountJsonContext.Default.StoredAccounts);
         stored.Accounts = new Dictionary<string, string>(stored.Accounts, StringComparer.OrdinalIgnoreCase);
+
+        return stored;
+    }
+
+    private static StoredAccounts Update(string? path, Action<StoredAccounts> change)
+    {
+        var stored = Read(path);
+        change(stored);
+        Secrets.WriteJson(path ?? FilePath, stored, AccountJsonContext.Default.StoredAccounts);
 
         return stored;
     }
