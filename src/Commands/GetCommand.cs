@@ -61,6 +61,7 @@ internal static class GetCommand
 
             var job = ManifestJob.Create(appID, depotID, manifestID, branch, parentFolder);
             job.Optional = optional;
+            job.ManifestFile = ManifestCache.GetPath(Path.Combine(OutputRoot, "manifests"), depotID, manifestID);
 
             JobsByManifest[(depotID, manifestID)] = job;
             Jobs.Add(job);

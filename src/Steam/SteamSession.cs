@@ -641,7 +641,21 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
             Report(job, $"[{job}] {keyProblem}", job.NoAccess);
         }
 
-        if (job.DepotKey == null || !await EnsureCdnServersAsync())
+        if (job.DepotKey == null)
+        {
+            return;
+        }
+
+        // A saved manifest needs no request code, which Steam may refuse for old manifests. Reading and parsing it
+        // blocks, so it is off the loop's threads
+        if (await Task.Run(() => ManifestCache.Load(job)) is { } saved)
+        {
+            job.Manifest = saved;
+            Log.Info($"[{job}] Read the saved manifest: {saved.CreationTime:yyyy-MM-dd HH:mm:ss}, {saved.Files?.Count} files.");
+            return;
+        }
+
+        if (!await EnsureCdnServersAsync())
         {
             return;
         }
@@ -665,7 +679,8 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
 
             try
             {
-                job.Manifest = await CdnClient.DownloadManifestAsync(job.DepotID, job.ManifestID, manifestRequestCode, server, job.DepotKey);
+                // Without the key the file names stay encrypted, so the saved manifest keeps them as served
+                job.Manifest = await CdnClient.DownloadManifestAsync(job.DepotID, job.ManifestID, manifestRequestCode, server);
             }
             catch (Exception e) when (IsError(e))
             {
@@ -706,6 +721,17 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
             }
 
             CdnServers.MarkGood(server);
+
+            // Writing it blocks, so it is off the loop's threads
+            await Task.Run(() => ManifestCache.Save(job));
+
+            if (job.Manifest.FilenamesEncrypted && !job.Manifest.DecryptFilenames(job.DepotKey))
+            {
+                job.Manifest = null;
+                Report(job, $"[{job}] Failed to decrypt the file names of the manifest with the depot key.");
+                return;
+            }
+
             Log.Info($"[{job}] Downloaded the manifest: {job.Manifest.CreationTime:yyyy-MM-dd HH:mm:ss}, {job.Manifest.Files?.Count} files.");
 
             return;

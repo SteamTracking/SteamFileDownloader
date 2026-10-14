@@ -19,6 +19,9 @@ internal sealed class ManifestJob
     public byte[]? DepotKey;
     public DepotManifest? Manifest;
 
+    // Where the manifest is saved once downloaded, and read from instead of downloading it again
+    public string? ManifestFile;
+
     // The files.json filter of the track command; depots without one are only fetched for their manifest
     public FileFilter? Filter;
 

@@ -66,6 +66,8 @@ Patterns go after `--` and ignore case:
 
 Files go to `<output>/<depot>/<manifest>/`, by default under `depots` in the current folder. Reuse the same output folder, since files already in it, or identical in another manifest of the depot, aren't downloaded again. Files and folders are dated to when their manifest was created, so builds sort by date.
 
+Manifests are saved to `<output>/manifests/<depot>_<manifest>.manifest` and read from there instead of downloading them again. That is the naming of Steam's `depotcache` folder, whose files can be copied in too.
+
 stdout has only results, as tab-separated rows, and everything else goes to stderr. A run that fails still prints the rows of what succeeded.
 
 ## Workshop items

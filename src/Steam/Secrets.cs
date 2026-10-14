@@ -96,7 +96,25 @@ internal static class Secrets
     /// It is written to a temporary file, flushed to disk and moved over the target, so neither readers
     /// in other processes nor a crash or power loss can leave a partial or empty file behind.
     /// </summary>
-    public static void WriteJson<T>(string path, T value, JsonTypeInfo<T> typeInfo)
+    public static void WriteJson<T>(string path, T value, JsonTypeInfo<T> typeInfo) => WriteFileAtomic(path, temp =>
+    {
+        using var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None);
+
+        // Restricted before anything is written, so secrets are never readable by others
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(stream.SafeFileHandle, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+
+        JsonSerializer.Serialize(stream, value, typeInfo);
+        stream.Flush(flushToDisk: true);
+    });
+
+    /// <summary>
+    /// Writes a file whole with writeTemp, which writes the temporary file it is given, before it replaces the file at
+    /// path, so readers in other processes never see a partial file. The temporary file is deleted when anything fails.
+    /// </summary>
+    public static void WriteFileAtomic(string path, Action<string> writeTemp)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 
@@ -104,18 +122,7 @@ internal static class Secrets
 
         try
         {
-            using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
-            {
-                // Restricted before anything is written, so secrets are never readable by others
-                if (!OperatingSystem.IsWindows())
-                {
-                    File.SetUnixFileMode(stream.SafeFileHandle, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-                }
-
-                JsonSerializer.Serialize(stream, value, typeInfo);
-                stream.Flush(flushToDisk: true);
-            }
-
+            writeTemp(temp);
             File.Move(temp, path, overwrite: true);
         }
         finally

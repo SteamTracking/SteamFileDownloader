@@ -112,7 +112,8 @@ internal static class Help
         {Options}
 
         Files go to <output>/<depot>/<manifest>/<path>. Files already there, or identical in another manifest
-        of the depot, aren't downloaded again, so reuse the same output folder.
+        of the depot, aren't downloaded again, so reuse the same output folder. Manifests are saved to
+        <output>/manifests/<depot>_<manifest>.manifest, where Steam's depotcache files can be copied too.
 
         Saved logins: {AccountStore.FilePath}
         """;
