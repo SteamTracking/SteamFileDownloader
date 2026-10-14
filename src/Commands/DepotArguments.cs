@@ -104,6 +104,12 @@ internal static partial class DepotArgumentParser
             return null;
         }
 
+        // ls with patterns searches every depot of the app when no target narrows it
+        if (command == "ls" && app != null && targets.Count == 0 && parsed.Patterns.Count > 0)
+        {
+            targets = ["all"];
+        }
+
         if (command is "get" or "ls" && targets.Count == 0)
         {
             Log.Error(app == null

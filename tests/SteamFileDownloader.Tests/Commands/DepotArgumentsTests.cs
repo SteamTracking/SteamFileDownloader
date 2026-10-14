@@ -35,6 +35,16 @@ public class DepotArgumentsTests
     }
 
     [Test]
+    public async Task LsWithPatternsAndNoTargetsSearchesEveryDepot()
+    {
+        var result = DepotArgumentParser.ParseArguments("ls", ["730", "--", "settings.txt"]);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.Options.App).IsEqualTo(730u);
+        await Assert.That(string.Join(",", result.Targets)).IsEqualTo("all");
+    }
+
+    [Test]
     public async Task AppIdNoTargetUsesIsRejected()
     {
         await Assert.That(DepotArgumentParser.ParseArguments("get", ["2347771", "730/2347771", "--", "a"])).IsNull();
@@ -120,7 +130,7 @@ public class DepotArgumentsTests
     [Arguments("ls 730 1", true)]
     [Arguments("ls 730 1 -- a", true)]
     [Arguments("ls 730", false)]
-    [Arguments("ls 730 -- a", false)]
+    [Arguments("ls 730 -- a", true)]
     [Arguments("ls --anonymous", false)]
     [Arguments("depots 730", true)]
     public async Task GetNeedsPatternsOrAllFilesAndGetAndLsNeedTargets(string commandLine, bool accepted)

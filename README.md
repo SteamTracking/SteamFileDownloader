@@ -44,8 +44,8 @@ SteamFileDownloader get 730 2347770 -- "game/core/pak01_dir.vpk:scripts/scenes.v
 # A whole depot, or every depot the account can access with "all" (can be tens of gigabytes)
 SteamFileDownloader get 730 2347771:8344780363095656278 --all-files
 
-# Find which depot has a file
-SteamFileDownloader ls 570 all -- hammer.dll
+# Find which depot has a file: without targets, ls searches every depot of the app
+SteamFileDownloader ls 570 -- hammer.dll
 
 # A manifest that is only on a beta branch
 SteamFileDownloader get 730 2347779:2591545799285498410@animgraph_2_beta -- resourcecompiler.dll

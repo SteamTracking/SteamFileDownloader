@@ -18,6 +18,7 @@ public class ExitCodeTests
         var (code, message) = ExitCodes.GetExitCode(failed, failedOtherwise, sessionFailureExitCode, unmatched);
 
         await Assert.That(code).IsEqualTo(expected);
-        await Assert.That(message == null).IsEqualTo(expected == ExitCodes.Ok);
+        // Unmatched patterns are reported where they're found
+        await Assert.That(message == null).IsEqualTo(expected is ExitCodes.Ok or ExitCodes.NoMatch);
     }
 }

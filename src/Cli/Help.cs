@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.IO;
 using System.Linq;
 
@@ -13,6 +14,18 @@ internal static class Help
     public static string ExeName { get; } = Path.GetFileNameWithoutExtension(Environment.ProcessPath) ?? nameof(SteamFileDownloader);
 
     public static string UsageHint(string command = "") => $"Run \"{ExeName}{(command.Length > 0 ? " " + command : "")} --help\" for usage.";
+
+    // Characters that bash, zsh or PowerShell expand, split on or treat as syntax
+    private static readonly SearchValues<char> ShellSpecialChars = SearchValues.Create(" *?()|$&;<>'\"\\[]{}!#~`");
+
+    /// <summary>
+    /// An argument for a suggested command line, quoted when the shell would expand or split it. Single quotes keep
+    /// everything literal in bash, zsh and PowerShell, so double quotes are only for an argument with a single quote.
+    /// </summary>
+    public static string QuoteArgument(string argument) =>
+        argument.AsSpan().IndexOfAny(ShellSpecialChars) < 0 ? argument
+        : argument.Contains('\'', StringComparison.Ordinal) ? $"\"{argument}\""
+        : $"'{argument}'";
 
     private static string Targets => """
         Targets (all in one run: each run logs in to Steam once, and Steam rate limits logins):
@@ -94,6 +107,7 @@ internal static class Help
           {ExeName} login                                     save a Steam login (QR code)
           {ExeName} depots <app>...                           list apps' depots and branches
           {ExeName} ls [<app>] <target>... [-- <pattern>...]  list files without downloading
+          {ExeName} ls <app> -- <pattern>...                  find which depot of the app has a file
           {ExeName} get [<app>] <target>... -- <pattern>...   download matching files (or --all-files)
           {ExeName} workshop <subcommand> ...                 workshop items: info, search, ls and get
           {ExeName} dd <DepotDownloader arguments>            run a DepotDownloader command line
@@ -174,12 +188,13 @@ internal static class Help
 
         Usage:
           {ExeName} ls [<app>] <target>... [-- <pattern>...]
+          {ExeName} ls <app> -- <pattern>...     every depot of the app, to find which one has a file
         stdout has a tab-separated row per file: depot  manifest  sha1  size  path. Without patterns, every file.
         {ExitCodesSummary()}
 
         Examples:
           {ExeName} ls 730 2347779:4784444484596788209 2347779:2356538687884552308 -- source1import.exe
-          {ExeName} ls 570 all -- hammer.dll
+          {ExeName} ls 570 -- hammer.dll
           {ExeName} ls 730 2347770 -- "game/core/pak01_dir.vpk:regex:^scripts/"
 
         {Targets}

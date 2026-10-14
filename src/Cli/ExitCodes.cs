@@ -45,7 +45,7 @@ internal static class ExitCodes
         return exitCode;
     }
 
-    // The exit code of a finished get or ls run and the error that explains it, or null for success
+    // The exit code of a finished get or ls run and the error that explains it, or null when there is nothing to add
     public static (int ExitCode, string? Message) GetExitCode(bool failed, bool failedOtherwise, int sessionFailureExitCode, bool unmatched)
     {
         if (failed && sessionFailureExitCode != Failed)
@@ -62,9 +62,10 @@ internal static class ExitCodes
             return (exitCode, $"Exit code {exitCode}: {reason}, so stdout is partial{(unmatched ? ", and a pattern matched nothing" : "")}.");
         }
 
+        // The unmatched patterns were already reported
         if (unmatched)
         {
-            return (NoMatch, "Exit code 2: a pattern matched nothing.");
+            return (NoMatch, null);
         }
 
         return (Ok, null);

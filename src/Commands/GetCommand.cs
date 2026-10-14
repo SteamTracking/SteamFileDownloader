@@ -45,6 +45,9 @@ internal static class GetCommand
         // Whole depots are thousands of files, which nobody asked to see one by one
         public bool HideRows;
 
+        // How to search every depot of the targets' app, up to the patterns, suggested when a pattern matched nothing
+        public string? SearchAllHint;
+
         private readonly Dictionary<(uint DepotID, ulong ManifestID), ManifestJob> JobsByManifest = [];
 
         /// <summary>
@@ -281,6 +284,8 @@ internal static class GetCommand
     {
         var appInfos = await run.Session.GetAppInfosAsync([.. targets.Where(static t => t.DepotID == null || t.ManifestID == null).Select(static t => t.AppID).Distinct()]);
 
+        run.SearchAllHint = GetSearchAllHint(targets);
+
         // Earlier runs of other manifests of the depot may already have identical files
         ManifestJob AddJob(Target target, uint depotID, ulong manifestID, string branch, bool optional) =>
             run.AddJob(target.AppID, depotID, manifestID, branch, optional, Path.Combine(run.OutputRoot, depotID.ToString(CultureInfo.InvariantCulture)));
@@ -368,6 +373,24 @@ internal static class GetCommand
 
             AddJob(target, target.DepotID.Value, latestID, manifestBranch, optional: false);
         }
+    }
+
+    /// <summary>
+    /// How to search every depot of the targets' app, up to the patterns, or null when they are of several apps or
+    /// already cover every depot. That search only has the latest manifests, on the targets' branch when they share one.
+    /// </summary>
+    internal static string? GetSearchAllHint(IReadOnlyList<Target> targets)
+    {
+        if (targets.Count == 0 || targets.Select(static t => t.AppID).Distinct().Count() > 1 || targets.Any(static t => t.DepotID == null))
+        {
+            return null;
+        }
+
+        var what = targets.Any(static t => t.ManifestID != null) ? "every depot's latest manifest" : "every depot";
+        var branches = targets.Select(static t => t.Branch).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var branch = branches.Count == 1 && !branches[0].Equals("public", StringComparison.OrdinalIgnoreCase) ? $" --branch {Help.QuoteArgument(branches[0])}" : "";
+
+        return $"To search {what}: {Help.ExeName} ls {targets[0].AppID}{branch} --";
     }
 
     // One pass over every manifest: which files match, and how often each pattern matched
@@ -470,11 +493,15 @@ internal static class GetCommand
 
         // Patterns can only be judged against manifests that were downloaded
         var unmatched = run.Matches.Count > 0 ? run.MatchCounts.Where(static p => p.Value == 0).Select(static p => p.Key).ToList() : [];
-        var skipped = run.Jobs.Where(static j => j.Optional && j.NoAccess).Select(static j => j.ItemID != null ? j.ToString() : j.DepotID.ToString(CultureInfo.InvariantCulture)).ToList();
+        var skippedJobs = run.Jobs.Where(static j => j.Optional && j.NoAccess).ToList();
+        var skipped = skippedJobs.Select(static j => j.ItemID != null ? j.ToString() : j.DepotID.ToString(CultureInfo.InvariantCulture)).ToList();
 
-        foreach (var pattern in unmatched)
+        if (unmatched.Count > 0)
         {
-            Log.Error($"Pattern \"{pattern}\" matched nothing in any target. Check the path with ls; the file may be in another depot.");
+            var skippedWhat = skippedJobs.Any(static j => j.ItemID != null) ? "item" : "depot";
+            var where = run.Matches.Count == 1 ? run.Matches.Keys.First().ToString() : null;
+
+            Log.Error(DescribeUnmatched(unmatched, run.Matches.Count, where, skipped.Count, skippedWhat, run.SearchAllHint));
         }
 
         // One closing line, so the outcome is clear without reading the whole log
@@ -485,10 +512,10 @@ internal static class GetCommand
             notes.Add($"skipped without access: {Log.JoinFirst(skipped)}");
         }
 
-        // A target without a match is fine, like a build from before the file existed
+        // A target without a match is fine, like a build from before the file existed. When no pattern matched at all, the error says so already
         var withoutMatches = run.Matches.Where(static m => m.Value.Count == 0 && !m.Key.Optional).Select(static m => m.Key.ToString()).ToList();
 
-        if (withoutMatches.Count > 0)
+        if (withoutMatches.Count > 0 && (unmatched.Count == 0 || unmatched.Count < run.MatchCounts.Count))
         {
             notes.Add($"nothing matched in {Log.JoinFirst(withoutMatches)}");
         }
@@ -508,5 +535,18 @@ internal static class GetCommand
         }
 
         return ExitCodes.Report(run.Failed, run.FailedOtherwise, run.Session.FailureExitCode, unmatched.Count > 0);
+    }
+
+    /// <summary>
+    /// The error for patterns that matched nothing: in which manifests, how many were skipped without access, and how to
+    /// search every depot. onlyManifest names the one manifest searched, if there was one, and skippedNoun is depot or item.
+    /// </summary>
+    internal static string DescribeUnmatched(IReadOnlyList<string> unmatched, int manifests, string? onlyManifest, int skipped, string skippedNoun, string? searchAllHint)
+    {
+        var where = onlyManifest ?? $"any of the {manifests} manifests";
+        var skippedNote = skipped > 0 ? $" ({Log.Plural(skipped, skippedNoun)} skipped without access)" : "";
+        var hint = searchAllHint != null ? $" {searchAllHint} {string.Join(' ', unmatched.Select(Help.QuoteArgument))}" : "";
+
+        return $"{string.Join(", ", unmatched.Select(static p => $"\"{p}\""))} matched nothing in {where}{skippedNote}.{hint}";
     }
 }
