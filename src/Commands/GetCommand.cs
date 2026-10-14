@@ -139,6 +139,12 @@ internal static class GetCommand
             return ExitCodes.ForUsageError(command);
         }
 
+        // Before logging in, since a settings file that can't be read fails the run
+        if (Settings.GetOutputRoot(options.Output) is not { } outputRoot)
+        {
+            return ExitCodes.Failed;
+        }
+
         var (loggedOn, logOnExitCode) = await SteamSession.CreateLoggedOnAsync(options, takesTargets: true, cancellationToken);
 
         if (loggedOn == null)
@@ -152,7 +158,7 @@ internal static class GetCommand
         {
             Filter = filter,
             Session = session,
-            OutputRoot = Path.GetFullPath(options.Output ?? "depots"),
+            OutputRoot = outputRoot,
             HideRows = options.AllFiles,
         };
 

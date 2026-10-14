@@ -12,7 +12,7 @@ internal static class Program
 {
     public static string Version { get; } = (Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "").Split('+')[0];
 
-    private static readonly string[] Commands = ["get", "ls", "depots", "workshop", "dd", "login", "track"];
+    private static readonly string[] Commands = ["get", "ls", "depots", "workshop", "dd", "login", "config", "track"];
 
     private static async Task<int> Main(string[] args)
     {
@@ -45,6 +45,7 @@ internal static class Program
             {
                 "get" or "ls" or "depots" or "dd" => await RunDepotCommandAsync(args[0], args[1..], cts.Token),
                 "login" => await RunLoginAsync(args[1..], cts.Token),
+                "config" => RunConfig(args[1..]),
                 "track" => await RunTrackAsync(args[1..], cts.Token),
                 "workshop" => await RunWorkshopAsync(args[1..], cts.Token),
                 _ => UnknownCommand(args[0]),
@@ -124,6 +125,16 @@ internal static class Program
             "login remove" => await LoginCommand.RemoveAsync(arguments.Usernames, cancellationToken),
             _ => await LoginCommand.RunAsync(arguments.Username, cancellationToken),
         };
+    }
+
+    private static int RunConfig(string[] args)
+    {
+        // stdout carries the saved value
+        Log.UseStdoutForResults();
+
+        var arguments = ConfigCommand.ParseArguments(args);
+
+        return arguments == null ? ExitCodes.ForUsageError("config") : ConfigCommand.Run(arguments);
     }
 
     // The GameTracking command, which downloads the files in files.json

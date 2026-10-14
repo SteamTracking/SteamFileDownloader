@@ -70,7 +70,7 @@ internal static class Help
 
     private static string Options => $"""
         Options (anywhere before --):
-          --output <dir>      root output folder (default: depots in the current folder)
+          --output <dir>      root output folder (default: as saved with config output, else depots in the current folder)
           --branch <name>     branch for targets without @<branch> (default: public)
         {LoginOptions}
         """;
@@ -125,6 +125,7 @@ internal static class Help
           {ExeName} get [<app>] <target>... -- <pattern>...   download matching files (or --all-files)
           {ExeName} workshop <subcommand> ...                 workshop items: info, search, ls and get
           {ExeName} dd <DepotDownloader arguments>            run a DepotDownloader command line
+          {ExeName} config output <dir>                       save the default output folder
           {ExeName} track <app> --output <dir>                download the files in ./files.json (GameTracking)
           {ExeName} <command> --help                          details and examples
           {ExeName} --version                                 print the version
@@ -311,6 +312,7 @@ internal static class Help
         lines are exact paths from the depot root, without globs, or "regex:" patterns, like in DepotDownloader,
         and a list without entries is an error. Without -filelist every file is downloaded, like get --all-files,
         so stdout has no rows. -dir sets the root output folder; files still go to <dir>/<depot>/<manifest>/<path>.
+        Without -dir, it is the folder saved with config output, else depots in the current folder.
         Other flags, like -remember-password or -loginid, are skipped: a random login id is used.
         -os and -language don't filter depots, so pick them with -depot.
         Password protected branches (-branchpassword) are not supported.
@@ -392,7 +394,7 @@ internal static class Help
         {Patterns}
 
         Options:
-          --output <dir>      root output folder for _dir.vpk files (default: depots in the current folder)
+          --output <dir>      root output folder for _dir.vpk files (default: as saved with config output, else depots)
         {LoginOptions}
 
         Output:
@@ -427,7 +429,7 @@ internal static class Help
         {Patterns}
 
         Options:
-          --output <dir>      root output folder (default: depots in the current folder)
+          --output <dir>      root output folder (default: as saved with config output, else depots in the current folder)
         {LoginOptions}
 
         Output:
@@ -571,6 +573,31 @@ internal static class Help
         {UsageErrorExitCode}
         """;
 
+    public static string Config => $"""
+        Saves settings for later runs.
+
+        Usage:
+          {ExeName} config output <dir>      save the root output folder of get, ls, workshop ls and get, and dd
+          {ExeName} config output            print the saved folder, or say that there is none
+          {ExeName} config output --reset    forget the saved folder
+
+        Examples:
+          {ExeName} config output D:/SteamDepots
+
+        Options:
+          --reset             forget the saved folder, so files go to depots in the current folder again
+
+        The folder is saved as an absolute path. An output folder given on the command line overrides it, and
+        without either, files go to depots in the current folder. track always needs its own output folder.
+
+        Settings: {Settings.FilePath}
+
+        Exit codes:
+          0  success
+          1  the settings can't be read or written, see stderr
+        {UsageErrorExitCode}
+        """;
+
     /// <summary>
     /// Prints help instead of running when there are no arguments, or --help is asked for, and the usage of a command
     /// run without the arguments it needs. Returns the exit code when handled, or null to run the command.
@@ -589,14 +616,14 @@ internal static class Help
         var bare = args.Length == name.Count(static c => c == ' ') + 1;
 
         // --help anywhere before the patterns, and commands that only group subcommands
-        if (Array.Exists(ArgumentParser.SplitPatterns(args).Options, IsHelp) || (bare && name is "workshop" or "login remove"))
+        if (Array.Exists(ArgumentParser.SplitPatterns(args).Options, IsHelp) || (bare && name is "workshop" or "config" or "login remove"))
         {
             Console.WriteLine(commandHelp ?? Overview);
             return ExitCodes.Ok;
         }
 
         // Commands that need no arguments run bare instead
-        if (commandHelp == null || !bare || name is "login" or "login list")
+        if (commandHelp == null || !bare || name is "login" or "login list" or "config output")
         {
             return null;
         }
@@ -657,6 +684,7 @@ internal static class Help
         "workshop search" => WorkshopSearch,
         "workshop ls" => WorkshopLs,
         "workshop get" => WorkshopGet,
+        "config" or "config output" => Config,
         _ => null,
     };
 

@@ -30,6 +30,7 @@ internal static class ArgumentParser
         ["workshop search"] = (["limit", "username"], ["anonymous"]),
         ["workshop ls"] = (["output", "username"], ["anonymous"]),
         ["workshop get"] = (["output", "username"], ["anonymous", "all-files"]),
+        ["config output"] = ([], ["reset"]),
     };
 
     /// <summary>

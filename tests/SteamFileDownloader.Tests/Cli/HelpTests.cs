@@ -22,6 +22,7 @@ public partial class HelpTests
         "workshop search" => Help.WorkshopSearch,
         "workshop ls" => Help.WorkshopLs,
         "workshop get" => Help.WorkshopGet,
+        "config output" => Help.Config,
         _ => throw new ArgumentOutOfRangeException(nameof(command)),
     };
 
@@ -100,6 +101,8 @@ public partial class HelpTests
     [Arguments("login list")]
     [Arguments("login remove someone")]
     [Arguments("--version")]
+    [Arguments("config output")]
+    [Arguments("config output D:/SteamDepots")]
     [Arguments("get 730 1 -- --help")]
     [Arguments("get 730 1 -- server.dll")]
     [Arguments("workshop info 3070715607")]
@@ -179,6 +182,10 @@ public partial class HelpTests
     [Arguments("workshop", "workshop")]
     [Arguments("workshop bogus --help", "workshop")]
     [Arguments("workshop info 3070715607 --help", "workshop info")]
+    [Arguments("config", "config output")]
+    [Arguments("config --help", "config output")]
+    [Arguments("config output --help", "config output")]
+    [Arguments("help config", "config output")]
     [Arguments("help workshop info", "workshop info")]
     [Arguments("workshop get 3070715607 -h -- a.vpk", "workshop get")]
     public async Task HelpRequestPrintsTheHelpOfItsCommand(string commandLine, string command)
@@ -221,6 +228,7 @@ public partial class HelpTests
             ["workshop search"] = Help.WorkshopSearch,
             ["workshop ls"] = Help.WorkshopLs,
             ["workshop get"] = Help.WorkshopGet,
+            ["config"] = Help.Config,
         };
 
         var tooLong = new List<string>();
