@@ -183,6 +183,7 @@ internal static class TrackCommand
 
         // Find the tracked depots (in files.json), or all of them when saving all manifests or for VPK entries
         var manifestJobs = new List<ManifestJob>();
+        var publicFallbacks = new PublicFallbacks();
 
         foreach (var (depotID, depot) in AppInfo.GetDepots(depots))
         {
@@ -204,10 +205,9 @@ internal static class TrackCommand
                 continue;
             }
 
-            var manifestBranch = branch;
-            var manifestID = manifestIds != null
-                ? manifestIds.GetValueOrDefault(depotID)
-                : AppInfo.GetManifestIdForBranch(depot, ref manifestBranch);
+            var (manifestID, manifestBranch) = manifestIds != null
+                ? (manifestIds.GetValueOrDefault(depotID), branch)
+                : publicFallbacks.Resolve(appID, depotID, depot, branch);
 
             // Depots like DLC and other branches often have no manifest, which is only a problem for tracked ones
             if (manifestID == 0)
@@ -232,6 +232,8 @@ internal static class TrackCommand
                 FailureIsFine = filter == null,
             });
         }
+
+        publicFallbacks.Log();
 
         foreach (var depotID in filters.Keys.Where(id => depots[id.ToString(CultureInfo.InvariantCulture)] == KeyValue.Invalid))
         {

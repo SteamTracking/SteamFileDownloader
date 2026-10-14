@@ -128,10 +128,7 @@ public class AppInfoTests
     [Test]
     public async Task ManifestIdOfBranchIsReadFromGid()
     {
-        var branch = "beta";
-
-        await Assert.That(AppInfo.GetManifestIdForBranch(DepotOf(228990), ref branch)).IsEqualTo(222ul);
-        await Assert.That(branch).IsEqualTo("beta");
+        await Assert.That(AppInfo.GetManifestIdForBranch(DepotOf(228990), "beta")).IsEqualTo((222ul, false));
     }
 
     [Test]
@@ -146,18 +143,34 @@ public class AppInfoTests
                 }
             }
             """);
-        var branch = "public";
-
-        await Assert.That(AppInfo.GetManifestIdForBranch(depot, ref branch)).IsEqualTo(444ul);
+        await Assert.That(AppInfo.GetManifestIdForBranch(depot, "public")).IsEqualTo((444ul, false));
     }
 
     [Test]
     public async Task MissingBranchManifestFallsBackToPublic()
     {
-        var branch = "beta";
+        await Assert.That(AppInfo.GetManifestIdForBranch(DepotOf(228991), "beta")).IsEqualTo((333ul, true));
+    }
 
-        await Assert.That(AppInfo.GetManifestIdForBranch(DepotOf(228991), ref branch)).IsEqualTo(333ul);
-        await Assert.That(branch).IsEqualTo("public");
+    [Test]
+    public async Task FallbacksToPublicAreLoggedOncePerAppAndBranch()
+    {
+        var fallbacks = new PublicFallbacks();
+
+        await Assert.That(fallbacks.Resolve(730, 228990, DepotOf(228990), "beta")).IsEqualTo((222ul, "beta"));
+        await Assert.That(fallbacks.Resolve(730, 228991, DepotOf(228991), "beta")).IsEqualTo((333ul, "public"));
+        await Assert.That(fallbacks.Resolve(730, 228991, DepotOf(228991), "beta")).IsEqualTo((333ul, "public"));
+        await Assert.That(fallbacks.Resolve(570, 228991, DepotOf(228991), "other")).IsEqualTo((333ul, "public"));
+
+        fallbacks.Log();
+
+        // Messages go to stdout or stderr, depending on whether another test made stdout carry results
+        var output = TestContext.Current!.GetStandardOutput() + TestContext.Current.GetErrorOutput();
+
+        await Assert.That(output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)).IsEquivalentTo([
+            "Depot 228991 of app 730 has no manifest on \"beta\", using the one on \"public\".",
+            "Depot 228991 of app 570 has no manifest on \"other\", using the one on \"public\".",
+        ], TUnit.Assertions.Enums.CollectionOrdering.Matching);
     }
 
     [Test]
@@ -169,18 +182,13 @@ public class AppInfoTests
                 "manifests" { }
             }
             """);
-        var branch = "beta";
-
-        await Assert.That(AppInfo.GetManifestIdForBranch(depot, ref branch)).IsEqualTo(0ul);
-        await Assert.That(branch).IsEqualTo("beta");
+        await Assert.That(AppInfo.GetManifestIdForBranch(depot, "beta")).IsEqualTo((0ul, false));
     }
 
     [Test]
     public async Task DepotWithoutManifestsSectionReturnsZero()
     {
-        var branch = "public";
-
-        await Assert.That(AppInfo.GetManifestIdForBranch(Parse("\"1\" { \"config\" { } }"), ref branch)).IsEqualTo(0ul);
+        await Assert.That(AppInfo.GetManifestIdForBranch(Parse("\"1\" { \"config\" { } }"), "public")).IsEqualTo((0ul, false));
     }
 
     [Test]
@@ -196,9 +204,6 @@ public class AppInfoTests
                 }
             }
             """);
-        var branch = "beta";
-
-        await Assert.That(AppInfo.GetManifestIdForBranch(depot, ref branch)).IsEqualTo(555ul);
-        await Assert.That(branch).IsEqualTo("public");
+        await Assert.That(AppInfo.GetManifestIdForBranch(depot, "beta")).IsEqualTo((555ul, true));
     }
 }

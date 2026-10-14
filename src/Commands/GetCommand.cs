@@ -286,6 +286,9 @@ internal static class GetCommand
 
         run.SearchAllHint = GetSearchAllHint(targets);
 
+        // Depots without a manifest on the target's branch that use public's instead, said once per app and branch
+        var publicFallbacks = new PublicFallbacks();
+
         // Earlier runs of other manifests of the depot may already have identical files
         ManifestJob AddJob(Target target, uint depotID, ulong manifestID, string branch, bool optional) =>
             run.AddJob(target.AppID, depotID, manifestID, branch, optional, Path.Combine(run.OutputRoot, depotID.ToString(CultureInfo.InvariantCulture)));
@@ -319,8 +322,7 @@ internal static class GetCommand
                 // Shared depots are listed under the app that owns them
                 foreach (var (depotID, depot) in AppInfo.GetDepots(depots).Where(static d => d.Depot["depotfromapp"].Value == null))
                 {
-                    var branch = target.Branch;
-                    var manifestID = AppInfo.GetManifestIdForBranch(depot, ref branch);
+                    var (manifestID, branch) = publicFallbacks.Resolve(target.AppID, depotID, depot, target.Branch);
 
                     if (manifestID != 0)
                     {
@@ -358,8 +360,7 @@ internal static class GetCommand
                 continue;
             }
 
-            var manifestBranch = target.Branch;
-            var latestID = AppInfo.GetManifestIdForBranch(depotInfo, ref manifestBranch);
+            var (latestID, manifestBranch) = publicFallbacks.Resolve(target.AppID, target.DepotID.Value, depotInfo, target.Branch);
 
             if (latestID == 0)
             {
@@ -373,6 +374,8 @@ internal static class GetCommand
 
             AddJob(target, target.DepotID.Value, latestID, manifestBranch, optional: false);
         }
+
+        publicFallbacks.Log();
     }
 
     /// <summary>

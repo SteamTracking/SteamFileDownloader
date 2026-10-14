@@ -83,6 +83,7 @@ public class DepotsCommandTests
 
         await Assert.That(rows["101"][4]).Contains("public");
         await Assert.That(rows["100"][4]).DoesNotContain("public");
+        await Assert.That(TestContext.Current!.GetErrorOutput()).DoesNotContain("using the one on");
     }
 
     [Test]

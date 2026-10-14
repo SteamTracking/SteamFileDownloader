@@ -82,8 +82,7 @@ internal static class DepotsCommand
 
         foreach (var (depotID, depot) in AppInfo.GetDepots(depots))
         {
-            var branch = branchName;
-            var manifestID = AppInfo.GetManifestIdForBranch(depot, ref branch);
+            var (manifestID, fromPublic) = AppInfo.GetManifestIdForBranch(depot, branchName);
             var config = depot["config"];
             var notes = new List<string>();
 
@@ -94,9 +93,9 @@ internal static class DepotsCommand
             AddNote("dlc", depot["dlcappid"].Value);
             AddNote("shared from app", depot["depotfromapp"].Value);
 
-            if (branch != branchName)
+            if (fromPublic)
             {
-                notes.Add($"manifest from {branch}");
+                notes.Add("manifest from public");
             }
 
             Log.Result($"{appID}\t{depotID}\t{(manifestID == 0 ? "-" : manifestID.ToString(CultureInfo.InvariantCulture))}\t{depot["maxsize"].Value ?? "-"}\t{string.Join(", ", notes)}");
