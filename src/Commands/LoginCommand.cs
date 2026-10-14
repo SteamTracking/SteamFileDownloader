@@ -261,13 +261,9 @@ internal static class LoginCommand
             Console.WriteLine($"Removed the saved login for {login.Username}.");
         }
 
-        if (defaultLogin != null && removed.Exists(static l => l.IsDefault))
+        if (defaultLogin != null && !logins.Exists(l => l.IsDefault && l.Username.Equals(defaultLogin, StringComparison.OrdinalIgnoreCase)))
         {
             Console.WriteLine($"{defaultLogin} is now the default login.");
-        }
-        else if (defaultLogin == null && logins.Count > removed.Count)
-        {
-            Console.WriteLine($"There is no default login now: give --username, or run \"{Help.ExeName} login\" to log in again and make that account the default.");
         }
 
         return ExitCodes.Ok;

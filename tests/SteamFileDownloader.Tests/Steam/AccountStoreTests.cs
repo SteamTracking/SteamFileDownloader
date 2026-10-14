@@ -40,13 +40,34 @@ public class AccountStoreTests
     }
 
     [Test]
-    public async Task RemovingTheDefaultOfSeveralLeavesNoDefault()
+    public async Task RemovingTheDefaultOfSeveralMakesTheLastSavedOneTheDefault()
     {
         using var temp = new TempDirectory();
         var path = SaveAll(temp, "a", "b", "c");
 
-        await Assert.That(AccountStore.Remove(["c"], path)).IsNull();
-        await Assert.That(Describe(path)).IsEqualTo("a:-:token-a,b:-:token-b");
+        await Assert.That(AccountStore.Remove(["c"], path)).IsEqualTo("b");
+        await Assert.That(Describe(path)).IsEqualTo("b:default:token-b,a:-:token-a");
+        await Assert.That(AccountStore.LoadCredentials(null, path)?.Username).IsEqualTo("b");
+    }
+
+    [Test]
+    public async Task SavingAgainMakesAnAccountTheLastSaved()
+    {
+        using var temp = new TempDirectory();
+        var path = SaveAll(temp, "a", "b", "c", "a");
+
+        await Assert.That(AccountStore.Remove(["a"], path)).IsEqualTo("c");
+        await Assert.That(Describe(path)).IsEqualTo("c:default:token-c,b:-:token-b");
+    }
+
+    [Test]
+    public async Task RemovingEveryAccountLeavesNoDefault()
+    {
+        using var temp = new TempDirectory();
+        var path = SaveAll(temp, "a", "b");
+
+        await Assert.That(AccountStore.Remove(["a", "b"], path)).IsNull();
+        await Assert.That(Describe(path)).IsEqualTo("");
     }
 
     [Test]

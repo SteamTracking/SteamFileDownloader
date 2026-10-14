@@ -36,28 +36,21 @@ internal static partial class AccountStore
     public static string FilePath { get; } = Path.Combine(Secrets.AppDataFolder, "account.json");
 
     /// <summary>
-    /// Credentials of the given saved login, or the last one logged in when no username is given, or anonymous ones
-    /// for the username anonymous. Returns null with an error explaining how to log in.
+    /// Credentials of the given saved login, or the default one when no username is given, or anonymous ones for the
+    /// username anonymous. Returns null with an error explaining how to log in.
     /// </summary>
-    public static LogOnCredentials? LoadCredentials(string? username)
+    public static LogOnCredentials? LoadCredentials(string? username, string? path = null)
     {
         if (LogOnCredentials.IsAnonymousName(username))
         {
             return LogOnCredentials.Anonymous;
         }
 
-        var stored = Read();
+        var stored = Read(path);
 
         if ((username ?? stored.LastUsername) is not { } wanted || !stored.Accounts.TryGetValue(wanted, out var refreshToken))
         {
             var saved = stored.Accounts.Keys;
-
-            // Left after removing the default of several accounts
-            if (username == null && saved.Count > 0)
-            {
-                Log.Error($"No default login (saved: {string.Join(", ", saved)}). Pick one with --username, or run \"{Help.ExeName} login\" to log in again and make that account the default.");
-                return null;
-            }
 
             Log.Error($"No saved login{(username == null ? "" : $" for {username}")}{(saved.Count > 0 ? $" (saved: {string.Join(", ", saved)})" : "")}. Run \"{Help.ExeName} login\"{(username == null ? "" : " with that account")} to save one; it needs a person to scan a QR code.");
             return null;
@@ -97,13 +90,17 @@ internal static partial class AccountStore
         GetLogins(path).Find(l => l.Username.Equals(username, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
-    /// Adds or replaces an account and makes it the default.
+    /// Adds or replaces an account and makes it the default. Accounts are kept in the order they were saved, the last
+    /// saved last.
     /// </summary>
     public static void Save(SavedAccount account, string? path = null) => Update(path, stored =>
     {
-        // Steam usernames ignore case, so replace an existing entry with different casing
-        stored.Accounts.Remove(account.Username);
-        stored.Accounts[account.Username] = Secrets.Protect(account.RefreshToken);
+        // Steam usernames ignore case, so replace an existing entry with different casing. A new dictionary, since one
+        // would put a re-added key back in its old place
+        stored.Accounts = new Dictionary<string, string>(stored.Accounts.Where(a => !a.Key.Equals(account.Username, StringComparison.OrdinalIgnoreCase)), StringComparer.OrdinalIgnoreCase)
+        {
+            [account.Username] = Secrets.Protect(account.RefreshToken),
+        };
         stored.LastUsername = account.Username;
     });
 
@@ -120,8 +117,8 @@ internal static partial class AccountStore
     });
 
     /// <summary>
-    /// Forgets accounts. Without a default afterwards, a single remaining account becomes the default, and with
-    /// several there is none until the next login. Returns the default, or null when there is none.
+    /// Forgets accounts. When the default is among them, the last saved of the remaining accounts becomes the default.
+    /// Returns the default, or null when no account is left.
     /// </summary>
     public static string? Remove(IEnumerable<string> usernames, string? path = null) => Update(path, stored =>
     {
@@ -130,9 +127,10 @@ internal static partial class AccountStore
             stored.Accounts.Remove(username);
         }
 
+        // Removing keeps the order of the others, so the last one is still the last saved
         if (stored.LastUsername == null || !stored.Accounts.ContainsKey(stored.LastUsername))
         {
-            stored.LastUsername = stored.Accounts.Count == 1 ? stored.Accounts.Keys.First() : null;
+            stored.LastUsername = stored.Accounts.Count > 0 ? stored.Accounts.Keys.Last() : null;
         }
     }).LastUsername;
 

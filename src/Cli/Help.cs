@@ -560,7 +560,7 @@ internal static class Help
 
         Revoking takes only the token, so it needs no Steam login. When it fails, the login is still removed
         here, with a warning that a copy of the token keeps working until it expires. Removing the default
-        leaves a single remaining login as the default; with several left, log in again to pick one.
+        makes the last saved of the remaining logins the default.
 
         Saved logins: {AccountStore.FilePath}
 
