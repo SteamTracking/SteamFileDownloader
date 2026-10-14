@@ -11,7 +11,7 @@ internal sealed record ParsedArguments(
     List<string> Patterns);
 
 /// <summary>
-/// Parses "--name value" options and "--name" flags anywhere before "--", positional arguments,
+/// Parses "--name value" or "--name=value" options and "--name" flags anywhere before "--", positional arguments,
 /// and the patterns after "--". Option names ignore case.
 /// </summary>
 internal static class ArgumentParser
@@ -37,6 +37,13 @@ internal static class ArgumentParser
     /// </summary>
     public static string GetCommandName(string command, string[] args) =>
         args.Length > 0 && CommandOptions.ContainsKey($"{command} {args[0]}") ? $"{command} {args[0]}" : command;
+
+    /// <summary>
+    /// The subcommands of a command, like info and search of workshop.
+    /// </summary>
+    public static string[] GetSubcommands(string command) => [.. CommandOptions.Keys
+        .Where(k => k.StartsWith($"{command} ", StringComparison.Ordinal))
+        .Select(k => k[(command.Length + 1)..])];
 
     public static ParsedArguments? Parse(string command, string[] args)
     {
@@ -65,33 +72,54 @@ internal static class ArgumentParser
                 continue;
             }
 
+            // --name=value is the same as --name value
             var name = arg[2..];
             var equals = name.IndexOf('=', StringComparison.Ordinal);
+            var inlineValue = equals > 0 ? name[(equals + 1)..] : null;
 
-            if (equals > 0 && valueOptions.Contains(name[..equals], StringComparer.OrdinalIgnoreCase))
+            if (inlineValue != null)
             {
-                Log.Error($"\"{arg}\": give the value after a space, like --{name[..equals]} {name[(equals + 1)..]}. {usage}");
-                return null;
+                name = name[..equals];
             }
 
             if (flags.Contains(name, StringComparer.OrdinalIgnoreCase))
             {
+                if (inlineValue != null)
+                {
+                    Log.Error($"--{name} is a flag and takes no value, got \"{arg}\". {usage}");
+                    return null;
+                }
+
                 options[name] = "";
+                continue;
             }
-            else if (!valueOptions.Contains(name, StringComparer.OrdinalIgnoreCase))
+
+            if (!valueOptions.Contains(name, StringComparer.OrdinalIgnoreCase))
             {
-                Log.Error($"Unknown option \"{arg}\". {optionList} {usage}");
+                Log.Error($"Unknown option \"{arg}\".{DidYouMean(name, valueOptions.Concat(flags), "--")} {optionList} {usage}");
                 return null;
             }
-            else if (i + 1 >= optionArgs.Length || optionArgs[i + 1].StartsWith("--", StringComparison.Ordinal))
+
+            string value;
+
+            if (inlineValue is { Length: > 0 })
             {
-                Log.Error($"{arg} needs a value. {usage}");
+                value = inlineValue;
+            }
+            else if (inlineValue != null || i + 1 >= optionArgs.Length || optionArgs[i + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                Log.Error($"--{name} needs a value. {usage}");
                 return null;
             }
-            else if (!options.TryAdd(name, optionArgs[++i]))
+            else
             {
-                // Keeping only one of them would silently drop the other
-                Log.Error($"{arg} is given more than once. {usage}");
+                value = optionArgs[++i];
+            }
+
+            // Keeping only one of them would silently drop the other
+            if (!options.TryAdd(name, value))
+            {
+                Log.Error($"--{name} is given more than once. {usage}");
                 return null;
             }
         }
@@ -191,6 +219,89 @@ internal static class ArgumentParser
 
         Log.Error($"{option} \"{path}\" is relative to the current folder or root of a drive, likely a path whose backslashes the shell removed. Use forward slashes or quotes, like D:/SteamDepots.");
         return false;
+    }
+
+    /// <summary>
+    /// The candidate that a mistyped name most likely meant, ignoring case: the only one it is a prefix of, or else the
+    /// only one closest to it within a small edit distance. Null when there is none, or it is ambiguous.
+    /// </summary>
+    public static string? Suggest(string input, IEnumerable<string> candidates)
+    {
+        var list = candidates.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+        if (input.Length == 0)
+        {
+            return null;
+        }
+
+        var prefixed = list.Where(c => c.StartsWith(input, StringComparison.OrdinalIgnoreCase)).ToList();
+
+        if (prefixed.Count > 0)
+        {
+            return prefixed.Count == 1 ? prefixed[0] : null;
+        }
+
+        // Short names are close to each other, so one edit is the most they can be off by
+        var maxDistance = Math.Min(2, Math.Max(1, input.Length / 2));
+        var lowerInput = input.ToLowerInvariant();
+        var close = list
+            .Select(c => (Candidate: c, Distance: EditDistance(lowerInput, c.ToLowerInvariant())))
+            .Where(c => c.Distance <= maxDistance)
+            .ToList();
+
+        if (close.Count == 0)
+        {
+            return null;
+        }
+
+        var best = close.Min(static c => c.Distance);
+        var closest = close.Where(c => c.Distance == best).ToList();
+
+        return closest.Count == 1 ? closest[0].Candidate : null;
+    }
+
+    /// <summary>
+    /// " Did you mean X?" with the suggestion for a mistyped name, or an empty string when there is none.
+    /// </summary>
+    public static string DidYouMean(string input, IEnumerable<string> candidates, string prefix = "") =>
+        Suggest(input, candidates) is { } suggestion ? $" Did you mean {prefix}{suggestion}?" : "";
+
+    /// <summary>
+    /// The number of insertions, deletions, substitutions and swaps of adjacent characters that turn a into b.
+    /// </summary>
+    internal static int EditDistance(string a, string b)
+    {
+        // The distance between the first i characters of a and the first j of b is at [i * width + j]
+        var width = b.Length + 1;
+        var distances = new int[(a.Length + 1) * width];
+
+        for (var i = 0; i <= a.Length; i++)
+        {
+            distances[i * width] = i;
+        }
+
+        for (var j = 0; j <= b.Length; j++)
+        {
+            distances[j] = j;
+        }
+
+        for (var i = 1; i <= a.Length; i++)
+        {
+            for (var j = 1; j <= b.Length; j++)
+            {
+                var cost = a[i - 1] == b[j - 1] ? 0 : 1;
+                var distance = Math.Min(Math.Min(distances[((i - 1) * width) + j] + 1, distances[(i * width) + j - 1] + 1), distances[((i - 1) * width) + j - 1] + cost);
+
+                if (i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1])
+                {
+                    distance = Math.Min(distance, distances[((i - 2) * width) + j - 2] + 1);
+                }
+
+                distances[(i * width) + j] = distance;
+            }
+        }
+
+        return distances[^1];
     }
 
     /// <summary>

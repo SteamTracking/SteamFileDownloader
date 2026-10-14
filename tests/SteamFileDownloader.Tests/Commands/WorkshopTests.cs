@@ -237,6 +237,13 @@ public class WorkshopTests
     }
 
     [Test]
+    public async Task MistypedSubcommandGetsAHint()
+    {
+        await Assert.That(WorkshopArgumentParser.Parse(["inof", "3070715607"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("Unknown workshop subcommand \"inof\". Did you mean info? Expected info, search, ls, get.");
+    }
+
+    [Test]
     public async Task SearchTakesAnAppThenTheWords()
     {
         var arguments = WorkshopArgumentParser.Parse(["search", "730", "de", "dust", "--limit", "all"]);

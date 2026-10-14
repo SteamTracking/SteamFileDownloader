@@ -44,6 +44,17 @@ internal static class LoginCommand
             return new LoginArguments(command, null, parsed.Positionals);
         }
 
+        var subcommands = ArgumentParser.GetSubcommands("login");
+
+        // A mistyped subcommand, or a lone username given without --username that looks like one
+        if (command == "login" && args.Length > 0 && parsed.Positionals.Count > 0 && args[0] == parsed.Positionals[0]
+            && ArgumentParser.Suggest(args[0], subcommands) is { } subcommand)
+        {
+            var asUsername = parsed.Positionals.Count == 1 ? $" To log in as {args[0]}: {Help.ExeName} login --username {args[0]}." : "";
+            Log.Error($"Unknown login subcommand \"{args[0]}\". Did you mean {subcommand}? Expected {string.Join(", ", subcommands)}.{asUsername} {Help.UsageHint(command)}");
+            return null;
+        }
+
         if (command == "login" && parsed.Positionals.Count == 1 && parsed.Patterns.Count == 0)
         {
             Log.Error($"login takes the name as --username, like: {Help.ExeName} login --username {parsed.Positionals[0]}. {Help.UsageHint(command)}");

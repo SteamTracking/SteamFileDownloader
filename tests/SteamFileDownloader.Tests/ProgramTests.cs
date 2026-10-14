@@ -3,7 +3,9 @@ namespace SteamFileDownloader.Tests;
 public class ProgramTests
 {
     [Test]
+    [Arguments("gte", "Unknown command \"gte\". Did you mean get? Commands are get, ls, depots, workshop, dd, login and track.")]
     [Arguments("bogus", "Unknown command \"bogus\". Commands are get, ls, depots, workshop, dd, login and track.")]
+    [Arguments("--verison", "Unknown command \"--verison\". Did you mean --version?")]
     [Arguments("--appid", "Unknown command \"--appid\". The command goes first, before its options. Downloading the files in files.json is now: ")]
     public async Task UnknownCommandIsAUsageErrorWithAHint(string command, string expected)
     {

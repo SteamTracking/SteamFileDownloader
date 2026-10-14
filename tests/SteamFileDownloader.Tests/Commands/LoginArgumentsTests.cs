@@ -25,9 +25,19 @@ public class LoginArgumentsTests
     [Arguments("list --username x", "login list takes no options.")]
     [Arguments("remove -- x", "login remove takes usernames, like: ")]
     [Arguments("a b", "Unexpected argument \"a\"")]
+    [Arguments("lsit", "Unknown login subcommand \"lsit\". Did you mean list? Expected list, remove.")]
+    [Arguments("remvoe someone", "Unknown login subcommand \"remvoe\". Did you mean remove?")]
     public async Task InvalidCommandLinesAreRejected(string commandLine, string error)
     {
         await Assert.That(Describe(commandLine)).IsNull();
         await Assert.That(TestContext.Current!.GetErrorOutput()).Contains(error);
+    }
+
+    [Test]
+    public async Task UsernameLikeASubcommandGetsBothHints()
+    {
+        await Assert.That(Describe("lisa")).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput().Replace(Help.ExeName, "SFD", StringComparison.Ordinal))
+            .Contains("Unknown login subcommand \"lisa\". Did you mean list? Expected list, remove. To log in as lisa: SFD login --username lisa. ");
     }
 }

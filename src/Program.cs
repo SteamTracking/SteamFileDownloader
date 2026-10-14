@@ -12,6 +12,8 @@ internal static class Program
 {
     public static string Version { get; } = (Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "").Split('+')[0];
 
+    private static readonly string[] Commands = ["get", "ls", "depots", "workshop", "dd", "login", "track"];
+
     private static async Task<int> Main(string[] args)
     {
         if (Help.TryPrint(args) is { } helpExitCode)
@@ -134,10 +136,21 @@ internal static class Program
 
     internal static int UnknownCommand(string argument)
     {
+        string hint;
+
         // GameTracking mode used to be the command line without a command name
-        var hint = argument.StartsWith("--", StringComparison.Ordinal)
-            ? $" The command goes first, before its options. Downloading the files in files.json is now: {Help.ExeName} track <app> --output <dir> ..."
-            : " Commands are get, ls, depots, workshop, dd, login and track.";
+        if (argument.StartsWith("--", StringComparison.Ordinal))
+        {
+            var option = ArgumentParser.Suggest(argument[2..], ["help", "version"]);
+
+            hint = option != null
+                ? $" Did you mean --{option}?"
+                : $" The command goes first, before its options. Downloading the files in files.json is now: {Help.ExeName} track <app> --output <dir> ...";
+        }
+        else
+        {
+            hint = $"{ArgumentParser.DidYouMean(argument, [.. Commands, "help"])} Commands are {string.Join(", ", Commands[..^1])} and {Commands[^1]}.";
+        }
 
         Log.Error($"Unknown command \"{argument}\".{hint} {Help.UsageHint()}");
         return ExitCodes.UsageError;

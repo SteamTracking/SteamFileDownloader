@@ -14,7 +14,7 @@ Typical uses are datamining and reverse engineering Source 2 games like Counter-
 - **Workshop items**: details, version history and search, and listing or downloading an item's files from any version, collections included.
 - **Saved logins**: log in once with a QR code from the Steam mobile app. Tokens are encrypted for the Windows user.
 - **DepotDownloader compatible**: `dd` runs an existing DepotDownloader command line.
-- **Agent friendly**: running it without arguments prints the full usage, a command without its arguments prints its usage and examples, exit codes say what went wrong, and parallel runs on one account don't disconnect each other.
+- **Agent friendly**: running it without arguments prints the full usage, a command without its arguments prints its usage and examples, mistyped commands and options get a suggestion, exit codes say what went wrong, and parallel runs on one account don't disconnect each other.
 
 ## Quick start
 
@@ -51,7 +51,7 @@ SteamFileDownloader ls 570 -- hammer.dll
 SteamFileDownloader get 730 2347779:2591545799285498410@animgraph_2_beta -- resourcecompiler.dll
 ```
 
-Run `SteamFileDownloader` without arguments, or `SteamFileDownloader <command> --help`, for the full usage.
+Run `SteamFileDownloader` without arguments, or `SteamFileDownloader <command> --help`, for the full usage. Options take their value after a space or an equals sign, like `--output D:/SteamDepots` or `--output=D:/SteamDepots`.
 
 ## Targets and patterns
 

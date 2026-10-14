@@ -29,9 +29,7 @@ internal static partial class WorkshopArgumentParser
 {
     public const int DefaultLimit = 20;
 
-    public static readonly string[] Subcommands = [.. ArgumentParser.CommandOptions.Keys
-        .Where(static k => k.StartsWith("workshop ", StringComparison.Ordinal))
-        .Select(static k => k["workshop ".Length..])];
+    public static readonly string[] Subcommands = ArgumentParser.GetSubcommands("workshop");
 
     // Item pages, their tabs like changelog, and the Steam client's link to them. Other query parameters can come before or after the id
     [GeneratedRegex(@"^(?:(?:https?://)?(?:www\.)?steamcommunity\.com/(?:sharedfiles|workshop)/filedetails/(?:[a-z]+/(?<id>\d+)/?|\?(?:[^#]*&)?id=(?<id>\d+))|steam://url/CommunityFilePage/(?<id>\d+)/?)(?:[?&#].*)?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
@@ -56,7 +54,9 @@ internal static partial class WorkshopArgumentParser
 
         if (command == "workshop")
         {
-            Log.Error($"{(args.Length == 0 ? "workshop needs a subcommand" : $"Unknown workshop subcommand \"{args[0]}\"")}, expected {string.Join(", ", Subcommands)}. {Help.UsageHint("workshop")}");
+            Log.Error(args.Length == 0
+                ? $"workshop needs a subcommand, expected {string.Join(", ", Subcommands)}. {Help.UsageHint("workshop")}"
+                : $"Unknown workshop subcommand \"{args[0]}\".{ArgumentParser.DidYouMean(args[0], Subcommands)} Expected {string.Join(", ", Subcommands)}. {Help.UsageHint("workshop")}");
             return null;
         }
 

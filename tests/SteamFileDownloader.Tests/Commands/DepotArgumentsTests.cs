@@ -45,6 +45,60 @@ public class DepotArgumentsTests
     }
 
     [Test]
+    public async Task GetWithPatternsAndNoTargetsIsRejected()
+    {
+        await Assert.That(DepotArgumentParser.ParseArguments("get", ["730", "--", "settings.txt"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("get 730 needs targets, like: ").And.Contains("get 730 all -- settings.txt, or ")
+            .And.Contains("ls 730 -- settings.txt to find the depot first").And.DoesNotContain("put its app first");
+    }
+
+    [Test]
+    [Arguments("ls", null, new string[0], "ls needs an app id, like: SFD ls <app> -- <pattern> to find which depot of the app has a file, or SFD ls <app> <target>... to list the files of targets.")]
+    [Arguments("ls", null, new[] { "*.dll" }, "ls needs an app id, like: SFD ls <app> -- '*.dll' to find which depot of the app has a file, or SFD ls <app> <target>... to list the files of targets.")]
+    [Arguments("get", null, new[] { "server.dll" }, "get needs an app id and targets, like: SFD get <app> all -- server.dll, or SFD ls <app> -- server.dll to find the depot first.")]
+    [Arguments("get", 570u, new[] { "a b" }, "get 570 needs targets, like: SFD get 570 all -- 'a b', or SFD ls 570 -- 'a b' to find the depot first.")]
+    [Arguments("ls", 2347771u, new string[0], "ls 2347771 needs targets after the app id, like: SFD ls 2347771 all, or SFD ls 2347771 -- <pattern> to search them. If 2347771 is a depot, put its app first: SFD ls <app> 2347771.")]
+    [Arguments("get", 2347771u, new string[0], "get 2347771 needs targets after the app id, like: SFD get 2347771 all -- <pattern>. If 2347771 is a depot, put its app first: SFD get <app> 2347771 -- <pattern>.")]
+    public async Task MissingTargetsSuggestCommandsWithThePatternsGiven(string command, uint? app, string[] patterns, string expected)
+    {
+        var message = DepotArgumentParser.DescribeMissingTargets(command, app, [.. patterns]);
+
+        await Assert.That(message.Replace(Help.ExeName, "SFD", StringComparison.Ordinal)).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task MisplacedPatternIsMovedAfterTheTargetsOfTheSameApp()
+    {
+        await Assert.That(DepotArgumentParser.ParseArguments("get", ["570", "373303", "hammer.dll"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains($"{Help.ExeName} get 570 373303 -- hammer.dll.");
+    }
+
+    [Test]
+    [Arguments("get", new[] { "570/373303", "x.dll" }, "get 570/373303 -- x.dll")]
+    [Arguments("ls", new[] { "x.dll" }, "ls <app> -- x.dll")]
+    [Arguments("get", new[] { "x.dll" }, "get <app> all -- x.dll")]
+    public async Task MisplacedPatternWithoutAppKeepsTheTargetsApps(string command, string[] args, string expected)
+    {
+        await Assert.That(DepotArgumentParser.ParseArguments(command, args)).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains($"{Help.ExeName} {expected}.");
+    }
+
+    [Test]
+    [Arguments("2347771:abc", "the manifest after the colon must be a number or latest")]
+    [Arguments("2347771/8344780363095656278", "a manifest follows a colon, like 2347771:8344780363095656278")]
+    [Arguments("server.dll", "patterns go after --")]
+    [Arguments("all:123", "all is the latest manifest of every depot, so it takes no manifest")]
+    [Arguments("2347771@a/b", "a branch follows a single @, like 2347771@beta")]
+    [Arguments("1/2/3/4", "a slash only follows an app, like 570/373303 or 570/373303/<manifest>")]
+    [Arguments("0", "app and depot ids are nonzero 32-bit numbers")]
+    [Arguments("2347771:0", "the manifest must be a nonzero 64-bit number or latest")]
+    [Arguments("garbage", "expected [<app>/]<depot>[:<manifest>|:latest][@<branch>] or all, like 2347771:8344780363095656278 or 570/373303@beta")]
+    public async Task InvalidTargetGetsOnlyTheClauseThatApplies(string arg, string expected)
+    {
+        await Assert.That(DepotArgumentParser.DescribeInvalidTarget(arg)).IsEqualTo(expected);
+    }
+
+    [Test]
     public async Task AppIdNoTargetUsesIsRejected()
     {
         await Assert.That(DepotArgumentParser.ParseArguments("get", ["2347771", "730/2347771", "--", "a"])).IsNull();
@@ -268,7 +322,7 @@ public class DepotArgumentsTests
     public async Task NoAppAndNoTargetsGivesAnExample()
     {
         await Assert.That(DepotArgumentParser.ParseArguments("ls", [])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("ls needs an app id and targets, like: ").And.Contains("ls 730 2347771.");
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("ls needs an app id, like: ").And.Contains("ls <app> -- <pattern> to find which depot");
     }
 
     [Test]

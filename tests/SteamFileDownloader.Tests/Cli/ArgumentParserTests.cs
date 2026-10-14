@@ -134,10 +134,88 @@ public class ArgumentParserTests
     }
 
     [Test]
-    public async Task EqualsSignBetweenOptionAndValueIsExplained()
+    public async Task ValueCanFollowAnEqualsSign()
     {
-        await Assert.That(ArgumentParser.Parse("get", ["--output=out"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("\"--output=out\": give the value after a space, like --output out.");
+        var parsed = ArgumentParser.Parse("get", ["730", "--OUTPUT=out/dir", "--branch=--beta", "--username=a=b", "1"]);
+
+        await Assert.That(parsed).IsNotNull();
+        await Assert.That(parsed!.Options["output"]).IsEqualTo("out/dir");
+        await Assert.That(parsed.Options["branch"]).IsEqualTo("--beta");
+        await Assert.That(parsed.Options["username"]).IsEqualTo("a=b");
+        await Assert.That(string.Join(",", parsed.Positionals)).IsEqualTo("730,1");
+    }
+
+    [Test]
+    public async Task EmptyValueAfterAnEqualsSignIsRejected()
+    {
+        await Assert.That(ArgumentParser.Parse("get", ["--branch=", "1"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("--branch needs a value.");
+    }
+
+    [Test]
+    public async Task ValueGivenBothWaysIsGivenMoreThanOnce()
+    {
+        await Assert.That(ArgumentParser.Parse("get", ["--branch=a", "--branch", "b"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("--branch is given more than once.");
+    }
+
+    [Test]
+    public async Task FlagWithAValueIsRejected()
+    {
+        await Assert.That(ArgumentParser.Parse("get", ["--all-files=true"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("--all-files is a flag and takes no value, got \"--all-files=true\".");
+    }
+
+    [Test]
+    [Arguments("--ouptut", "--output")]
+    [Arguments("--outpt=x", "--output")]
+    [Arguments("--BRANH", "--branch")]
+    [Arguments("--anon", "--anonymous")]
+    [Arguments("--al", "--all-files")]
+    public async Task MistypedOptionGetsAHint(string option, string expected)
+    {
+        await Assert.That(ArgumentParser.Parse("get", [option, "x"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains($"Unknown option \"{option}\". Did you mean {expected}? Options are");
+    }
+
+    [Test]
+    public async Task UnrelatedOptionGetsNoHint()
+    {
+        await Assert.That(ArgumentParser.Parse("get", ["--json", "x"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("Unknown option \"--json\". Options are");
+    }
+
+    [Test]
+    [Arguments("gte", "get")]
+    [Arguments("dpeots", "depots")]
+    [Arguments("worksop", "workshop")]
+    [Arguments("lx", "ls")]
+    [Arguments("TRACK", "track")]
+    [Arguments("w", "workshop")]
+    [Arguments("lo", "login")]
+    [Arguments("d", null)]
+    [Arguments("xy", null)]
+    [Arguments("get", "get")]
+    [Arguments("dl", "dd")]
+    [Arguments("de", "depots")]
+    [Arguments("download", null)]
+    public async Task SuggestsTheOneCloseCandidate(string input, string? expected)
+    {
+        string[] commands = ["get", "ls", "depots", "workshop", "dd", "login", "config", "track"];
+
+        await Assert.That(ArgumentParser.Suggest(input, commands)).IsEqualTo(expected);
+    }
+
+    [Test]
+    [Arguments("", "", 0)]
+    [Arguments("abc", "", 3)]
+    [Arguments("abc", "abc", 0)]
+    [Arguments("abc", "acb", 1)]
+    [Arguments("kitten", "sitting", 3)]
+    [Arguments("output", "ouptut", 1)]
+    public async Task EditDistanceCountsSwapsAsOneEdit(string a, string b, int expected)
+    {
+        await Assert.That(ArgumentParser.EditDistance(a, b)).IsEqualTo(expected);
     }
 
     [Test]

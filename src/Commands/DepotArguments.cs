@@ -78,8 +78,8 @@ internal static partial class DepotArgumentParser
         else if (command == "depots")
         {
             Log.Error(targets.Count > 0
-                ? $"\"{targets[0]}\" is not an app id; depots takes app ids, like: {Help.ExeName} depots 730 570. The app id is the number in the app's store page URL. {Help.UsageHint(command)}"
-                : $"depots needs app ids, for example: {Help.ExeName} depots 730 570. {Help.UsageHint(command)}");
+                ? $"\"{targets[0]}\" is not an app id, the number in the app's store page URL, like: {Help.ExeName} depots 730 570."
+                : $"depots needs app ids, like: {Help.ExeName} depots 730 570.");
             return null;
         }
 
@@ -112,26 +112,76 @@ internal static partial class DepotArgumentParser
 
         if (command is "get" or "ls" && targets.Count == 0)
         {
-            Log.Error(app == null
-                ? $"{command} needs an app id and targets, like: {Help.ExeName} {(command == "get" ? "get 730 2347771 -- server.dll" : "ls 730 2347771")}. \"{Help.ExeName} depots <app>\" lists an app's depots."
-                : $"{command} {app} needs targets after the app id, like: {Help.ExeName} {command} {app} all. If {app} is a depot, put its app first, like: {Help.ExeName} {command} 730 {app}. \"{Help.ExeName} depots <app>\" lists an app's depots.");
+            Log.Error(DescribeMissingTargets(command, app, parsed.Patterns));
             return null;
         }
 
         // Without patterns, a target that isn't one is most likely a file name that belongs after --
         if (command is "get" or "ls" && parsed.Patterns.Count == 0 && targets.FirstOrDefault(static t => !TargetRegex().IsMatch(t)) is { } misplaced)
         {
-            Log.Error($"\"{misplaced}\" is not a target; patterns go after --, like: {Help.ExeName} {command} 730 2347771 -- {misplaced}.");
+            var moved = targets.Where(static t => !TargetRegex().IsMatch(t)).ToList();
+            var kept = targets.Where(static t => TargetRegex().IsMatch(t)).ToList();
+
+            Log.Error($"\"{misplaced}\" is not a target; patterns go after --, like: {SuggestCommand(command, app, kept, moved)}.");
             return null;
         }
 
         if (!ArgumentParser.CheckPatterns(parsed, get: command == "get",
-            $"get needs patterns after --, like: {Help.ExeName} get 730 2347771:latest -- server.dll. Use ls to see a manifest's files, or --all-files to download every file."))
+            $"get needs patterns after --, like: {SuggestCommand(command, app, targets, [])}. Use ls to see a manifest's files, or --all-files to download every file."))
         {
             return null;
         }
 
         return new DepotArguments(command, DepotOptions.From(parsed, app), targets, parsed.Patterns);
+    }
+
+    /// <summary>
+    /// The error for get or ls without targets, with commands built from the app and patterns given.
+    /// </summary>
+    internal static string DescribeMissingTargets(string command, uint? app, List<string> patterns)
+    {
+        // ls with an app and patterns searches every depot, so only get gets here with both
+        if (app == null || patterns.Count > 0)
+        {
+            var findDepot = SuggestCommand("ls", app, [], patterns);
+
+            return command == "ls"
+                ? $"ls needs an app id, like: {findDepot} to find which depot of the app has a file, or {Help.ExeName} ls <app> <target>... to list the files of targets."
+                : $"get{(app != null ? $" {app}" : "")} needs {(app == null ? "an app id and " : "")}targets, like: {SuggestCommand("get", app, [], patterns)}, or {findDepot} to find the depot first.";
+        }
+
+        // A lone number may be a depot
+        var withApp = SuggestCommand(command, null, [app.Value.ToString(CultureInfo.InvariantCulture)], patterns);
+        var allDepots = command == "ls"
+            ? $"{Help.ExeName} ls {app} all, or {Help.ExeName} ls {app} -- <pattern> to search them"
+            : SuggestCommand(command, app, [], patterns);
+
+        return $"{command} {app} needs targets after the app id, like: {allDepots}. If {app} is a depot, put its app first: {withApp}.";
+    }
+
+    /// <summary>
+    /// A get or ls command line for the app, targets and patterns, with &lt;app&gt; when the app is unknown and a
+    /// placeholder for missing patterns of get. Without targets, get gets all and ls searches every depot.
+    /// </summary>
+    internal static string SuggestCommand(string command, uint? app, List<string> targets, IReadOnlyCollection<string> patterns)
+    {
+        var parts = new List<string> { Help.ExeName, command };
+
+        // The app id can be left out when every target names its own
+        if (app != null || targets.Count == 0 || !targets.All(static t => TargetRegex().Match(t).Groups["app"].Success))
+        {
+            parts.Add(app?.ToString(CultureInfo.InvariantCulture) ?? "<app>");
+        }
+
+        parts.AddRange(targets.Count == 0 && command == "get" ? ["all"] : targets);
+
+        if (patterns.Count > 0 || command == "get" || targets.Count == 0)
+        {
+            parts.Add("--");
+            parts.AddRange(patterns.Count > 0 ? patterns.Select(Help.QuoteArgument) : ["<pattern>"]);
+        }
+
+        return string.Join(' ', parts);
     }
 
     // Returns null after printing an error
@@ -159,7 +209,7 @@ internal static partial class DepotArgumentParser
         }
         else
         {
-            Log.Error($"Target \"{arg}\" has no app. Put the app id before the targets, like \"{Help.ExeName} {arguments.Command} 730 {arg}\", or in the target, like 730/{arg}.");
+            Log.Error($"Target \"{arg}\" has no app. Put the app id before the targets, like \"{SuggestCommand(arguments.Command, null, arguments.Targets, arguments.Patterns)}\", or in the target, like <app>/{arg}.");
             return null;
         }
 
@@ -195,8 +245,69 @@ internal static partial class DepotArgumentParser
 
         Target? Invalid()
         {
-            Log.Error($"Invalid target \"{arg}\", expected [<app>/]<depot>[:<manifest>|:latest][@<branch>] or all, like 2347771:8344780363095656278 or 570/373303@beta. A manifest follows a colon, or a slash only after an app (570/373303/<manifest>). Patterns go after --.");
+            Log.Error($"Invalid target \"{arg}\": {DescribeInvalidTarget(arg)}.");
             return null;
         }
+    }
+
+    /// <summary>
+    /// What is wrong with a target that doesn't parse, only the part of the syntax that it gets wrong.
+    /// </summary>
+    internal static string DescribeInvalidTarget(string arg)
+    {
+        const string Syntax = "expected [<app>/]<depot>[:<manifest>|:latest][@<branch>] or all, like 2347771:8344780363095656278 or 570/373303@beta";
+        var match = TargetRegex().Match(arg);
+
+        if (match.Success)
+        {
+            var app = match.Groups["app"];
+            var depot = match.Groups["depot"].Value;
+            var manifest = match.Groups["manifest"].Value;
+
+            if (depot.Equals("all", StringComparison.OrdinalIgnoreCase))
+            {
+                return "all is the latest manifest of every depot, so it takes no manifest";
+            }
+
+            // Like depot/manifest, which reads as app/depot with a depot id too large to be one
+            if (app.Success && manifest.Length == 0 && !uint.TryParse(depot, NumberStyles.None, CultureInfo.InvariantCulture, out _))
+            {
+                return $"a manifest follows a colon, like {app.Value}:{depot}";
+            }
+
+            if (!uint.TryParse(depot, NumberStyles.None, CultureInfo.InvariantCulture, out var depotID) || depotID == 0
+                || (app.Success && !uint.TryParse(app.ValueSpan, NumberStyles.None, CultureInfo.InvariantCulture, out _)))
+            {
+                return "app and depot ids are nonzero 32-bit numbers";
+            }
+
+            return "the manifest must be a nonzero 64-bit number or latest";
+        }
+
+        if (arg.Contains('.', StringComparison.Ordinal) || arg.AsSpan().IndexOfAny('*', '?') >= 0)
+        {
+            return "patterns go after --";
+        }
+
+        var at = arg.IndexOf('@', StringComparison.Ordinal);
+
+        if (at >= 0 && (at == arg.Length - 1 || arg.AsSpan(at + 1).IndexOfAny("@/:".AsSpan()) >= 0))
+        {
+            return "a branch follows a single @, like 2347771@beta";
+        }
+
+        var main = at >= 0 ? arg[..at] : arg;
+
+        if (main.Contains(':', StringComparison.Ordinal))
+        {
+            return "the manifest after the colon must be a number or latest";
+        }
+
+        if (main.Contains('/', StringComparison.Ordinal))
+        {
+            return "a slash only follows an app, like 570/373303 or 570/373303/<manifest>";
+        }
+
+        return Syntax;
     }
 }
