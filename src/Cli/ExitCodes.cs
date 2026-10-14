@@ -7,12 +7,20 @@ internal static class ExitCodes
 {
     public const int Ok = 0;
     public const int Failed = 1;
-    public const int NoMatch = 2;
+
+    // The command line is wrong: an unknown option, a missing or invalid argument
+    public const int UsageError = 2;
     public const int NoAccess = 3;
     public const int RateLimited = 4;
 
     // Steam gave no depot key or manifest request code for some targets, and nothing else failed
     public const int NoDepotAccess = 5;
+    public const int NoMatch = 6;
+
+    /// <summary>
+    /// The exit code of a wrong command line. GameTracking expects 1 for track's.
+    /// </summary>
+    public static int ForUsageError(string command) => command == "track" ? Failed : UsageError;
 
     public static int FromLogOnResult(EResult result) => result switch
     {

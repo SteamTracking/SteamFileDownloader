@@ -117,7 +117,7 @@ public class DepotsCommandTests
         // Logging in would throw on the cancelled token
         var exitCode = await DepotsCommand.ListDepotsAsync(arguments, new CancellationToken(canceled: true));
 
-        await Assert.That(exitCode).IsEqualTo(ExitCodes.Failed);
+        await Assert.That(exitCode).IsEqualTo(ExitCodes.UsageError);
         await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("\"abc\"");
     }
 }

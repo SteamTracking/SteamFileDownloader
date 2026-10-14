@@ -14,9 +14,9 @@ internal static class Program
 
     private static async Task<int> Main(string[] args)
     {
-        if (Help.TryPrint(args))
+        if (Help.TryPrint(args) is { } helpExitCode)
         {
-            return ExitCodes.Ok;
+            return helpExitCode;
         }
 
         if (args[0] == "--version")
@@ -74,7 +74,7 @@ internal static class Program
 
         if (arguments == null)
         {
-            return ExitCodes.Failed;
+            return ExitCodes.ForUsageError(command);
         }
 
         return arguments.Command switch
@@ -96,7 +96,7 @@ internal static class Program
 
         if (arguments == null)
         {
-            return ExitCodes.Failed;
+            return ExitCodes.ForUsageError("workshop");
         }
 
         return arguments.Command switch
@@ -113,7 +113,7 @@ internal static class Program
 
         if (arguments == null)
         {
-            return ExitCodes.Failed;
+            return ExitCodes.ForUsageError("login");
         }
 
         return arguments.Command switch
@@ -129,10 +129,10 @@ internal static class Program
     {
         var arguments = TrackCommand.ParseArguments(args);
 
-        return arguments == null ? ExitCodes.Failed : await TrackCommand.RunAsync(arguments, cancellationToken);
+        return arguments == null ? ExitCodes.ForUsageError("track") : await TrackCommand.RunAsync(arguments, cancellationToken);
     }
 
-    private static int UnknownCommand(string argument)
+    internal static int UnknownCommand(string argument)
     {
         // GameTracking mode used to be the command line without a command name
         var hint = argument.StartsWith("--", StringComparison.Ordinal)
@@ -140,6 +140,6 @@ internal static class Program
             : " Commands are get, ls, depots, workshop, dd, login and track.";
 
         Log.Error($"Unknown command \"{argument}\".{hint} {Help.UsageHint()}");
-        return ExitCodes.Failed;
+        return ExitCodes.UsageError;
     }
 }

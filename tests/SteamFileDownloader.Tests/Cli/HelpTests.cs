@@ -91,7 +91,7 @@ public partial class HelpTests
     [Test]
     public async Task NoArgumentsPrintTheOverview()
     {
-        await Assert.That(Help.TryPrint([])).IsTrue();
+        await Assert.That(Help.TryPrint([])).IsEqualTo(ExitCodes.Ok);
         await Assert.That(TestContext.Current!.GetStandardOutput()).Contains(FirstLine(Help.Overview));
     }
 
@@ -105,14 +105,68 @@ public partial class HelpTests
     [Arguments("workshop info 3070715607")]
     public async Task OtherCommandLinesAreNotHelp(string commandLine)
     {
-        await Assert.That(Help.TryPrint(commandLine.Split(' '))).IsFalse();
+        await Assert.That(Help.TryPrint(commandLine.Split(' '))).IsNull();
         await Assert.That(TestContext.Current!.GetStandardOutput()).IsEmpty();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).IsEmpty();
     }
 
     [Test]
-    [Arguments("get", "get")]
-    [Arguments("dd", "dd")]
+    [Arguments("get", ExitCodes.UsageError)]
+    [Arguments("ls", ExitCodes.UsageError)]
+    [Arguments("depots", ExitCodes.UsageError)]
+    [Arguments("dd", ExitCodes.UsageError)]
+    [Arguments("workshop info", ExitCodes.UsageError)]
+    [Arguments("workshop search", ExitCodes.UsageError)]
+    [Arguments("workshop ls", ExitCodes.UsageError)]
+    [Arguments("workshop get", ExitCodes.UsageError)]
+    [Arguments("track", ExitCodes.Failed)]
+    public async Task BareCommandPrintsItsShortUsageToStderr(string commandLine, int exitCode)
+    {
+        await Assert.That(Help.TryPrint(commandLine.Split(' '))).IsEqualTo(exitCode);
+        await Assert.That(TestContext.Current!.GetStandardOutput()).IsEmpty();
+
+        var error = Normalize(TestContext.Current!.GetErrorOutput());
+
+        await Assert.That(error).StartsWith("Usage:").And.Contains($"SteamFileDownloader {commandLine} ").And.Contains("Example");
+        await Assert.That(error).Contains($"Run \"SteamFileDownloader {commandLine} --help\" for details.");
+        await Assert.That(error).DoesNotContain("Exit codes:");
+    }
+
+    [Test]
+    public async Task ShortUsageHasTheIndentedLinesOfUsageAndExamples()
+    {
+        const string help = """
+            Does things.
+
+            Usage:
+              tool x <a>
+                [--b]
+            stdout has rows.
+
+            Examples:
+              tool x 1
+                continued
+
+            Options:
+              --b   b
+            """;
+
+        await Assert.That(Help.GetShortUsage("x", help).ReplaceLineEndings("\n")).IsEqualTo($"""
+            Usage:
+              tool x <a>
+                [--b]
+
+            Examples:
+              tool x 1
+                continued
+
+            Run "{Help.ExeName} x --help" for details.
+            """.ReplaceLineEndings("\n"));
+    }
+
+    [Test]
     [Arguments("get --help", "get")]
+    [Arguments("dd --help", "dd")]
     [Arguments("get 1 -h", "get")]
     [Arguments("ls 730 /? 1", "ls")]
     [Arguments("help get", "get")]
@@ -124,7 +178,6 @@ public partial class HelpTests
     [Arguments("bogus --help", "overview")]
     [Arguments("workshop", "workshop")]
     [Arguments("workshop bogus --help", "workshop")]
-    [Arguments("workshop info", "workshop info")]
     [Arguments("workshop info 3070715607 --help", "workshop info")]
     [Arguments("help workshop info", "workshop info")]
     [Arguments("workshop get 3070715607 -h -- a.vpk", "workshop get")]
@@ -138,7 +191,7 @@ public partial class HelpTests
             _ => GetHelp(command),
         };
 
-        await Assert.That(Help.TryPrint(commandLine.Split(' '))).IsTrue();
+        await Assert.That(Help.TryPrint(commandLine.Split(' '))).IsEqualTo(ExitCodes.Ok);
 
         var output = TestContext.Current!.GetStandardOutput();
         await Assert.That(output).Contains(FirstLine(expected));

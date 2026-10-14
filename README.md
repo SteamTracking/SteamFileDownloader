@@ -14,7 +14,7 @@ Typical uses are datamining and reverse engineering Source 2 games like Counter-
 - **Workshop items**: details, version history and search, and listing or downloading an item's files from any version, collections included.
 - **Saved logins**: log in once with a QR code from the Steam mobile app. Tokens are encrypted for the Windows user.
 - **DepotDownloader compatible**: `dd` runs an existing DepotDownloader command line.
-- **Agent friendly**: running it without arguments prints the full usage, exit codes say what went wrong, and parallel runs on one account don't disconnect each other.
+- **Agent friendly**: running it without arguments prints the full usage, a command without its arguments prints its usage and examples, exit codes say what went wrong, and parallel runs on one account don't disconnect each other.
 
 ## Quick start
 
@@ -114,11 +114,12 @@ It uses `-app`, `-depot`, `-manifest`, `-filelist`, `-dir`, `-branch`, `-usernam
 | Code | Meaning |
 |---|---|
 | `0` | Success |
-| `1` | Something failed: arguments, a manifest or a download |
-| `2` | A pattern matched nothing in any target, and nothing failed |
+| `1` | Something failed, like a manifest or a download |
+| `2` | Usage error: an unknown option, or a missing or invalid argument. Fix the command line. `track` exits with `1` for these instead |
 | `3` | No saved login, or Steam rejected the login: a person has to run `login`, or for `track` with `--password`, check the credentials |
 | `4` | Steam is rate limiting logins: wait about 15 minutes |
 | `5` | Only access failed: Steam gave no depot key or manifest request code for some targets. Another account may own them (`--username`), or the manifest is on another branch or in another app |
+| `6` | A pattern matched nothing in any target, and nothing failed |
 
 ## GameTracking
 

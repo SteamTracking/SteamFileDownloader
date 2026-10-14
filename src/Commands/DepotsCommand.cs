@@ -27,7 +27,7 @@ internal static class DepotsCommand
             if (!uint.TryParse(arg, NumberStyles.None, CultureInfo.InvariantCulture, out var appID))
             {
                 Log.Error($"Unexpected argument \"{arg}\", depots takes app ids. {Help.UsageHint("depots")}");
-                return ExitCodes.Failed;
+                return ExitCodes.ForUsageError("depots");
             }
 
             if (!appIDs.Contains(appID))

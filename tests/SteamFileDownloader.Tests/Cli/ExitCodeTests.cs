@@ -3,6 +3,24 @@ namespace SteamFileDownloader.Tests;
 public class ExitCodeTests
 {
     [Test]
+    public async Task CodesAreTheDocumentedOnes()
+    {
+        int[] codes = [ExitCodes.Ok, ExitCodes.Failed, ExitCodes.UsageError, ExitCodes.NoAccess, ExitCodes.RateLimited, ExitCodes.NoDepotAccess, ExitCodes.NoMatch];
+
+        await Assert.That(codes).IsEquivalentTo([0, 1, 2, 3, 4, 5, 6], TUnit.Assertions.Enums.CollectionOrdering.Matching);
+    }
+
+    [Test]
+    [Arguments("get", ExitCodes.UsageError)]
+    [Arguments("workshop ls", ExitCodes.UsageError)]
+    [Arguments("login", ExitCodes.UsageError)]
+    [Arguments("track", ExitCodes.Failed)]
+    public async Task UsageErrorsOfTrackExitWithOne(string command, int expected)
+    {
+        await Assert.That(ExitCodes.ForUsageError(command)).IsEqualTo(expected);
+    }
+
+    [Test]
     [Arguments(false, false, ExitCodes.Failed, false, ExitCodes.Ok)]
     [Arguments(false, false, ExitCodes.Failed, true, ExitCodes.NoMatch)]
     [Arguments(true, true, ExitCodes.Failed, false, ExitCodes.Failed)]

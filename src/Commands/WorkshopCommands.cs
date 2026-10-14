@@ -229,7 +229,7 @@ internal static class WorkshopCommands
     /// Runs workshop ls or get: the items' manifests go through the get and ls pipeline.
     /// </summary>
     public static Task<int> RunAsync(WorkshopArguments arguments, CancellationToken cancellationToken) =>
-        GetCommand.RunAsync(arguments.Options, arguments.Patterns, list: arguments.Command == "workshop ls", async run =>
+        GetCommand.RunAsync(arguments.Command, arguments.Options, arguments.Patterns, async run =>
         {
             try
             {

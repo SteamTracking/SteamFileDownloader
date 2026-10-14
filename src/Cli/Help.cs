@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 
@@ -54,13 +55,13 @@ internal static class Help
         More on patterns:
           Depot paths use forward slashes. In <dir.vpk>:<pattern>, both parts use the pattern rules, and an empty
           <pattern> means all entries. A target without a match is fine (like a build before the file existed);
-          a pattern that matches nothing in any target is an error (exit code 2). Quote patterns with characters
+          a pattern that matches nothing in any target is an error (exit code 6). Quote patterns with characters
           the shell expands, like * ? ( | $.
         """;
 
     // Near the top of the help, since the full exit codes are at the end, past where a truncated read stops
     private static string ExitCodesSummary(string? details = "see the end") =>
-        $"Exit codes: 0 ok, 1 failed, 2 a pattern matched nothing, 3 log in again, 4 rate limited, 5 no access{(details == null ? "" : $" ({details})")}.";
+        $"Exit codes: 0 ok, 1 failed, 2 usage error, 3 log in again, 4 rate limited, 5 no access, 6 no match{(details == null ? "" : $" ({details})")}.";
 
     private static string LoginOptions => """
           --username <name>   saved login to use instead of the last one
@@ -82,21 +83,34 @@ internal static class Help
           1  something failed, see stderr. stdout has the rows of what succeeded; failed targets have
              none, which doesn't mean their files don't exist. Running the same command again retries
              only what failed
-          2  a pattern matched nothing in any target, and nothing failed
+          2  usage error: an unknown option, or a missing or invalid argument. Fix the command line
           3  no saved login, or Steam rejected it: a person has to run "login"
           4  Steam is rate limiting logins: wait about 15 minutes
           5  only access failed: Steam gave no depot key or manifest request code for some targets.
              Another account may own them (--username), or the manifest is on another branch
              (@<branch>) or in another app (<app>/<depot>)
+          6  a pattern matched nothing in any target, and nothing failed
         """;
 
-    // For depots and track, which have no patterns or targets that only fail access
-    private static string BasicExitCodesText => """
+    private const string UsageErrorExitCode = "  2  usage error: an unknown option, or a missing or invalid argument. Fix the command line";
+
+    // For depots, which has no patterns or targets that only fail access
+    private static string DepotsExitCodesText => $"""
         Exit codes:
           0  success
           1  something failed, see stderr
-          3  no saved login, or Steam rejected the login: a person has to run "login", or for track
-             with --password, check --username and --password
+        {UsageErrorExitCode}
+          3  no saved login, or Steam rejected it: a person has to run "login"
+          4  Steam is rate limiting logins: wait about 15 minutes
+        """;
+
+    // GameTracking expects exit code 1 for track's argument errors
+    private static string TrackExitCodesText => """
+        Exit codes:
+          0  success
+          1  something failed, including the command line or files.json, see stderr
+          3  no saved login, or Steam rejected the login: a person has to run "login", or with
+             --password, check --username and --password
           4  Steam is rate limiting logins: wait about 15 minutes
         """;
 
@@ -180,7 +194,7 @@ internal static class Help
         For VPK entries, the _dir.vpk is downloaded whole, and its archives only get the chunks with the entries
         (the rest is sparse), so VRF filters must match only those entries; others fail their CRC check.
 
-        {BasicExitCodesText}
+        {TrackExitCodesText}
         """;
 
     public static string Ls => $"""
@@ -276,7 +290,7 @@ internal static class Help
           language, dlc and "shared from app <app>"; a shared depot is downloaded as <that app>/<depot>.
           Branches, with build ids and dates, are on stderr.
 
-        {BasicExitCodesText}
+        {DepotsExitCodesText}
         """;
 
     public static string DepotDownloader => $"""
@@ -319,24 +333,26 @@ internal static class Help
           implemented.
         """;
 
-    private static string WorkshopExitCodesText => """
+    private static string WorkshopExitCodesText => $"""
         Exit codes:
           0  success
           1  something failed, see stderr
+        {UsageErrorExitCode}
           3  no saved login, or Steam rejected it: a person has to run "login"
           4  Steam is rate limiting logins: wait about 15 minutes
           5  only access failed: some items are private, or need another account (--username)
         """;
 
-    private static string WorkshopFilesExitCodesText => """
+    private static string WorkshopFilesExitCodesText => $"""
         Exit codes:
           0  success
           1  something failed, see stderr. stdout has the rows of what succeeded; failed items have none,
              which doesn't mean their files don't exist. Running the same command again retries only what failed
-          2  a pattern matched nothing in any item, and nothing failed
+        {UsageErrorExitCode}
           3  no saved login, or Steam rejected it: a person has to run "login"
           4  Steam is rate limiting logins: wait about 15 minutes
           5  only access failed: some items are private, or need another account (--username)
+          6  a pattern matched nothing in any item, and nothing failed
         """;
 
     public static string Workshop => $"""
@@ -509,6 +525,7 @@ internal static class Help
         Exit codes:
           0  success
           1  something failed, see stderr
+        {UsageErrorExitCode}
           3  Steam rejected the login
           4  Steam is rate limiting logins: wait about 15 minutes
         """;
@@ -528,6 +545,7 @@ internal static class Help
         Exit codes:
           0  success
           1  something failed, see stderr
+        {UsageErrorExitCode}
         """;
 
     public static string LoginRemove => $"""
@@ -548,32 +566,78 @@ internal static class Help
         Exit codes:
           0  success, also when revoking failed
           1  a name has no saved login, or the saved logins can't be written
+        {UsageErrorExitCode}
         """;
 
     /// <summary>
-    /// Prints help instead of running when there are no arguments, or --help is asked for. Returns true when handled.
+    /// Prints help instead of running when there are no arguments, or --help is asked for, and the usage of a command
+    /// run without the arguments it needs. Returns the exit code when handled, or null to run the command.
     /// </summary>
-    public static bool TryPrint(string[] args)
+    public static int? TryPrint(string[] args)
     {
         if (args.Length == 0 || IsHelp(args[0]) || args[0] == "help")
         {
             var command = args.Length > 1 && !IsHelp(args[1]) ? GetCommandName(args[1..]) : null;
             Console.WriteLine(GetCommandHelp(command) ?? Overview);
-            return true;
+            return ExitCodes.Ok;
         }
 
         var name = GetCommandName(args);
         var commandHelp = GetCommandHelp(name);
         var bare = args.Length == name.Count(static c => c == ' ') + 1;
 
-        // A bare command, or --help anywhere before the patterns. Commands that need no arguments run bare instead
-        if ((commandHelp != null && bare && name is not ("login" or "login list")) || Array.Exists(ArgumentParser.SplitPatterns(args).Options, IsHelp))
+        // --help anywhere before the patterns, and commands that only group subcommands
+        if (Array.Exists(ArgumentParser.SplitPatterns(args).Options, IsHelp) || (bare && name is "workshop" or "login remove"))
         {
             Console.WriteLine(commandHelp ?? Overview);
-            return true;
+            return ExitCodes.Ok;
         }
 
-        return false;
+        // Commands that need no arguments run bare instead
+        if (commandHelp == null || !bare || name is "login" or "login list")
+        {
+            return null;
+        }
+
+        Console.Error.WriteLine(GetShortUsage(name, commandHelp));
+
+        return ExitCodes.ForUsageError(name);
+    }
+
+    // The sections of a command's help that a short usage has
+    private static readonly string[] ShortUsageSections = ["Usage:", "Examples:", "Example:"];
+
+    /// <summary>
+    /// The usage and examples of a command's help, and how to see all of it.
+    /// </summary>
+    internal static string GetShortUsage(string command, string help)
+    {
+        var lines = help.ReplaceLineEndings("\n").Split('\n');
+        var shortUsage = new List<string>();
+
+        foreach (var header in ShortUsageSections)
+        {
+            var start = Array.IndexOf(lines, header);
+
+            if (start < 0)
+            {
+                continue;
+            }
+
+            if (shortUsage.Count > 0)
+            {
+                shortUsage.Add("");
+            }
+
+            // The section's indented lines, up to the first line that isn't
+            shortUsage.Add(header);
+            shortUsage.AddRange(lines.Skip(start + 1).TakeWhile(static l => l.StartsWith(' ')));
+        }
+
+        shortUsage.Add("");
+        shortUsage.Add($"Run \"{ExeName} {command} --help\" for details.");
+
+        return string.Join(Environment.NewLine, shortUsage);
     }
 
     private static string? GetCommandHelp(string? command) => command switch

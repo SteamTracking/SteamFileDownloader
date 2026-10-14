@@ -44,6 +44,18 @@ public class GetCommandTests
         await Assert.That(Help.QuoteArgument(argument)).IsEqualTo(expected);
     }
 
+    [Test]
+    [Arguments("2347771:x", "server.dll", "Invalid target \"2347771:x\"")]
+    [Arguments("2347771", "regex:(", "Invalid regex pattern")]
+    public async Task InvalidTargetOrPatternIsAUsageErrorBeforeLoggingIn(string target, string pattern, string error)
+    {
+        var arguments = new DepotArguments("get", new DepotOptions(730, Anonymous: true), [target], [pattern]);
+
+        // Logging in would throw on the cancelled token
+        await Assert.That(await GetCommand.RunAsync(arguments, new CancellationToken(canceled: true))).IsEqualTo(ExitCodes.UsageError);
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains(error);
+    }
+
     private static Target Target(uint appID, uint? depotID, ulong? manifestID = null, string branch = "public") => new("t", appID, depotID, manifestID, branch);
 
     private static string? SearchAllHint(params Target[] targets) => GetCommand.GetSearchAllHint(targets)?.Replace(Help.ExeName, "SFD", StringComparison.Ordinal);

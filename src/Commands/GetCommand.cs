@@ -111,19 +111,20 @@ internal static class GetCommand
         {
             if (DepotArgumentParser.ParseTarget(arg, arguments) is not { } target)
             {
-                return ExitCodes.Failed;
+                return ExitCodes.ForUsageError(arguments.Command);
             }
 
             targets.Add(target);
         }
 
-        return await RunAsync(arguments.Options, arguments.Patterns, list: arguments.Command == "ls", run => ResolveJobsAsync(run, targets), cancellationToken);
+        return await RunAsync(arguments.Command, arguments.Options, arguments.Patterns, run => ResolveJobsAsync(run, targets), cancellationToken);
     }
 
     /// <summary>
-    /// Logs in, adds the run's jobs with resolveJobs, gets every manifest, and lists or downloads the matching files.
+    /// Runs get or ls, or workshop get or ls: logs in, adds the run's jobs with resolveJobs, gets every manifest, and
+    /// lists or downloads the matching files.
     /// </summary>
-    internal static async Task<int> RunAsync(DepotOptions options, List<string> patterns, bool list, Func<Run, Task> resolveJobs, CancellationToken cancellationToken)
+    internal static async Task<int> RunAsync(string command, DepotOptions options, List<string> patterns, Func<Run, Task> resolveJobs, CancellationToken cancellationToken)
     {
         FileFilter filter;
 
@@ -134,7 +135,7 @@ internal static class GetCommand
         catch (ArgumentException e)
         {
             Log.Error($"Invalid regex pattern: {e.Message}");
-            return ExitCodes.Failed;
+            return ExitCodes.ForUsageError(command);
         }
 
         var (loggedOn, logOnExitCode) = await SteamSession.CreateLoggedOnAsync(options, takesTargets: true, cancellationToken);
@@ -172,7 +173,7 @@ internal static class GetCommand
 
         MatchFiles(run);
 
-        return list ? await ListFilesAsync(run, cancellationToken) : await GetFilesAsync(run, cancellationToken);
+        return command is "ls" or "workshop ls" ? await ListFilesAsync(run, cancellationToken) : await GetFilesAsync(run, cancellationToken);
     }
 
     private static async Task<int> GetFilesAsync(Run run, CancellationToken cancellationToken)
