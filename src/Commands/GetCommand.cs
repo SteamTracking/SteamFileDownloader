@@ -31,22 +31,37 @@ internal static class GetCommand
         public List<ManifestJob> Jobs = [];
         public Dictionary<ManifestJob, List<MatchedFile>> Matches = [];
         public Dictionary<string, int> MatchCounts = [];
-        public List<string> FailedTargets = [];
 
         // The jobs of each target that names several manifests, like all, by the target's source. Its manifests fail
         // quietly one by one, but not all of them
         public Dictionary<string, List<ManifestJob>> AllTargets = [];
         public int Rows;
-        public bool Failed;
+
+        // Each failure: the target it failed, if it was one, and whether only for lack of access
+        private readonly List<(string? Target, bool NoAccess)> Failures = [];
+
+        public bool Failed => Failures.Count > 0;
 
         // Something failed other than Steam giving no access
-        public bool FailedOtherwise;
+        public bool FailedOtherwise => Failures.Exists(static f => !f.NoAccess);
+
+        // A target failed for lack of access, which another saved login may have
+        public bool FailedForAccess => Failures.Exists(static f => f.Target != null && f.NoAccess);
+
+        public List<string> FailedTargets => [.. Failures.Where(static f => f.Target != null).Select(static f => f.Target!)];
+
+        // VPK patterns of directory files that failed to download or read, which were reported then, so they don't
+        // count as matching nothing
+        public HashSet<string> FailedVpkPatterns = [];
 
         // Whole depots are thousands of files, which nobody asked to see one by one
         public bool HideRows;
 
         // How to search every depot of the targets' app, up to the patterns, suggested when a pattern matched nothing
         public string? SearchAllHint;
+
+        // With only VPK patterns, every row is a VPK entry, and directory files are downloaded only to read them
+        public bool VpkOnly => Filter.Patterns.Count == 0 && Filter.VpkPatterns.Count > 0;
 
         private readonly Dictionary<(uint DepotID, ulong ManifestID), ManifestJob> JobsByManifest = [];
 
@@ -72,16 +87,7 @@ internal static class GetCommand
             return job;
         }
 
-        public void Fail(string? target = null, bool noAccess = false)
-        {
-            if (target != null)
-            {
-                FailedTargets.Add(target);
-            }
-
-            Failed = true;
-            FailedOtherwise |= !noAccess;
-        }
+        public void Fail(string? target = null, bool noAccess = false) => Failures.Add((target, noAccess));
 
         public void WriteRow(ManifestJob job, params string[] columns)
         {
@@ -171,7 +177,8 @@ internal static class GetCommand
 
     private static async Task<int> GetFilesAsync(Run run, CancellationToken cancellationToken)
     {
-        using var downloader = new FileDownloader(run.Session, cancellationToken);
+        // With only VPK patterns, the files are directory files to read entries from
+        using var downloader = new FileDownloader(run.Session, cancellationToken) { LogFilesSummary = !run.VpkOnly };
 
         var fileJobs = run.Matches
             .SelectMany(static m => m.Value.Select(f => new FileJob(m.Key, f.File)))
@@ -224,7 +231,12 @@ internal static class GetCommand
 
             if (directories.Count > 0)
             {
-                Log.Info($"VPK entries: {results.Sum(static r => r.Paths.Count)} from {directories.Count} directory files.");
+                // With only VPK patterns, the closing line counts the entries
+                if (!run.VpkOnly)
+                {
+                    Log.Info($"VPK entries: {results.Sum(static r => r.Paths.Count)} from {Log.Plural(directories.Count, "directory file")}.");
+                }
+
                 downloader.LogChunkErrors();
             }
         }
@@ -252,7 +264,7 @@ internal static class GetCommand
         }
 
         // Directory files have to be downloaded to read their entries
-        using var downloader = new FileDownloader(run.Session, cancellationToken);
+        using var downloader = new FileDownloader(run.Session, cancellationToken) { LogFilesSummary = false };
         var dirJobs = run.Matches
             .SelectMany(static m => m.Value.Where(static f => f.VpkPatterns.Count > 0).Select(f => new FileJob(m.Key, f.File)))
             .ToList();
@@ -450,6 +462,13 @@ internal static class GetCommand
             yield break;
         }
 
+        var downloaded = files.Select(static f => f.File).ToHashSet();
+
+        foreach (var directory in directories.Values.Where(d => !downloaded.Contains(d.File)))
+        {
+            run.FailedVpkPatterns.UnionWith(directory.VpkPatterns.Select(static p => p.Source));
+        }
+
         foreach (var file in files.OrderBy(f => run.Jobs.IndexOf(f.Job)))
         {
             if (!directories.TryGetValue(file.File, out var directory))
@@ -463,6 +482,7 @@ internal static class GetCommand
             if (VpkReader.TryRead(file.Job, file.Path, dirFileName) is not { } package)
 #pragma warning restore CA2000
             {
+                run.FailedVpkPatterns.UnionWith(directory.VpkPatterns.Select(static p => p.Source));
                 run.Fail();
                 continue;
             }
@@ -480,23 +500,23 @@ internal static class GetCommand
 
     private static int Finish(Run run, bool downloads)
     {
+        // A target whose manifests all failed fails as a whole, and the closing error names it. Its jobs aren't also
+        // listed as skipped
+        var failedWhole = new HashSet<ManifestJob>();
+
         foreach (var (source, jobs) in run.AllTargets)
         {
             if (jobs.All(static j => j.Manifest == null))
             {
-                var noAccess = jobs.All(static j => j.NoAccess);
-                var what = jobs[0].ItemID != null ? "items" : "depots";
-
-                Log.Error(noAccess
-                    ? $"None of the {jobs.Count} {what} of target {source} could be downloaded; this account likely has no access to them."
-                    : $"None of the {jobs.Count} {what} of target {source} could be downloaded; see the errors above.");
-                run.Fail(noAccess ? $"{source} (no access)" : source, noAccess);
+                run.Fail($"{source} ({Log.Plural(jobs.Count, jobs[0].ItemID != null ? "item" : "depot")})", jobs.All(static j => j.NoAccess));
+                failedWhole.UnionWith(jobs);
             }
         }
 
-        // Patterns can only be judged against manifests that were downloaded
-        var unmatched = run.Matches.Count > 0 ? run.MatchCounts.Where(static p => p.Value == 0).Select(static p => p.Key).ToList() : [];
-        var skippedJobs = run.Jobs.Where(static j => j.Optional && j.NoAccess).ToList();
+        // Patterns can only be judged against manifests that were downloaded, and VPK patterns against directory files
+        // that were read
+        var unmatched = run.Matches.Count > 0 ? run.MatchCounts.Where(p => p.Value == 0 && !run.FailedVpkPatterns.Contains(p.Key)).Select(static p => p.Key).ToList() : [];
+        var skippedJobs = run.Jobs.Where(j => j.Optional && j.NoAccess && !failedWhole.Contains(j)).ToList();
         var skipped = skippedJobs.Select(static j => j.ItemID != null ? j.ToString() : j.DepotID.ToString(CultureInfo.InvariantCulture)).ToList();
 
         if (unmatched.Count > 0)
@@ -523,21 +543,21 @@ internal static class GetCommand
             notes.Add($"nothing matched in {Log.JoinFirst(withoutMatches)}");
         }
 
-        Log.Info($"Done: {run.Rows} {(run.HideRows ? "files" : "rows")} from {run.Matches.Count} of {run.Jobs.Count} manifests{(notes.Count > 0 ? $" ({string.Join("; ", notes)})" : "")}.{(downloads ? $" Files are in {run.OutputRoot}" : "")}");
+        var manifests = Log.PluralOf(run.Matches.Count, run.Jobs.Count, "manifest");
+        var rows = run.HideRows ? Log.Plural(run.Rows, "file")
+            : run.VpkOnly ? Log.Plural(run.Rows, "VPK entry", "VPK entries")
+            : Log.Plural(run.Rows, "row");
 
-        if (run.FailedTargets.Count > 0)
+        Log.Info($"Done: {rows} from {manifests}{(notes.Count > 0 ? $" ({string.Join("; ", notes)})" : "")}.{(downloads ? $" Files are in {run.OutputRoot}" : "")}");
+
+        // Another saved login only helps targets that failed for lack of access
+        if (run.FailedForAccess && AccountStore.GetUsernames() is { Count: > 1 } usernames)
         {
-            Log.Error($"Failed targets: {string.Join(", ", run.FailedTargets)}. They have no rows on stdout because they failed, not because their files don't exist; see the errors above.");
-
-            var usernames = AccountStore.GetUsernames();
-
-            if (usernames.Count > 1)
-            {
-                Log.Info($"If another saved login owns this content, pick it with --username ({string.Join(", ", usernames)}).");
-            }
+            Log.Info($"If another saved login owns this content, pick it with --username ({string.Join(", ", usernames)}).");
         }
 
-        return ExitCodes.Report(run.Failed, run.FailedOtherwise, run.Session.FailureExitCode, unmatched.Count > 0);
+        // The failed targets are named in the error that explains the exit code
+        return ExitCodes.Report(new RunOutcome(run.Failed, run.FailedOtherwise, run.Session.FailureExitCode, unmatched.Count > 0, run.FailedTargets));
     }
 
     /// <summary>

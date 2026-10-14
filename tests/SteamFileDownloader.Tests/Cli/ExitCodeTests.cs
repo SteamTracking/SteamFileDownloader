@@ -15,10 +15,34 @@ public class ExitCodeTests
     [Arguments(false, false, ExitCodes.RateLimited, true, ExitCodes.NoMatch)]
     public async Task ExitCode(bool failed, bool failedOtherwise, int sessionFailureExitCode, bool unmatched, int expected)
     {
-        var (code, message) = ExitCodes.GetExitCode(failed, failedOtherwise, sessionFailureExitCode, unmatched);
+        var (code, message) = ExitCodes.GetExitCode(new RunOutcome(failed, failedOtherwise, sessionFailureExitCode, unmatched));
 
         await Assert.That(code).IsEqualTo(expected);
         // Unmatched patterns are reported where they're found
         await Assert.That(message == null).IsEqualTo(expected is ExitCodes.Ok or ExitCodes.NoMatch);
+    }
+
+    [Test]
+    public async Task FailedTargetsAreNamedInTheOneClosingError()
+    {
+        var (code, message) = ExitCodes.GetExitCode(new RunOutcome(true, false, ExitCodes.Failed, false, ["all (12 depots)", "2347771:123"]));
+
+        await Assert.That(code).IsEqualTo(ExitCodes.NoDepotAccess);
+        await Assert.That(message).IsEqualTo("Exit code 5: this account has no access to all (12 depots), 2347771:123, so stdout is partial and lacks their rows, though the files may exist.");
+
+        (code, message) = ExitCodes.GetExitCode(new RunOutcome(true, true, ExitCodes.Failed, true, ["2347771 (branch beta)"]));
+
+        await Assert.That(code).IsEqualTo(ExitCodes.Failed);
+        await Assert.That(message).IsEqualTo("Exit code 1: 2347771 (branch beta) failed, so stdout is partial and lacks their rows, though the files may exist, and a pattern matched nothing.");
+    }
+
+    [Test]
+    [Arguments(true, "Exit code 1: some targets or files failed, so stdout is partial.")]
+    [Arguments(false, "Exit code 5: this account has no access to some targets, so stdout is partial.")]
+    public async Task FailuresWithoutTargetsKeepTheGeneralReason(bool failedOtherwise, string expected)
+    {
+        var (_, message) = ExitCodes.GetExitCode(new RunOutcome(true, failedOtherwise, ExitCodes.Failed, false, []));
+
+        await Assert.That(message).IsEqualTo(expected);
     }
 }

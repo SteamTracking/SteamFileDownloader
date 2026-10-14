@@ -89,6 +89,48 @@ public class WorkshopJobsTests
         await Assert.That(run.Jobs.All(static j => j.Optional)).IsTrue();
         await Assert.That(run.AllTargets["1"].Select(static j => j.ToString())).IsEquivalentTo(run.Jobs.Select(static j => j.ToString()), TUnit.Assertions.Enums.CollectionOrdering.Matching);
         await Assert.That(run.Failed).IsFalse();
+
+        var output = TestContext.Current!.GetStandardOutput() + TestContext.Current.GetErrorOutput();
+        await Assert.That(output).Contains("Collection 1: 2 of 4 items (2 skipped: 11 private, 12 legacy).").And.DoesNotContain("Skipping");
+    }
+
+    [Test]
+    public async Task ManySkippedItemsAreCountedByReason()
+    {
+        (string, ulong)[] skipped = [("removed", 1), ("without files", 5), ("removed", 2), ("removed", 3), ("without files", 6), ("removed", 4)];
+
+        await Assert.That(WorkshopCommands.FormatSkipped(skipped)).IsEqualTo("6 skipped: 4 removed, 2 without files");
+        await Assert.That(WorkshopCommands.FormatSkipped(skipped[..3])).IsEqualTo("3 skipped: 1, 2 removed, 5 without files");
+    }
+
+    [Test]
+    public async Task CollectionItemsWithoutAManifestAreSkippedWithTheirReason()
+    {
+        // 11's history fails, 12 has none, and 13 is of an app without a workshop depot, which its failed history doesn't change
+        var source = new FakeWorkshopSource()
+            .Add(Collection(1, (10, 1), (11, 2), (12, 3), (13, 4)), Item(10, manifest: 1000), Item(11), Item(12), Item(13, app: 570))
+            .AddApp(730, 730);
+        source.FailingHistories.UnionWith([11ul, 13ul]);
+
+        var run = await Resolve(source, "1");
+
+        await Assert.That(run.Jobs.Select(static j => j.ToString())).IsEquivalentTo(["10:1000"]);
+        await Assert.That(run.Failed).IsFalse();
+
+        var output = TestContext.Current!.GetStandardOutput() + TestContext.Current.GetErrorOutput();
+        await Assert.That(output).Contains("Collection 1: 1 of 4 items (3 skipped: 11 failed to look up, 12, 13 without files).");
+    }
+
+    [Test]
+    public async Task ItemWithoutAWorkshopDepotFailsWithThatReason()
+    {
+        var source = new FakeWorkshopSource().Add(Item(13, app: 570));
+        source.FailingHistories.Add(13);
+
+        var run = await Resolve(source, "13");
+
+        await Assert.That(run.FailedTargets).IsEquivalentTo(["13"]);
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("App 570 has no workshop depot, so item 13 has no files to download.");
     }
 
     [Test]

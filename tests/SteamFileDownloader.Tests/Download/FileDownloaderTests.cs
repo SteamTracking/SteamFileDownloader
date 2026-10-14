@@ -48,6 +48,10 @@ public class FileDownloaderTests
         await Assert.That(await File.ReadAllBytesAsync(path)).IsEquivalentTo([.. ChunkA, .. ChunkB]);
         await Assert.That(File.GetLastWriteTimeUtc(path)).IsEqualTo(TestManifests.CreationTime);
         await Assert.That(source.Calls.Count).IsEqualTo(2);
+
+        // Zero counts are left out of the summary
+        var output = TestContext.Current!.GetStandardOutput() + TestContext.Current.GetErrorOutput();
+        await Assert.That(output).Contains("Downloading 1 file (").And.Contains("Files: 1 downloaded (").And.DoesNotContain("copied").And.DoesNotContain("already present");
         await Assert.That(Directory.GetFiles(temp.Path, "*", SearchOption.AllDirectories)).IsEquivalentTo([path]);
     }
 
@@ -83,6 +87,35 @@ public class FileDownloaderTests
         await Assert.That(success).IsTrue();
         await Assert.That(files.Select(static f => f.Path)).IsEquivalentTo([path]);
         await Assert.That(source.Calls).IsEmpty();
+        await Assert.That(TestContext.Current!.GetStandardOutput() + TestContext.Current.GetErrorOutput()).Contains("Files: 1 already present.");
+    }
+
+    [Test]
+    public async Task SummaryCountsEachOutcomeAndCanBeLeftOut()
+    {
+        using var temp = new TempDirectory();
+        var present = TestManifests.File("present.bin", ChunkC);
+        var first = TestManifests.File("a/same.bin", ChunkA);
+        var second = TestManifests.File("b/same.bin", ChunkA);
+        var job = TestManifests.Job(temp.Path, 1, present, first, second);
+        WriteFile(Path.Combine(temp.Path, "present.bin"), ChunkC);
+
+        using (var downloader = Downloader(SourceOf(ChunkA)))
+        {
+            await downloader.DownloadAllFiles([new FileJob(job, present), new FileJob(job, first), new FileJob(job, second)]);
+        }
+
+        var output = TestContext.Current!.GetStandardOutput() + TestContext.Current.GetErrorOutput();
+        await Assert.That(output).Contains("Files: 1 downloaded (").And.Contains("), 1 copied from identical files, 1 already present.");
+
+        using var quiet = new FileDownloader(SourceOf(ChunkA), default) { TimeProvider = new InstantTimeProvider(), LogFilesSummary = false };
+        var (success, _) = await quiet.DownloadAllFiles([new FileJob(job, present)]);
+
+        await Assert.That(success).IsTrue();
+
+        // Only the first download's line
+        var after = TestContext.Current.GetStandardOutput() + TestContext.Current.GetErrorOutput();
+        await Assert.That(after.Split("Files:").Length).IsEqualTo(2);
     }
 
     [Test]

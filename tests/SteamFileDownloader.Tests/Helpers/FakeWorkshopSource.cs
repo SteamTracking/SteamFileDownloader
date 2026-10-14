@@ -16,6 +16,9 @@ internal sealed class FakeWorkshopSource : IWorkshopSource
     public List<PublishedFileDetails> SearchResults = [];
     public List<CPublishedFile_QueryFiles_Request> QueryRequests = [];
 
+    // Items whose change history requests fail, like Steam answering with an error
+    public HashSet<ulong> FailingHistories = [];
+
     // Steam's own cap on items per search page
     public int SearchPageCap = 100;
 
@@ -79,6 +82,11 @@ internal sealed class FakeWorkshopSource : IWorkshopSource
     public Task<CPublishedFile_GetChangeHistory_Response> GetChangeHistoryAsync(ulong itemID, uint startIndex, uint count)
     {
         HistoryRequests.Add((itemID, startIndex, count));
+
+        if (FailingHistories.Contains(itemID))
+        {
+            return Task.FromException<CPublishedFile_GetChangeHistory_Response>(new InvalidOperationException("Steam answered Fail"));
+        }
 
         var changes = Histories.GetValueOrDefault(itemID) ?? [];
         var response = new CPublishedFile_GetChangeHistory_Response { total = (uint)changes.Count };

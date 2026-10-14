@@ -178,9 +178,13 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
 
     private bool IsError(Exception e) => IsError(e, CancellationToken);
 
-    public async Task<bool> ConnectAsync(int attempt = 0)
+    /// <summary>
+    /// Connects to Steam, after a delay when it's a retry, whose line starts with the failure that caused it.
+    /// Returns false when it failed, which the caller reports.
+    /// </summary>
+    public async Task<bool> ConnectAsync(int attempt = 0, string? failure = null)
     {
-        await DelayBeforeRetryAsync("connection", attempt);
+        await DelayBeforeRetryAsync("connection", attempt, failure: failure);
 
         ConnectedTcs = new TaskCompletionSource<bool>();
         LoggedOnTcs = new TaskCompletionSource<SteamUser.LoggedOnCallback?>();
@@ -190,7 +194,6 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
         // The callback pump stops on cancellation, so the callbacks would never come
         if (!await ConnectedTcs.Task.WaitAsync(CancellationToken))
         {
-            Log.Info("Failed to connect to Steam.");
             return false;
         }
 
@@ -316,11 +319,15 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     {
         var result = EResult.Fail;
 
+        // Why the last attempt failed, said in the line of the retry. A final failure is explained by the caller
+        string? failure = null;
+
         for (var attempt = 0; attempt <= MaxRetries; attempt++)
         {
-            if (!await ConnectAsync(attempt))
+            if (!await ConnectAsync(attempt, failure))
             {
                 result = EResult.NoConnection;
+                failure = "Connecting to Steam failed";
                 continue;
             }
 
@@ -340,7 +347,6 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
                     }
                     catch (Exception e) when (IsError(e))
                     {
-                        Log.Info($"Authentication failed: {DescribeError(e)}");
                         SteamClient.Disconnect();
 
                         // Steam Guard without a terminal to ask for the code fails the same way every time
@@ -351,11 +357,14 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
                             _ => EResult.Fail,
                         };
 
+                        // The caller's explanation of a final result doesn't have the exception's message
                         if (IsFinal(result))
                         {
+                            Log.Info($"Authentication failed: {DescribeError(e)}");
                             break;
                         }
 
+                        failure = $"Authentication failed ({DescribeError(e)})";
                         continue;
                     }
                 }
@@ -383,13 +392,14 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
                 return result;
             }
 
-            Log.Info($"Failed to log in: {result}.");
             SteamClient.Disconnect();
 
             if (IsFinal(result))
             {
                 break;
             }
+
+            failure = $"Logging in to Steam failed ({result})";
         }
 
         return result;
@@ -941,7 +951,8 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
         }
     }
 
-    private async Task DelayBeforeRetryAsync(string what, int attempt, int maxAttempts = MaxRetries + 1)
+    // With a failure, the line says what failed and that it's retried, like "Connecting to Steam failed, retrying in 2.1s (2/8)"
+    private async Task DelayBeforeRetryAsync(string what, int attempt, int maxAttempts = MaxRetries + 1, string? failure = null)
     {
         if (attempt == 0)
         {
@@ -949,7 +960,9 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
         }
 
         var delay = ExponentialBackoff(attempt);
-        Log.Info($"Retrying the {what} in {delay / 1000.0:F1}s (attempt {attempt + 1}/{maxAttempts})...");
+        Log.Info(failure != null
+            ? $"{failure}, retrying in {delay / 1000.0:F1}s ({attempt + 1}/{maxAttempts})..."
+            : $"Retrying the {what} in {delay / 1000.0:F1}s (attempt {attempt + 1}/{maxAttempts})...");
         await Task.Delay(delay, CancellationToken);
     }
 

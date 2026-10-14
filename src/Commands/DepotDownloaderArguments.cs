@@ -20,6 +20,8 @@ internal static class DepotDownloaderArguments
         var depots = new List<string>();
         var manifests = new List<string>();
         var patterns = new List<string>();
+        var notNeeded = new List<string>();
+        var depotFilters = new List<string>();
         var options = new DepotOptions(null);
         var manifestOnly = false;
         string? pubfile = null;
@@ -105,7 +107,7 @@ internal static class DepotDownloaderArguments
                     break;
                 case "-os" or "-osarch" or "-language" or "-all-platforms" or "-all-archs" or "-all-languages" or "-lowviolence":
                     // Without -depot, DepotDownloader picks depots by these, but here every depot of the app is used
-                    Log.Warn($"Ignoring {args[i]}: depots aren't filtered by platform or language, so pick them with -depot.");
+                    depotFilters.Add(args[i]);
 
                     if (value == null)
                     {
@@ -115,7 +117,7 @@ internal static class DepotDownloaderArguments
                     break;
                 default:
                     // Login and download tuning options are handled by this tool on its own
-                    Log.Info($"Ignoring {args[i]}, not needed.");
+                    notNeeded.Add(args[i]);
 
                     if (value == null)
                     {
@@ -126,6 +128,16 @@ internal static class DepotDownloaderArguments
             }
 
             i++;
+        }
+
+        if (notNeeded.Count > 0)
+        {
+            Log.Info($"Ignoring {string.Join(", ", notNeeded)}: not needed.");
+        }
+
+        if (depotFilters.Count > 0)
+        {
+            Log.Warn($"Ignoring {string.Join(", ", depotFilters)}: depots aren't filtered by platform or language, so pick them with -depot.");
         }
 
         if ((pubfile != null || ugc != null) && (depots.Count > 0 || manifests.Count > 0))

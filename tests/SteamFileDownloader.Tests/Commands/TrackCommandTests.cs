@@ -151,4 +151,15 @@ public class TrackCommandTests
         await Assert.That(TrackCommand.ParseArguments(["730", "--output", "."])).IsNull();
         await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("track takes the app as --appid, like: ").And.Contains("track --appid 730 --output .");
     }
+
+    [Test]
+    [Arguments(new uint[] { 2347771 }, true, false, "Failed (exit 1) after 00:01:02: tracked depot 2347771 has no manifest; steam_buildid.txt not written. Rerun to retry.")]
+    [Arguments(new uint[] { 1, 2 }, false, false, "Failed (exit 1) after 00:01:02: tracked depots 1, 2 have no manifest. Rerun to retry.")]
+    [Arguments(new uint[] { 1, 2, 3, 4, 5, 6, 7 }, false, false, "Failed (exit 1) after 00:01:02: tracked depots 1, 2, 3, 4, 5 and 2 more have no manifest. Rerun to retry.")]
+    [Arguments(new uint[0], true, false, "Failed (exit 1) after 00:01:02: some manifests or files failed, see above; steam_buildid.txt not written.")]
+    [Arguments(new uint[0], false, true, "Failed (exit 1) after 00:01:02: some manifests or files failed, see above. Rerun to retry.")]
+    public async Task FailureIsOneLine(uint[] failedDepots, bool hasBuildId, bool writeFailed, string expected)
+    {
+        await Assert.That(TrackCommand.DescribeFailure("00:01:02", [.. failedDepots], hasBuildId, writeFailed)).IsEqualTo(expected);
+    }
 }

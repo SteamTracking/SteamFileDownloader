@@ -279,24 +279,40 @@ internal static class TrackCommand
             allSucceeded = TryWrite("steam_buildid.txt", () => File.WriteAllText(Path.Combine(outputPath, "steam_buildid.txt"), buildId.Value.ToString(CultureInfo.InvariantCulture)));
         }
 
-        Log.Info($"Done in {downloadTimer.Elapsed:hh\\:mm\\:ss}.");
+        var elapsed = downloadTimer.Elapsed.ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture);
 
         if (allSucceeded)
         {
+            Log.Info($"Done in {elapsed}.");
             return ExitCodes.Ok;
         }
 
         // Running again right away would hit the same rate limit or rejected login
         if (session.FailureExitCode != ExitCodes.Failed)
         {
-            Log.Error($"Exit code {session.FailureExitCode}: logging in again after a lost connection failed (see above), so some manifests and their files are missing.");
+            Log.Error($"Failed (exit {session.FailureExitCode}) after {elapsed}: logging in again after a lost connection failed (see above), so some manifests and their files are missing.");
             return session.FailureExitCode;
         }
 
-        var missing = failedDepots.Count > 0 ? $" Tracked depots {string.Join(", ", failedDepots)} have no manifest, so none of their files were downloaded." : "";
-        Log.Error($"Exit code 1: some manifests or files failed, see the errors above.{missing} Running the same command again retries only those{(buildId.HasValue ? ", and then writes steam_buildid.txt" : "")}.");
+        Log.Error(DescribeFailure(elapsed, failedDepots, buildId.HasValue, writeFailed));
 
         return ExitCodes.Failed;
+    }
+
+    /// <summary>
+    /// The closing error of a failed run. Failed files were already listed with how to retry them, but tracked depots
+    /// without a manifest and failed writes were not.
+    /// </summary>
+    internal static string DescribeFailure(string elapsed, List<uint> failedDepots, bool hasBuildId, bool writeFailed)
+    {
+        var depots = Log.JoinFirst([.. failedDepots.Select(static d => d.ToString(CultureInfo.InvariantCulture))]);
+        var what = failedDepots.Count > 0
+            ? $"tracked {(failedDepots.Count == 1 ? $"depot {depots} has" : $"depots {depots} have")} no manifest"
+            : "some manifests or files failed, see above";
+        var buildIdNote = hasBuildId ? "; steam_buildid.txt not written" : "";
+        var rerun = failedDepots.Count > 0 || writeFailed ? ". Rerun to retry" : "";
+
+        return $"Failed (exit 1) after {elapsed}: {what}{buildIdNote}{rerun}.";
     }
 
     // Like a full disk or a file locked by another program

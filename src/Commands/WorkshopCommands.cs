@@ -65,7 +65,7 @@ internal static class WorkshopCommands
 
         session.Disconnect();
 
-        return ExitCodes.Report(outcome.Failed, outcome.FailedOtherwise, session.FailureExitCode);
+        return ExitCodes.Report(new RunOutcome(outcome.Failed, outcome.FailedOtherwise, session.FailureExitCode));
     }
 
     /// <summary>
@@ -82,9 +82,9 @@ internal static class WorkshopCommands
 
             if (!Workshop.IsAvailable(item))
             {
-                var (problem, noAccess) = Workshop.GetProblem(target.ItemID, item)!.Value;
-                Log.Error(problem);
-                outcome.Fail(noAccess);
+                var problem = Workshop.GetProblem(target.ItemID, item)!.Value;
+                Log.Error(problem.Message);
+                outcome.Fail(problem.NoAccess);
                 continue;
             }
 
@@ -104,7 +104,10 @@ internal static class WorkshopCommands
             // A collection's row comes first, then its items' rows
             items.Add(item);
 
-            foreach (var childID in Workshop.GetCollectionItems(item, details))
+            var children = Workshop.GetCollectionItems(item, details);
+            var skipped = new List<(string Reason, ulong ItemID)>();
+
+            foreach (var childID in children)
             {
                 var child = details.GetValueOrDefault(childID);
 
@@ -114,8 +117,13 @@ internal static class WorkshopCommands
                 }
                 else
                 {
-                    Log.Info($"Skipping item {childID} of collection {target.ItemID}: {Workshop.GetProblem(childID, child)!.Value.Problem}");
+                    skipped.Add((Workshop.GetProblem(childID, child)!.Value.SkipReason, childID));
                 }
+            }
+
+            if (skipped.Count > 0)
+            {
+                Log.Info($"Collection {target.ItemID}: {Log.Plural(children.Count, "item")}, {FormatSkipped(skipped)}.");
             }
         }
 
@@ -248,7 +256,7 @@ internal static class WorkshopCommands
     {
         var details = await Workshop.GetDetailsAsync(source, targets.Select(static t => t.ItemID));
         var candidates = new List<Candidate>();
-        var collections = new Dictionary<string, (ulong ItemID, int Items, HashSet<ManifestJob> Jobs)>();
+        var collections = new Dictionary<string, (ulong ItemID, int Items, HashSet<ManifestJob> Jobs, List<(string Reason, ulong ItemID)> Skipped)>();
 
         foreach (var target in targets)
         {
@@ -264,15 +272,19 @@ internal static class WorkshopCommands
                 }
 
                 var items = Workshop.GetCollectionItems(item, details);
-                collections.TryAdd(target.Source, (target.ItemID, items.Count, []));
+
+                if (!collections.TryAdd(target.Source, (target.ItemID, items.Count, [], [])))
+                {
+                    continue;
+                }
 
                 foreach (var childID in items)
                 {
                     var child = details.GetValueOrDefault(childID);
 
-                    if (Workshop.GetProblem(childID, child) is { } childProblem)
+                    if (Workshop.GetProblem(childID, child) is { } problem)
                     {
-                        Log.Info($"Skipping item {childID} of collection {target.ItemID}: {childProblem.Problem}");
+                        collections[target.Source].Skipped.Add((problem.SkipReason, childID));
                     }
                     else
                     {
@@ -283,10 +295,10 @@ internal static class WorkshopCommands
                 continue;
             }
 
-            if (Workshop.GetProblem(target.ItemID, item) is { } problem)
+            if (Workshop.GetProblem(target.ItemID, item) is { } itemProblem)
             {
-                Log.Error(problem.Problem);
-                run.Fail(target.Source, problem.NoAccess);
+                Log.Error(itemProblem.Message);
+                run.Fail(target.Source, itemProblem.NoAccess);
                 continue;
             }
 
@@ -295,7 +307,7 @@ internal static class WorkshopCommands
 
         // An item given twice, or both directly and in a collection, is looked up once
         var appInfosTask = source.GetAppInfosAsync([.. candidates.Select(static c => c.Details.consumer_appid).Distinct()]);
-        var lookups = new Dictionary<(ulong ItemID, ulong? ManifestID), Task<(ulong ManifestID, string? Problem)>>();
+        var lookups = new Dictionary<(ulong ItemID, ulong? ManifestID), Task<(ulong ManifestID, ItemProblem? Problem)>>();
         var manifests = await Task.WhenAll(candidates.Select(c =>
             lookups.TryGetValue((c.ItemID, c.Target.ManifestID), out var lookup) ? lookup : lookups[(c.ItemID, c.Target.ManifestID)] = GetManifestAsync(source, c, cancellationToken)));
         var appInfos = await appInfosTask;
@@ -307,20 +319,21 @@ internal static class WorkshopCommands
             var depotID = Workshop.GetWorkshopDepot(appInfos.GetValueOrDefault(appID));
             var (manifestID, problem) = manifests[i];
 
+            // Without a workshop depot, how the manifest lookup went doesn't matter
             if (depotID == 0)
             {
-                problem = $"App {appID} has no workshop depot, so item {candidate.ItemID} has no files to download.";
+                problem = new ItemProblem($"App {appID} has no workshop depot, so item {candidate.ItemID} has no files to download.", "without files");
             }
 
-            if (problem != null)
+            if (problem is { } candidateProblem)
             {
                 if (candidate.FromCollection)
                 {
-                    Log.Info($"Skipping item {candidate.ItemID} of collection {candidate.Target.ItemID}: {problem}");
+                    collections[candidate.Target.Source].Skipped.Add((candidateProblem.SkipReason, candidate.ItemID));
                 }
                 else
                 {
-                    Log.Error(problem);
+                    Log.Error(candidateProblem.Message);
                     run.Fail(candidate.Target.Source);
                 }
 
@@ -343,25 +356,42 @@ internal static class WorkshopCommands
             }
         }
 
-        foreach (var (targetSource, (itemID, items, jobs)) in collections)
+        foreach (var (targetSource, (itemID, items, jobs, skipped)) in collections)
         {
+            var skippedNote = skipped.Count > 0 ? $" ({FormatSkipped(skipped)})" : "";
+
             if (jobs.Count == 0)
             {
-                Log.Error($"None of the {items} items of collection {itemID} have files to download, see above.");
+                Log.Error($"None of the {items} items of collection {itemID} have files to download{skippedNote}.");
                 run.Fail(targetSource);
             }
             else
             {
-                Log.Info($"Target {targetSource}: {jobs.Count} of the {items} items of collection {itemID}.");
+                Log.Info($"Collection {itemID}: {jobs.Count} of {Log.Plural(items, "item")}{skippedNote}.");
                 run.AllTargets[targetSource] = [.. jobs];
             }
         }
     }
 
     /// <summary>
-    /// The manifest of an item to download: the one asked for, the one in its details, or the newest in its history.
+    /// How many items of a collection were skipped, by reason in the order they first came up, like "12 skipped: 8
+    /// removed, 4 without files". The ids are listed only when there are few.
     /// </summary>
-    private static async Task<(ulong ManifestID, string? Problem)> GetManifestAsync(IWorkshopSource source, Candidate candidate, CancellationToken cancellationToken)
+    internal static string FormatSkipped(IReadOnlyCollection<(string Reason, ulong ItemID)> skipped)
+    {
+        var groups = skipped.GroupBy(static s => s.Reason);
+        var reasons = skipped.Count <= 5
+            ? groups.Select(static g => $"{string.Join(", ", g.Select(static s => s.ItemID))} {g.Key}")
+            : groups.Select(static g => $"{g.Count()} {g.Key}");
+
+        return $"{skipped.Count} skipped: {string.Join(", ", reasons)}";
+    }
+
+    /// <summary>
+    /// The manifest of an item to download: the one asked for, the one in its details, or the newest in its history.
+    /// Without one, the problem says why.
+    /// </summary>
+    private static async Task<(ulong ManifestID, ItemProblem? Problem)> GetManifestAsync(IWorkshopSource source, Candidate candidate, CancellationToken cancellationToken)
     {
         var itemID = candidate.ItemID;
         var current = candidate.Details.hcontent_file;
@@ -390,11 +420,11 @@ internal static class WorkshopCommands
 
             var newest = await Workshop.GetNewestManifestAsync(source, itemID);
 
-            return newest != 0 ? (newest, null) : (0, $"Item {itemID} has no manifest in its details or change history.");
+            return newest != 0 ? (newest, null) : (0, new ItemProblem($"Item {itemID} has no manifest in its details or change history.", "without files"));
         }
         catch (Exception e) when (SteamSession.IsError(e, cancellationToken))
         {
-            return (0, $"Failed to get the change history of item {itemID}: {SteamSession.DescribeError(e)}");
+            return (0, new ItemProblem($"Failed to get the change history of item {itemID}: {SteamSession.DescribeError(e)}", "failed to look up"));
         }
     }
 }

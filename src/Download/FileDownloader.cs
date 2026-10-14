@@ -56,6 +56,10 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
     // When set, partial downloads go here instead of next to the file, so they never end up in the output folder
     public string? TempFolder { get; init; }
 
+    // Whether DownloadAllFiles logs how many files were downloaded, copied and already present, which is noise when
+    // they are only directory files to read VPK entries from
+    public bool LogFilesSummary { get; init; } = true;
+
     // The clock of the waits between chunk retries
     public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
 
@@ -158,14 +162,29 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         }
 
         var groups = fileJobs.GroupBy(static f => GetHashKey(f.File)).ToList();
-        Log.Info($"Downloading {fileJobs.Count} files ({DownloadProgress.FormatSize(groups.Sum(static g => (long)g.First().File.TotalSize))})...");
+        Log.Info($"Downloading {Log.Plural(fileJobs.Count, "file")} ({DownloadProgress.FormatSize(groups.Sum(static g => (long)g.First().File.TotalSize))})...");
 
         await using (Log.StartProgress(RenderProgress))
         {
             await Task.WhenAll(groups.Select(RunHashGroup));
         }
 
-        Log.Info($"Files: {resultCounts[(int)DownloadResult.Success]} downloaded ({DownloadProgress.FormatTransfer(Interlocked.Read(ref DownloadedBytes) - startBytes, stopwatch.Elapsed)}), {resultCounts[(int)DownloadResult.Copied]} copied from identical files, {resultCounts[(int)DownloadResult.AlreadyValid]} already present.");
+        // Only the counts that aren't zero
+        var counts = new (DownloadResult Result, string What)[]
+            {
+                (DownloadResult.Success, $"downloaded ({DownloadProgress.FormatTransfer(Interlocked.Read(ref DownloadedBytes) - startBytes, stopwatch.Elapsed)})"),
+                (DownloadResult.Copied, "copied from identical files"),
+                (DownloadResult.AlreadyValid, "already present"),
+            }
+            .Where(c => resultCounts[(int)c.Result] > 0)
+            .Select(c => $"{resultCounts[(int)c.Result]} {c.What}")
+            .ToList();
+
+        if (LogFilesSummary && counts.Count > 0)
+        {
+            Log.Info($"Files: {string.Join(", ", counts)}.");
+        }
+
         LogChunkErrors();
 
         LogFailures("files", failedFiles.Select(static f => $"{f.Job}/{FileFilter.NormalizePath(f.File.FileName)}"), "Running the same command again retries only those.");
@@ -210,7 +229,8 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
     private string FormatChunkErrorCount() => ChunkErrorReasons.Values.Sum() is > 0 and var errors ? $"{DownloadProgress.Separator}{errors} chunk errors" : "";
 
     /// <summary>
-    /// Sums up the chunk errors since the last summary in one line, a warning when chunks failed for good.
+    /// Sums up the chunk errors since the last summary in one warning, when chunks failed for good. Errors that retries
+    /// fixed aren't worth a line.
     /// </summary>
     public void LogChunkErrors()
     {
@@ -218,15 +238,12 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         var servers = TakeCounts(ChunkErrorServers);
         var failed = Interlocked.Exchange(ref FailedChunks, 0);
 
-        if (reasons.Count == 0)
+        if (reasons.Count == 0 || failed == 0)
         {
             return;
         }
 
-        var outcome = failed > 0 ? $"{failed} chunks failed after all retries" : "all were retried successfully";
-        var message = $"{reasons.Sum(static c => c.Value)} chunk errors ({Format(reasons)}) from {Format(servers)}; {outcome}.";
-
-        (failed > 0 ? (Action<string>)Log.Warn : Log.Info)(message);
+        Log.Warn($"{reasons.Sum(static c => c.Value)} chunk errors ({Format(reasons)}) from {Format(servers)}; {failed} chunks failed after all retries.");
 
         // Most first
         static List<KeyValuePair<string, int>> TakeCounts(ConcurrentDictionary<string, int> counts)

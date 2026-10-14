@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using SteamKit2;
 
 namespace SteamFileDownloader;
@@ -31,11 +32,11 @@ internal static class ExitCodes
     };
 
     /// <summary>
-    /// The exit code of a finished run, after logging the error that explains it.
+    /// The exit code of a finished run, after logging the error that explains it, if any.
     /// </summary>
-    public static int Report(bool failed, bool failedOtherwise, int sessionFailureExitCode, bool unmatched = false)
+    public static int Report(RunOutcome outcome)
     {
-        var (exitCode, message) = GetExitCode(failed, failedOtherwise, sessionFailureExitCode, unmatched);
+        var (exitCode, message) = GetExitCode(outcome);
 
         if (message != null)
         {
@@ -45,9 +46,11 @@ internal static class ExitCodes
         return exitCode;
     }
 
-    // The exit code of a finished get or ls run and the error that explains it, or null when there is nothing to add
-    public static (int ExitCode, string? Message) GetExitCode(bool failed, bool failedOtherwise, int sessionFailureExitCode, bool unmatched)
+    // The exit code of a finished run and the error that explains it, or null when there is nothing to add
+    public static (int ExitCode, string? Message) GetExitCode(RunOutcome outcome)
     {
+        var (failed, failedOtherwise, sessionFailureExitCode, unmatched, failedTargets) = outcome;
+
         if (failed && sessionFailureExitCode != Failed)
         {
             return (sessionFailureExitCode, $"Exit code {sessionFailureExitCode}: logging in again after a lost connection failed (see above), so stdout is partial.");
@@ -55,11 +58,15 @@ internal static class ExitCodes
 
         if (failed)
         {
-            var (exitCode, reason) = failedOtherwise
-                ? (Failed, "some targets or files failed")
-                : (NoDepotAccess, "this account has no access to some targets");
+            var exitCode = failedOtherwise ? Failed : NoDepotAccess;
+            var targets = failedTargets is { Count: > 0 } ? Log.JoinFirst(failedTargets) : null;
+            var subject = targets ?? (failedOtherwise ? "some targets or files" : "some targets");
+            var reason = failedOtherwise ? $"{subject} failed" : $"this account has no access to {subject}";
 
-            return (exitCode, $"Exit code {exitCode}: {reason}, so stdout is partial{(unmatched ? ", and a pattern matched nothing" : "")}.");
+            // A failed target has no rows, which says nothing about whether its files exist
+            var partial = targets != null ? "stdout is partial and lacks their rows, though the files may exist" : "stdout is partial";
+
+            return (exitCode, $"Exit code {exitCode}: {reason}, so {partial}{(unmatched ? ", and a pattern matched nothing" : "")}.");
         }
 
         // The unmatched patterns were already reported
@@ -71,3 +78,10 @@ internal static class ExitCodes
         return (Ok, null);
     }
 }
+
+/// <summary>
+/// How a run ended: whether something failed, and whether for something other than lack of access, the session's
+/// <see cref="SteamSession.FailureExitCode"/>, whether a pattern matched nothing, and the failed targets, which the
+/// closing error names as the targets without rows.
+/// </summary>
+internal sealed record RunOutcome(bool Failed, bool FailedOtherwise, int SessionFailureExitCode, bool Unmatched = false, IReadOnlyCollection<string>? FailedTargets = null);

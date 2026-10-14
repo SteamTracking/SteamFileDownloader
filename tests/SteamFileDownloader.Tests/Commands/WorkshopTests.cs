@@ -114,10 +114,20 @@ public class WorkshopTests
     }
 
     [Test]
+    [Arguments(EResult.FileNotFound, "removed")]
+    [Arguments(EResult.AccessDenied, "private")]
+    [Arguments(EResult.Busy, "without details")]
+    public async Task ProblemsHaveAShortReasonForSkippedItems(EResult result, string reason)
+    {
+        await Assert.That(Workshop.GetProblem(5, Unavailable(5, result))!.Value.SkipReason).IsEqualTo(reason);
+        await Assert.That(Workshop.GetProblem(5, Item(5, manifest: 9, flags: 0))!.Value.SkipReason).IsEqualTo("legacy");
+    }
+
+    [Test]
     public async Task MissingIdThatLooksLikeAnAppPointsToSearch()
     {
-        await Assert.That(Workshop.GetProblem(730, null)!.Value.Problem).Contains("workshop search 730");
-        await Assert.That(Workshop.GetProblem(3070715607, null)!.Value.Problem).DoesNotContain("workshop search");
+        await Assert.That(Workshop.GetProblem(730, null)!.Value.Message).Contains("workshop search 730");
+        await Assert.That(Workshop.GetProblem(3070715607, null)!.Value.Message).DoesNotContain("workshop search");
     }
 
     [Test]

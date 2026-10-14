@@ -92,7 +92,7 @@ internal static class LoginCommand
                         return ExitCodes.Failed;
                     }
 
-                    Console.WriteLine($"{saved.Username} is already logged in, and is now the default. To log in again anyway, run \"{Help.ExeName} login remove {saved.Username}\" first.");
+                    Console.WriteLine($"{saved.Username} is already logged in; it is now the default.");
                     await session.RenewSavedLoginAsync();
 
                     return ExitCodes.Ok;
@@ -218,9 +218,10 @@ internal static class LoginCommand
             }
         }
 
-        Log.Info(logins.Count == 0
-            ? $"No saved logins. Run \"{Help.ExeName} login\" to save one; it needs a person to scan a QR code."
-            : $"{logins.Count} saved {(logins.Count == 1 ? "login" : "logins")} in {AccountStore.FilePath}");
+        if (logins.Count == 0)
+        {
+            Log.Info($"No saved logins. Run \"{Help.ExeName} login\" to save one; it needs a person to scan a QR code.");
+        }
 
         return ExitCodes.Ok;
     }

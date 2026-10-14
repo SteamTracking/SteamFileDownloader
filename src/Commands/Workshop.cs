@@ -36,6 +36,12 @@ internal interface IWorkshopSource
 internal sealed record WorkshopVersion(ulong ManifestID, uint Timestamp, string Note);
 
 /// <summary>
+/// Why an item has no files to download: the error for an item given on its own, the short reason for one skipped in a
+/// collection, and whether it's for lack of access.
+/// </summary>
+internal readonly record struct ItemProblem(string Message, string SkipReason, bool NoAccess = false);
+
+/// <summary>
 /// Workshop items: an item's files are a manifest in the workshop depot of the app it's for.
 /// </summary>
 internal static class Workshop
@@ -124,20 +130,19 @@ internal static class Workshop
     }
 
     /// <summary>
-    /// Why an item has no files to download, and whether that's for lack of access, or null when it has. Collections
-    /// are expanded before this.
+    /// Why an item has no files to download, or null when it has. Collections are expanded before this.
     /// </summary>
-    public static (string Problem, bool NoAccess)? GetProblem(ulong itemID, PublishedFileDetails? details)
+    public static ItemProblem? GetProblem(ulong itemID, PublishedFileDetails? details)
     {
         var result = details == null ? EResult.FileNotFound : (EResult)details.result;
 
         return result switch
         {
-            EResult.OK when IsLegacy(details!) => ($"Item {itemID} is a legacy (non-SteamPipe) workshop item, which is not implemented.", false),
+            EResult.OK when IsLegacy(details!) => new($"Item {itemID} is a legacy (non-SteamPipe) workshop item, which is not implemented.", "legacy"),
             EResult.OK => null,
-            EResult.FileNotFound => ($"Item {itemID} does not exist.{(itemID < SmallItemID ? $" If {itemID} is an app id, find its items with \"{Help.ExeName} workshop search {itemID} <text>\"." : "")}", false),
-            EResult.AccessDenied => ($"Item {itemID} is private, or this account can't see it.", true),
-            _ => ($"Steam gave no details for item {itemID} ({result}).", false),
+            EResult.FileNotFound => new($"Item {itemID} does not exist.{(itemID < SmallItemID ? $" If {itemID} is an app id, find its items with \"{Help.ExeName} workshop search {itemID} <text>\"." : "")}", "removed"),
+            EResult.AccessDenied => new($"Item {itemID} is private, or this account can't see it.", "private", NoAccess: true),
+            _ => new($"Steam gave no details for item {itemID} ({result}).", "without details"),
         };
     }
 
