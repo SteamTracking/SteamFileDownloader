@@ -1,5 +1,3 @@
-using System.Text;
-using System.Text.Json;
 using SteamKit2;
 using SteamKit2.Internal;
 using static SteamFileDownloader.Tests.FakeWorkshopSource;
@@ -222,24 +220,10 @@ public class WorkshopTests
     }
 
     [Test]
-    public async Task JsonHasOnlyTheFieldsSteamSent()
+    public async Task InfoHasNoJsonOption()
     {
-        var item = Item(3070715607, manifest: 8344780363095656278);
-        item.revision = EPublishedFileRevision.k_EPublishedFileRevision_Latest;
-        using var stream = new MemoryStream();
-
-        using (var writer = new Utf8JsonWriter(stream))
-        {
-            Workshop.WriteJson(writer, item);
-        }
-
-        var json = JsonDocument.Parse(Encoding.UTF8.GetString(stream.ToArray())).RootElement;
-
-        await Assert.That(json.GetProperty("hcontent_file").GetString()).IsEqualTo("8344780363095656278");
-        await Assert.That(json.GetProperty("consumer_appid").GetUInt32()).IsEqualTo(730u);
-        await Assert.That(json.GetProperty("revision").GetString()).IsEqualTo("k_EPublishedFileRevision_Latest");
-        await Assert.That(json.TryGetProperty("file_url", out _)).IsFalse();
-        await Assert.That(json.TryGetProperty("children", out _)).IsFalse();
+        await Assert.That(WorkshopArgumentParser.Parse(["info", "3070715607", "--json"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("Unknown option \"--json\"");
     }
 
     [Test]

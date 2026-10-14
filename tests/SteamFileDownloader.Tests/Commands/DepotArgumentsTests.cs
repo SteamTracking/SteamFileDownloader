@@ -69,14 +69,10 @@ public class DepotArgumentsTests
     }
 
     [Test]
-    public async Task JsonCannotBeCombinedWithBranch()
+    public async Task DepotsHasNoJsonOption()
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("depots", ["730", "--json", "--branch", "beta"])).IsNull();
-
-        var json = DepotArgumentParser.ParseArguments("depots", ["730", "--json"]);
-
-        await Assert.That(json).IsNotNull();
-        await Assert.That(json!.Options.Json).IsTrue();
+        await Assert.That(DepotArgumentParser.ParseArguments("depots", ["730", "--json"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("Unknown option \"--json\"");
     }
 
     [Test]

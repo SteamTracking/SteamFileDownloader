@@ -568,16 +568,11 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
         return appInfos;
     }
 
-    public async Task<List<PublishedFileDetails>> GetPublishedFileDetailsAsync(IReadOnlyCollection<ulong> itemIDs, bool full)
+    public async Task<List<PublishedFileDetails>> GetPublishedFileDetailsAsync(IReadOnlyCollection<ulong> itemIDs)
     {
         var request = new CPublishedFile_GetDetails_Request
         {
             includechildren = true,
-            includetags = full,
-            includekvtags = full,
-            includemetadata = full,
-            includevotes = full,
-            includeadditionalpreviews = full,
         };
         request.publishedfileids.AddRange(itemIDs);
 

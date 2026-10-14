@@ -1,4 +1,3 @@
-using System.Text.Json;
 using SteamKit2;
 
 namespace SteamFileDownloader.Tests;
@@ -119,36 +118,5 @@ public class DepotsCommandTests
 
         await Assert.That(exitCode).IsEqualTo(ExitCodes.Failed);
         await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("\"abc\"");
-    }
-
-    [Test]
-    public async Task JsonHasAnObjectPerAppWithTheWholeDepotsSection()
-    {
-        var json = DepotsCommand.ToJson([(AppID, Parse(Depots)), (AppID + 1, Parse("\"depots\" { }"))]);
-
-        using var document = JsonDocument.Parse(json);
-        var root = document.RootElement;
-        var app = root.GetProperty("4242");
-
-        await Assert.That(root.EnumerateObject().Select(static p => p.Name)).IsEquivalentTo(["4242", "4243"]);
-        await Assert.That(app.GetProperty("100").GetProperty("manifests").GetProperty("beta").GetProperty("gid").GetString()).IsEqualTo("1001");
-        await Assert.That(app.GetProperty("branches").GetProperty("public").GetProperty("timeupdated").GetString()).IsEqualTo("1700000000");
-        await Assert.That(app.GetProperty("baselanguages").GetString()).IsEqualTo("english");
-        await Assert.That(root.GetProperty("4243").ValueKind).IsEqualTo(JsonValueKind.Object);
-        await Assert.That(root.GetProperty("4243").EnumerateObject().Any()).IsFalse();
-    }
-
-    [Test]
-    public async Task JsonKeepsQuotesBackslashesAndUnicodeInValues()
-    {
-        const string Name = "Ünïcode \"quoted\" back\\slash <tag>";
-        var depots = new KeyValue("depots");
-        var depot = new KeyValue("100");
-        depot.Children.Add(new KeyValue("name", Name));
-        depots.Children.Add(depot);
-
-        using var document = JsonDocument.Parse(DepotsCommand.ToJson([(AppID, depots)]));
-
-        await Assert.That(document.RootElement.GetProperty("4242").GetProperty("100").GetProperty("name").GetString()).IsEqualTo(Name);
     }
 }

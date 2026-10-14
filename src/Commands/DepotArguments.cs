@@ -7,7 +7,7 @@ using System.Text.RegularExpressions;
 namespace SteamFileDownloader;
 
 /// <summary>
-/// Options shared by the get, ls and depots commands.
+/// Options shared by the get, ls and depots commands, and the workshop commands.
 /// </summary>
 internal sealed record DepotOptions(
     uint? App,
@@ -15,8 +15,7 @@ internal sealed record DepotOptions(
     string Branch = "public",
     bool Anonymous = false,
     string? Username = null,
-    bool AllFiles = false,
-    bool Json = false)
+    bool AllFiles = false)
 {
     public static DepotOptions From(ParsedArguments parsed, uint? app) => new(
         app,
@@ -24,8 +23,7 @@ internal sealed record DepotOptions(
         parsed.Options.GetValueOrDefault("branch") ?? "public",
         parsed.Options.ContainsKey("anonymous"),
         parsed.Options.GetValueOrDefault("username"),
-        parsed.Options.ContainsKey("all-files"),
-        parsed.Options.ContainsKey("json"));
+        parsed.Options.ContainsKey("all-files"));
 }
 
 /// <summary>
@@ -103,12 +101,6 @@ internal static partial class DepotArgumentParser
                 : $"A manifest follows a colon, like: {Help.ExeName} {command} {app} {targetApp}:{targetDepot}.";
 
             Log.Error($"\"{targets[0]}\" reads as app {targetApp} and depot {targetDepot}, so the app id {app} is unused. {manifestHint} If {app} is a depot, give it as <app>/{app}.");
-            return null;
-        }
-
-        if (parsed.Options.ContainsKey("json") && parsed.Options.ContainsKey("branch"))
-        {
-            Log.Error("--json prints every branch, so it can't be combined with --branch.");
             return null;
         }
 

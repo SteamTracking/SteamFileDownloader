@@ -1,11 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
 using System.Linq;
-using System.Text;
-using System.Text.Encodings.Web;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using SteamKit2;
@@ -19,7 +15,6 @@ internal static class DepotsCommand
 {
     /// <summary>
     /// Lists the depots of apps with their manifest on a branch, and the apps' branches on stderr.
-    /// With --json, prints everything Steam has on the apps' depots and branches instead.
     /// </summary>
     public static async Task<int> ListDepotsAsync(DepotArguments arguments, CancellationToken cancellationToken)
     {
@@ -57,16 +52,9 @@ internal static class DepotsCommand
         var depotsByApp = appIDs.Where(appInfos.ContainsKey).Select(appID => (AppID: appID, Depots: appInfos[appID]["depots"])).ToList();
         var success = depotsByApp.Count == appIDs.Count;
 
-        if (options.Json)
+        foreach (var (appID, depots) in depotsByApp)
         {
-            Log.Result(ToJson(depotsByApp));
-        }
-        else
-        {
-            foreach (var (appID, depots) in depotsByApp)
-            {
-                success &= ListAppDepots(appID, depots, options.Branch);
-            }
+            success &= ListAppDepots(appID, depots, options.Branch);
         }
 
         return success ? ExitCodes.Ok : ExitCodes.Failed;
@@ -125,46 +113,5 @@ internal static class DepotsCommand
         return true;
 
         static string FormatTime(long unixTime) => unixTime > 0 ? $", {DateTimeOffset.FromUnixTimeSeconds(unixTime):yyyy-MM-dd}" : "";
-    }
-
-    // An object per app with its whole depots section. Values are strings as Steam sends them, keys with children are objects
-    internal static string ToJson(List<(uint AppID, KeyValue Depots)> depotsByApp)
-    {
-        using var stream = new MemoryStream();
-
-        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
-        {
-            writer.WriteStartObject();
-
-            foreach (var (appID, depots) in depotsByApp)
-            {
-                writer.WritePropertyName(appID.ToString(CultureInfo.InvariantCulture));
-                WriteObject(writer, depots);
-            }
-
-            writer.WriteEndObject();
-        }
-
-        return Encoding.UTF8.GetString(stream.ToArray());
-
-        static void WriteObject(Utf8JsonWriter writer, KeyValue keyValue)
-        {
-            writer.WriteStartObject();
-
-            foreach (var child in keyValue.Children)
-            {
-                if (child.Value == null)
-                {
-                    writer.WritePropertyName(child.Name ?? "");
-                    WriteObject(writer, child);
-                }
-                else
-                {
-                    writer.WriteString(child.Name ?? "", child.Value);
-                }
-            }
-
-            writer.WriteEndObject();
-        }
     }
 }

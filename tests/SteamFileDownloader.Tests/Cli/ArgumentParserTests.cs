@@ -52,6 +52,7 @@ public class ArgumentParserTests
     [Arguments("depots", "--output")]
     [Arguments("login", "--anonymous")]
     [Arguments("track", "--json")]
+    [Arguments("depots", "--json")]
     public async Task UnknownOptionForCommandIsRejected(string command, string option)
     {
         await Assert.That(ArgumentParser.Parse(command, [option, "x"])).IsNull();

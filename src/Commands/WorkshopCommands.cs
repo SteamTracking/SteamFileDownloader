@@ -3,9 +3,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Text;
-using System.Text.Encodings.Web;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using SteamKit2.Internal;
@@ -72,11 +69,11 @@ internal static class WorkshopCommands
     }
 
     /// <summary>
-    /// Writes the rows of info, or its JSON. Items without details fail the outcome.
+    /// Writes the rows of info. Items without details fail the outcome.
     /// </summary>
     internal static async Task WriteInfoAsync(IWorkshopSource source, WorkshopArguments arguments, Outcome outcome)
     {
-        var details = await Workshop.GetDetailsAsync(source, arguments.Targets.Select(static t => t.ItemID), full: arguments.Options.Json);
+        var details = await Workshop.GetDetailsAsync(source, arguments.Targets.Select(static t => t.ItemID));
         var items = new List<PublishedFileDetails>();
 
         foreach (var target in arguments.Targets.DistinctBy(static t => t.ItemID))
@@ -126,23 +123,11 @@ internal static class WorkshopCommands
         {
             var histories = await Task.WhenAll(items.Select(item => Workshop.GetHistoryAsync(source, item.publishedfileid, arguments.Limit)));
 
-            if (arguments.Options.Json)
-            {
-                WriteInfoJson(items, histories);
-                return;
-            }
-
             for (var i = 0; i < items.Count; i++)
             {
                 WriteHistory(items[i], histories[i]);
             }
 
-            return;
-        }
-
-        if (arguments.Options.Json)
-        {
-            WriteInfoJson(items, null);
             return;
         }
 
@@ -180,45 +165,6 @@ internal static class WorkshopCommands
         {
             Log.Result($"{itemID}:{version.ManifestID}\t{Workshop.FormatTime(version.Timestamp)}\t{Workshop.CleanText(version.Note)}");
         }
-    }
-
-    // An object per item by its id, with its details as Steam sent them, and its changes with --history
-    private static void WriteInfoJson(List<PublishedFileDetails> items, (uint Total, List<CPublishedFile_GetChangeHistory_Response.ChangeLog> Changes)[]? histories)
-    {
-        using var stream = new MemoryStream();
-
-        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
-        {
-            writer.WriteStartObject();
-
-            for (var i = 0; i < items.Count; i++)
-            {
-                writer.WriteStartObject(items[i].publishedfileid.ToString(CultureInfo.InvariantCulture));
-                writer.WritePropertyName("details");
-                Workshop.WriteJson(writer, items[i]);
-
-                if (histories != null)
-                {
-                    writer.WriteStartObject("history");
-                    writer.WriteNumber("total", histories[i].Total);
-                    writer.WriteStartArray("changes");
-
-                    foreach (var change in histories[i].Changes)
-                    {
-                        Workshop.WriteJson(writer, change);
-                    }
-
-                    writer.WriteEndArray();
-                    writer.WriteEndObject();
-                }
-
-                writer.WriteEndObject();
-            }
-
-            writer.WriteEndObject();
-        }
-
-        Log.Result(Encoding.UTF8.GetString(stream.ToArray()));
     }
 
     /// <summary>

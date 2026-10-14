@@ -25,9 +25,6 @@ SteamFileDownloader login
 # List an app's depots and branches: app, depot, manifest, max size, notes
 SteamFileDownloader depots 730
 
-# Everything Steam has on the depots and branches of several apps, as JSON to filter with jq
-SteamFileDownloader depots 730 570 --json
-
 # List files of several builds without downloading: depot, manifest, sha1, size, path
 SteamFileDownloader ls 730 2347779:4784444484596788209 2347779:2356538687884552308 -- source1import.exe
 
@@ -69,14 +66,14 @@ Patterns go after `--` and ignore case:
 
 Files go to `<output>/<depot>/<manifest>/`, by default under `depots` in the current folder. Reuse the same output folder, since files already in it, or identical in another manifest of the depot, aren't downloaded again. Files and folders are dated to when their manifest was created, so builds sort by date.
 
-stdout has only results, as tab-separated rows (one JSON object for `depots --json`), and everything else goes to stderr. A run that fails still prints the rows of what succeeded.
+stdout has only results, as tab-separated rows, and everything else goes to stderr. A run that fails still prints the rows of what succeeded.
 
 ## Workshop items
 
 A workshop item's files are a manifest in the workshop depot of the app it's for. `workshop` takes item ids or their page URLs, and a collection stands for its items:
 
 ```bash
-# Item details: item, app, depot, manifest, updated, size, title (--json for everything Steam sends)
+# Item details: item, app, depot, manifest, updated, size, title
 SteamFileDownloader workshop info 3070715607
 
 # Its versions, newest first, as <item>:<manifest> rows for ls and get

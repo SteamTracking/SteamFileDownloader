@@ -92,7 +92,7 @@ internal static class Help
 
         Usage:
           {ExeName} login                                     save a Steam login (QR code)
-          {ExeName} depots <app>... [--json]                  list apps' depots and branches
+          {ExeName} depots <app>...                           list apps' depots and branches
           {ExeName} ls [<app>] <target>... [-- <pattern>...]  list files without downloading
           {ExeName} get [<app>] <target>... -- <pattern>...   download matching files (or --all-files)
           {ExeName} workshop <subcommand> ...                 workshop items: info, search, ls and get
@@ -244,16 +244,14 @@ internal static class Help
 
         Usage:
           {ExeName} depots <app>... [--branch <name>]
-          {ExeName} depots <app>... --json
         stdout has a tab-separated row per depot: app  depot  manifest  max size  notes
 
         Examples:
           {ExeName} depots 570
-          {ExeName} depots 730 570 --json
+          {ExeName} depots 730 570 --branch beta
 
         Options:
           --branch <name>     branch whose manifests are listed (default: public)
-          --json              everything about the depots and branches as JSON
         {LoginOptions}
 
         Output:
@@ -261,9 +259,6 @@ internal static class Help
           in notes), or - when neither has one. max size is in bytes, or -. notes lists the name, os, arch,
           language, dlc and "shared from app <app>"; a shared depot is downloaded as <that app>/<depot>.
           Branches, with build ids and dates, are on stderr.
-
-          With --json, stdout is one JSON object with each app's whole "depots" section from Steam, with every
-          depot's keys and manifests and every branch, for jq or a script. Values are strings, as Steam sends them.
 
         {BasicExitCodesText}
         """;
@@ -332,7 +327,7 @@ internal static class Help
         Workshop items, whose files are manifests in the workshop depot of the app they're for.
 
         Usage:
-          {ExeName} workshop info <item>... [--json]                       app, depot, manifest, size and title
+          {ExeName} workshop info <item>...                                app, depot, manifest, size and title
           {ExeName} workshop info <item>... --history [--limit <n|all>]    versions, newest first
           {ExeName} workshop search <app> <text>... [--limit <n|all>]      find items by text
           {ExeName} workshop ls <item>... [-- <pattern>...]                list files without downloading
@@ -420,8 +415,8 @@ internal static class Help
         Shows workshop items: their app, its workshop depot, their current manifest, update time, size and title.
 
         Usage:
-          {ExeName} workshop info <item>... [--json]
-          {ExeName} workshop info <item>... --history [--limit <n|all>] [--json]
+          {ExeName} workshop info <item>...
+          {ExeName} workshop info <item>... --history [--limit <n|all>]
         stdout has a tab-separated row per item: item  app  depot  manifest  updated  size  title
         and with --history, one per version of each item instead, newest first: <item>:<manifest>  updated  change note
 
@@ -434,7 +429,6 @@ internal static class Help
         Options:
           --history           list the versions of each item
           --limit <n|all>     how many versions --history lists per item (default: 20)
-          --json              everything about the items as JSON
         {LoginOptions}
 
         Output:
@@ -444,9 +438,6 @@ internal static class Help
 
           With --history, changes that only edited an item's text keep its manifest, so they are one version,
           dated to when the manifest was uploaded. stderr has the number of changes of each item.
-
-          With --json, stdout is one JSON object with everything Steam sends about each item, by item id: its
-          "details", and with --history its "history" of changes. 64-bit numbers are strings.
 
         {Streams}
 

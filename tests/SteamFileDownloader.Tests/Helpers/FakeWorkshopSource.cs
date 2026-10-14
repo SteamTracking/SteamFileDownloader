@@ -68,7 +68,7 @@ internal sealed class FakeWorkshopSource : IWorkshopSource
         return this;
     }
 
-    public Task<List<PublishedFileDetails>> GetPublishedFileDetailsAsync(IReadOnlyCollection<ulong> itemIDs, bool full)
+    public Task<List<PublishedFileDetails>> GetPublishedFileDetailsAsync(IReadOnlyCollection<ulong> itemIDs)
     {
         DetailsRequests.Add([.. itemIDs]);
 

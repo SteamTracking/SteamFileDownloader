@@ -1,14 +1,10 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq;
-using System.Reflection;
 using System.Text;
-using System.Text.Json;
 using System.Threading.Tasks;
-using ProtoBuf;
 using SteamKit2;
 using SteamKit2.Internal;
 
@@ -20,9 +16,9 @@ namespace SteamFileDownloader;
 internal interface IWorkshopSource
 {
     /// <summary>
-    /// Details of items, with the items of collections. Full details add tags, key-value tags, metadata, votes and previews.
+    /// Details of items, with the items of collections.
     /// </summary>
-    Task<List<PublishedFileDetails>> GetPublishedFileDetailsAsync(IReadOnlyCollection<ulong> itemIDs, bool full);
+    Task<List<PublishedFileDetails>> GetPublishedFileDetailsAsync(IReadOnlyCollection<ulong> itemIDs);
 
     /// <summary>
     /// A page of an item's changes, newest first.
@@ -68,7 +64,7 @@ internal static class Workshop
     /// Gets the details of items, then level by level those of the items in collections among them. Items Steam
     /// returned nothing for are missing.
     /// </summary>
-    public static async Task<Dictionary<ulong, PublishedFileDetails>> GetDetailsAsync(IWorkshopSource source, IEnumerable<ulong> itemIDs, bool full = false)
+    public static async Task<Dictionary<ulong, PublishedFileDetails>> GetDetailsAsync(IWorkshopSource source, IEnumerable<ulong> itemIDs)
     {
         var details = new Dictionary<ulong, PublishedFileDetails>();
         var seen = new HashSet<ulong>();
@@ -76,7 +72,7 @@ internal static class Workshop
 
         while (pending.Count > 0)
         {
-            var batches = await Task.WhenAll(pending.Chunk(DetailsBatchSize).Select(batch => source.GetPublishedFileDetailsAsync(batch, full)));
+            var batches = await Task.WhenAll(pending.Chunk(DetailsBatchSize).Select(batch => source.GetPublishedFileDetailsAsync(batch)));
 
             foreach (var item in batches.SelectMany(static b => b))
             {
@@ -248,87 +244,4 @@ internal static class Workshop
         : IsLegacy(details) ? "legacy"
         : details.hcontent_file != 0 ? details.hcontent_file.ToString(CultureInfo.InvariantCulture)
         : null;
-
-    /// <summary>
-    /// Writes a protobuf message as a JSON object with the fields Steam sent, named as in the proto. 64-bit integers are
-    /// strings, so they survive JSON parsers that read numbers as doubles, and enums are their names.
-    /// </summary>
-    public static void WriteJson(Utf8JsonWriter writer, object message)
-    {
-        writer.WriteStartObject();
-
-        foreach (var property in message.GetType().GetProperties())
-        {
-            if (property.GetCustomAttribute<ProtoMemberAttribute>() is not { } member)
-            {
-                continue;
-            }
-
-            var shouldSerialize = message.GetType().GetMethod($"ShouldSerialize{property.Name}", Type.EmptyTypes);
-
-            if (shouldSerialize != null && !(bool)shouldSerialize.Invoke(message, null)!)
-            {
-                continue;
-            }
-
-            var value = property.GetValue(message);
-
-            if (value is null or IList { Count: 0 })
-            {
-                continue;
-            }
-
-            writer.WritePropertyName(member.Name ?? property.Name);
-            WriteJsonValue(writer, value);
-        }
-
-        writer.WriteEndObject();
-    }
-
-    private static void WriteJsonValue(Utf8JsonWriter writer, object value)
-    {
-        switch (value)
-        {
-            case string text:
-                writer.WriteStringValue(text);
-                break;
-            case bool flag:
-                writer.WriteBooleanValue(flag);
-                break;
-            case Enum:
-                writer.WriteStringValue(value.ToString());
-                break;
-            case ulong or long:
-                writer.WriteStringValue(Convert.ToString(value, CultureInfo.InvariantCulture));
-                break;
-            case uint number:
-                writer.WriteNumberValue(number);
-                break;
-            case int number:
-                writer.WriteNumberValue(number);
-                break;
-            case float number:
-                writer.WriteNumberValue(number);
-                break;
-            case double number:
-                writer.WriteNumberValue(number);
-                break;
-            case byte[] bytes:
-                writer.WriteBase64StringValue(bytes);
-                break;
-            case IList list:
-                writer.WriteStartArray();
-
-                foreach (var item in list)
-                {
-                    WriteJsonValue(writer, item);
-                }
-
-                writer.WriteEndArray();
-                break;
-            default:
-                WriteJson(writer, value);
-                break;
-        }
-    }
 }
