@@ -143,7 +143,8 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     /// <summary>
     /// A failure or timeout, as opposed to cancellation by the user. Timeouts are cancellations too.
     /// </summary>
-    public static bool IsError(Exception e, CancellationToken cancellationToken) => e is not OperationCanceledException || !cancellationToken.IsCancellationRequested;
+    public static bool IsError(Exception e, CancellationToken cancellationToken) =>
+        e is not OperationCanceledException || !cancellationToken.IsCancellationRequested;
 
     /// <summary>
     /// The CDN refusing content, from an expired request code, missing access, or a server without it.
@@ -192,12 +193,7 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
         SteamClient.Connect();
 
         // The callback pump stops on cancellation, so the callbacks would never come
-        if (!await ConnectedTcs.Task.WaitAsync(CancellationToken))
-        {
-            return false;
-        }
-
-        return true;
+        return await ConnectedTcs.Task.WaitAsync(CancellationToken);
     }
 
     /// <summary>
@@ -229,7 +225,8 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
 
         if (exitCode == ExitCodes.RateLimited)
         {
-            Log.Error($"Steam is rate limiting logins ({result}). Wait about 15 minutes{(TakesTargets ? ", and put all targets in one run instead of one run per target" : "")}.");
+            var oneRunHint = TakesTargets ? ", and put all targets in one run instead of one run per target" : "";
+            Log.Error($"Steam is rate limiting logins ({result}). Wait about 15 minutes{oneRunHint}.");
         }
         else if (exitCode == ExitCodes.NoAccess && credentials.RefreshToken != null)
         {
@@ -249,17 +246,32 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     /// </summary>
     public async Task RenewSavedLoginAsync()
     {
-        if (Credentials is not { RefreshToken: { } refreshToken } credentials
-            || AccountStore.GetExpiry(refreshToken) is not { } expiry
-            || expiry > DateTimeOffset.UtcNow.AddDays(30)
-            || SteamClient.SteamID is not { } steamID)
+        var credentials = Credentials;
+
+        if (credentials?.RefreshToken == null)
+        {
+            return;
+        }
+
+        var refreshToken = credentials.RefreshToken;
+        var expiry = AccountStore.GetExpiry(refreshToken);
+
+        if (expiry == null || expiry > DateTimeOffset.UtcNow.AddDays(30))
+        {
+            return;
+        }
+
+        var steamID = SteamClient.SteamID;
+
+        if (steamID == null)
         {
             return;
         }
 
         try
         {
-            var renewed = await SteamClient.Authentication.GenerateAccessTokenForAppAsync(steamID, refreshToken, allowRenewal: true).WaitAsync(CancellationToken);
+            var renewed = await SteamClient.Authentication.GenerateAccessTokenForAppAsync(steamID, refreshToken, allowRenewal: true)
+                .WaitAsync(CancellationToken);
 
             // Steam decides whether to renew
             if (string.IsNullOrEmpty(renewed.RefreshToken))
@@ -271,11 +283,12 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
             Credentials = credentials with { RefreshToken = renewed.RefreshToken };
 
             var newExpiry = AccountStore.GetExpiry(renewed.RefreshToken);
-            Log.Info($"Renewed the saved login for {credentials.Username}{(newExpiry is { } date ? $", it now expires {AccountStore.FormatDate(date)}" : "")}.");
+            var expiresNote = newExpiry != null ? $", it now expires {AccountStore.FormatDate(newExpiry.Value)}" : "";
+            Log.Info($"Renewed the saved login for {credentials.Username}{expiresNote}.");
         }
         catch (Exception e) when (IsError(e) || e is IOException or UnauthorizedAccessException)
         {
-            Log.Warn($"Renewing the saved login for {credentials.Username} failed ({DescribeError(e)}); it still works until {AccountStore.FormatDate(expiry)}.");
+            Log.Warn($"Renewing the saved login for {credentials.Username} failed ({DescribeError(e)}); it still works until {AccountStore.FormatDate(expiry.Value)}.");
         }
     }
 
@@ -427,7 +440,12 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
             if (RelogonTask is not { IsCompleted: false })
             {
                 // After Disconnect the callback pump is stopped, so a logon could never complete
-                if (Credentials == null || PumpCts.IsCancellationRequested || Relogons++ >= MaxRelogons)
+                if (Credentials == null || PumpCts.IsCancellationRequested)
+                {
+                    return Task.FromResult(false);
+                }
+
+                if (Relogons++ >= MaxRelogons)
                 {
                     return Task.FromResult(false);
                 }
@@ -437,18 +455,18 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
 
             return RelogonTask;
         }
+    }
 
-        async Task<bool> RelogonAsync(LogOnCredentials credentials)
+    private async Task<bool> RelogonAsync(LogOnCredentials credentials)
+    {
+        var exitCode = await LogOnAsync(credentials);
+
+        if (exitCode is ExitCodes.RateLimited or ExitCodes.NoAccess)
         {
-            var exitCode = await LogOnAsync(credentials);
-
-            if (exitCode is ExitCodes.RateLimited or ExitCodes.NoAccess)
-            {
-                FailureExitCode = exitCode;
-            }
-
-            return exitCode == ExitCodes.Ok;
+            FailureExitCode = exitCode;
         }
+
+        return exitCode == ExitCodes.Ok;
     }
 
     /// <summary>
@@ -509,11 +527,7 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
             {
                 var servers = await ContentServerDirectoryService.LoadAsync(SteamClient.Configuration, CellID, 100, CancellationToken);
 
-                CdnServers.SetServers([.. servers.Where(static server =>
-                    server.AllowedAppIds.Length == 0
-                    && !server.UseAsProxy
-                    && !server.SteamChinaOnly
-                    && server.Type is "SteamCache" or "CDN")]);
+                CdnServers.SetServers([.. servers.Where(IsUsableCdnServer)]);
 
                 if (CdnServers.Count > 0)
                 {
@@ -536,6 +550,11 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
 
         return true;
     }
+
+    private static bool IsUsableCdnServer(Server server) => server.AllowedAppIds.Length == 0
+        && !server.UseAsProxy
+        && !server.SteamChinaOnly
+        && server.Type is "SteamCache" or "CDN";
 
     public Task<int> DownloadChunkAsync(ManifestJob job, DepotManifest.ChunkData chunk, Server server, byte[] destination) =>
         CdnClient.DownloadDepotChunkAsync(job.DepotID, chunk, server, destination, job.DepotKey);
@@ -644,7 +663,9 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
 
         var results = new ManifestResult[jobs.Count];
 
-        await Parallel.ForAsync(0, jobs.Count, new ParallelOptions { MaxDegreeOfParallelism = ManifestConcurrency, CancellationToken = CancellationToken }, async (i, _) => results[i] = await DownloadManifestAsync(jobs[i]));
+        var options = new ParallelOptions { MaxDegreeOfParallelism = ManifestConcurrency, CancellationToken = CancellationToken };
+
+        await Parallel.ForAsync(0, jobs.Count, options, async (i, _) => results[i] = await DownloadManifestAsync(jobs[i]));
 
         if (jobs.Count <= MaxManifestLines)
         {
@@ -653,12 +674,25 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
                 if (results[i].Source != ManifestSource.None)
                 {
                     var manifest = jobs[i].Manifest!;
-                    Log.Info($"[{jobs[i]}] {(results[i].Source == ManifestSource.Saved ? "Read the saved manifest" : "Downloaded the manifest")}: {manifest.CreationTime:yyyy-MM-dd HH:mm:ss}, {manifest.Files?.Count} files.");
+                    var action = results[i].Source == ManifestSource.Saved ? "Read the saved manifest" : "Downloaded the manifest";
+                    Log.Info($"[{jobs[i]}] {action}: {manifest.CreationTime:yyyy-MM-dd HH:mm:ss}, {manifest.Files?.Count} files.");
                 }
             }
         }
 
-        ReportSharedProblems(jobs.Zip(results).Where(static p => p.Second.SharedProblem != null).Select(static p => (p.First, p.Second.SharedProblem!, p.Second.NoAccess)));
+        var problems = new List<(ManifestJob Job, string Problem, bool NoAccess)>();
+
+        for (var i = 0; i < jobs.Count; i++)
+        {
+            var result = results[i];
+
+            if (result.SharedProblem != null)
+            {
+                problems.Add((jobs[i], result.SharedProblem, result.NoAccess));
+            }
+        }
+
+        ReportSharedProblems(problems);
 
         if (jobs.Count > MaxManifestLines)
         {
@@ -676,7 +710,9 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
                 sources.Add($"{downloaded} downloaded");
             }
 
-            Log.Info($"Got {Log.PluralOf(saved + downloaded, jobs.Count, "manifest")}{(sources.Count > 0 ? $" ({string.Join(", ", sources)})" : "")}.");
+            var got = Log.PluralOf(saved + downloaded, jobs.Count, "manifest");
+            var sourcesNote = sources.Count > 0 ? $" ({string.Join(", ", sources)})" : "";
+            Log.Info($"Got {got}{sourcesNote}.");
         }
     }
 
@@ -706,7 +742,9 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
 
         // A saved manifest needs no request code, which Steam may refuse for old manifests. Reading and parsing it
         // blocks, so it is off the loop's threads
-        if (await Task.Run(() => ManifestCache.Load(job)) is { } saved)
+        var saved = await Task.Run(() => ManifestCache.Load(job));
+
+        if (saved != null)
         {
             job.Manifest = saved;
             return new ManifestResult(ManifestSource.Saved);
@@ -792,7 +830,8 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
             return new ManifestResult(ManifestSource.Downloaded);
         }
 
-        Report(job, $"[{job}] Failed to download the manifest after all retries: {(lastError != null ? DescribeError(lastError) : "no server answered")}.");
+        var reason = lastError != null ? DescribeError(lastError) : "no server answered";
+        Report(job, $"[{job}] Failed to download the manifest after all retries: {reason}.");
         return default;
     }
 
@@ -819,9 +858,12 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
 
         job.NoAccess = true;
 
-        return (0, job.ItemID != null
-            ? "Steam gave no manifest request code: this account may have no access to the item, or the manifest isn't one of the item's."
-            : "Steam gave no manifest request code: the manifest may be on another branch (set it with --branch, or @<branch> in a target) or in another app, or this account has no access to it.");
+        if (job.ItemID != null)
+        {
+            return (0, "Steam gave no manifest request code: this account may have no access to the item, or the manifest isn't one of the item's.");
+        }
+
+        return (0, "Steam gave no manifest request code: the manifest may be on another branch (set it with --branch, or @<branch> in a target) or in another app, or this account has no access to it.");
     }
 
     /// <summary>
@@ -897,9 +939,12 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
         // like a busy Steam, are failures that running again can fix
         if (keyResult.Result is EResult.AccessDenied or EResult.FileNotFound)
         {
-            return (null, true, job.ItemID != null
-                ? $"Steam gave no key for the workshop depot {job.DepotID} of app {job.AppID} ({keyResult.Result}): this account may need to own the app."
-                : $"Steam gave no depot key in app {job.AppID} ({keyResult.Result}): this account may not own the depot, or it belongs to another app.");
+            if (job.ItemID != null)
+            {
+                return (null, true, $"Steam gave no key for the workshop depot {job.DepotID} of app {job.AppID} ({keyResult.Result}): this account may need to own the app.");
+            }
+
+            return (null, true, $"Steam gave no depot key in app {job.AppID} ({keyResult.Result}): this account may not own the depot, or it belongs to another app.");
         }
 
         if (keyResult.Result != EResult.OK)
@@ -943,9 +988,21 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
         foreach (var group in groups)
         {
             var jobs = group.Select(static p => p.Job).OrderBy(static j => j.ToString(), StringComparer.Ordinal).ToList();
-            var where = jobs.Count == 1 ? $"[{jobs[0]}]"
-                : jobs[0].ItemID != null ? $"Items {Log.JoinFirst([.. jobs.Select(static j => j.ItemID!.Value.ToString(CultureInfo.InvariantCulture))])}:"
-                : $"Depot {group.Key.DepotID} ({Log.Plural(jobs.Count, "manifest")}):";
+            string where;
+
+            if (jobs.Count == 1)
+            {
+                where = $"[{jobs[0]}]";
+            }
+            else if (jobs[0].ItemID != null)
+            {
+                List<string> itemIDs = [.. jobs.Select(static j => j.ItemID!.Value.ToString(CultureInfo.InvariantCulture))];
+                where = $"Items {Log.JoinFirst(itemIDs)}:";
+            }
+            else
+            {
+                where = $"Depot {group.Key.DepotID} ({Log.Plural(jobs.Count, "manifest")}):";
+            }
 
             Report(jobs, $"{where} {group.Key.Problem}");
         }
@@ -960,9 +1017,16 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
         }
 
         var delay = ExponentialBackoff(attempt);
-        Log.Info(failure != null
-            ? $"{failure}, retrying in {delay / 1000.0:F1}s ({attempt + 1}/{maxAttempts})..."
-            : $"Retrying the {what} in {delay / 1000.0:F1}s (attempt {attempt + 1}/{maxAttempts})...");
+
+        if (failure != null)
+        {
+            Log.Info($"{failure}, retrying in {delay / 1000.0:F1}s ({attempt + 1}/{maxAttempts})...");
+        }
+        else
+        {
+            Log.Info($"Retrying the {what} in {delay / 1000.0:F1}s (attempt {attempt + 1}/{maxAttempts})...");
+        }
+
         await Task.Delay(delay, CancellationToken);
     }
 

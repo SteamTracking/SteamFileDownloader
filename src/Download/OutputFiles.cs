@@ -70,9 +70,14 @@ internal static partial class OutputFiles
         {
             var folder = Path.GetDirectoryName(path);
 
-            // Stops at a folder that is already added, since its parents are too
-            while (folder != null && folder.Length >= job.OutputFolder.Length && folders.TryAdd(folder, job))
+            while (folder != null && folder.Length >= job.OutputFolder.Length)
             {
+                // Stops at a folder that is already added, since its parents are too
+                if (!folders.TryAdd(folder, job))
+                {
+                    break;
+                }
+
                 folder = Path.GetDirectoryName(folder);
             }
         }

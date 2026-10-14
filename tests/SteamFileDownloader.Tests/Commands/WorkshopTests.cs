@@ -108,9 +108,9 @@ public class WorkshopTests
     {
         await Assert.That(Workshop.GetProblem(5, Item(5))).IsNull();
         await Assert.That(Workshop.GetProblem(5, Item(5, manifest: 0))).IsNull();
-        await Assert.That(Workshop.GetProblem(5, Item(5, manifest: 9, flags: 0))!.Value.NoAccess).IsFalse();
-        await Assert.That(Workshop.GetProblem(5, Unavailable(5, EResult.AccessDenied))!.Value.NoAccess).IsTrue();
-        await Assert.That(Workshop.GetProblem(5, null)!.Value.NoAccess).IsFalse();
+        await Assert.That(Workshop.GetProblem(5, Item(5, manifest: 9, flags: 0))!.NoAccess).IsFalse();
+        await Assert.That(Workshop.GetProblem(5, Unavailable(5, EResult.AccessDenied))!.NoAccess).IsTrue();
+        await Assert.That(Workshop.GetProblem(5, null)!.NoAccess).IsFalse();
     }
 
     [Test]
@@ -119,15 +119,15 @@ public class WorkshopTests
     [Arguments(EResult.Busy, "without details")]
     public async Task ProblemsHaveAShortReasonForSkippedItems(EResult result, string reason)
     {
-        await Assert.That(Workshop.GetProblem(5, Unavailable(5, result))!.Value.SkipReason).IsEqualTo(reason);
-        await Assert.That(Workshop.GetProblem(5, Item(5, manifest: 9, flags: 0))!.Value.SkipReason).IsEqualTo("legacy");
+        await Assert.That(Workshop.GetProblem(5, Unavailable(5, result))!.SkipReason).IsEqualTo(reason);
+        await Assert.That(Workshop.GetProblem(5, Item(5, manifest: 9, flags: 0))!.SkipReason).IsEqualTo("legacy");
     }
 
     [Test]
     public async Task MissingIdThatLooksLikeAnAppPointsToSearch()
     {
-        await Assert.That(Workshop.GetProblem(730, null)!.Value.Message).Contains("workshop search 730");
-        await Assert.That(Workshop.GetProblem(3070715607, null)!.Value.Message).DoesNotContain("workshop search");
+        await Assert.That(Workshop.GetProblem(730, null)!.Message).Contains("workshop search 730");
+        await Assert.That(Workshop.GetProblem(3070715607, null)!.Message).DoesNotContain("workshop search");
     }
 
     [Test]

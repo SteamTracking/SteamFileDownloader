@@ -67,14 +67,15 @@ internal static class ExitCodes
         if (failed)
         {
             var exitCode = failedOtherwise ? Failed : NoDepotAccess;
-            var targets = failedTargets is { Count: > 0 } ? Log.JoinFirst(failedTargets) : null;
+            var targets = failedTargets != null && failedTargets.Count > 0 ? Log.JoinFirst(failedTargets) : null;
             var subject = targets ?? (failedOtherwise ? "some targets or files" : "some targets");
             var reason = failedOtherwise ? $"{subject} failed" : $"this account has no access to {subject}";
 
             // A failed target has no rows, which says nothing about whether its files exist
             var partial = targets != null ? "stdout is partial and lacks their rows, though the files may exist" : "stdout is partial";
+            var unmatchedNote = unmatched ? ", and a pattern matched nothing" : "";
 
-            return (exitCode, $"Exit code {exitCode}: {reason}, so {partial}{(unmatched ? ", and a pattern matched nothing" : "")}.");
+            return (exitCode, $"Exit code {exitCode}: {reason}, so {partial}{unmatchedNote}.");
         }
 
         // The unmatched patterns were already reported
@@ -92,4 +93,9 @@ internal static class ExitCodes
 /// <see cref="SteamSession.FailureExitCode"/>, whether a pattern matched nothing, and the failed targets, which the
 /// closing error names as the targets without rows.
 /// </summary>
-internal sealed record RunOutcome(bool Failed, bool FailedOtherwise, int SessionFailureExitCode, bool Unmatched = false, IReadOnlyCollection<string>? FailedTargets = null);
+internal sealed record RunOutcome(
+    bool Failed,
+    bool FailedOtherwise,
+    int SessionFailureExitCode,
+    bool Unmatched = false,
+    IReadOnlyCollection<string>? FailedTargets = null);

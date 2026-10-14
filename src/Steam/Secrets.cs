@@ -49,7 +49,8 @@ internal static class Secrets
             throw new CryptographicException("DPAPI encrypted values can only be read on Windows.");
         }
 
-        var decrypted = ProtectedData.Unprotect(Convert.FromBase64String(stored[ProtectedPrefix.Length..]), Entropy, DataProtectionScope.CurrentUser);
+        var encrypted = Convert.FromBase64String(stored[ProtectedPrefix.Length..]);
+        var decrypted = ProtectedData.Unprotect(encrypted, Entropy, DataProtectionScope.CurrentUser);
 
         return Encoding.UTF8.GetString(decrypted);
     }

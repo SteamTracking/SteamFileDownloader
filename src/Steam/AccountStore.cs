@@ -48,18 +48,30 @@ internal static partial class AccountStore
 
         var stored = Read(path);
 
-        if ((username ?? stored.LastUsername) is not { } wanted || !stored.Accounts.TryGetValue(wanted, out var refreshToken))
+        var wanted = username ?? stored.LastUsername;
+
+        if (wanted == null || !stored.Accounts.TryGetValue(wanted, out var refreshToken))
         {
             var saved = stored.Accounts.Keys;
+            var savedList = saved.Count > 0 ? $" (saved: {string.Join(", ", saved)})" : "";
 
-            Log.Error($"No saved login{(username == null ? "" : $" for {username}")}{(saved.Count > 0 ? $" (saved: {string.Join(", ", saved)})" : "")}. Run \"{Help.ExeName} login\"{(username == null ? "" : " with that account")} to save one; it needs a person to scan a QR code.");
+            if (username == null)
+            {
+                Log.Error($"No saved login{savedList}. Run \"{Help.ExeName} login\" to save one; it needs a person to scan a QR code.");
+            }
+            else
+            {
+                Log.Error($"No saved login for {username}{savedList}. Run \"{Help.ExeName} login\" with that account to save one; it needs a person to scan a QR code.");
+            }
+
             return null;
         }
 
         // Use the casing it was saved with
         var savedUsername = stored.Accounts.Keys.First(k => k.Equals(wanted, StringComparison.OrdinalIgnoreCase));
+        var decrypted = TryUnprotect(refreshToken);
 
-        if (TryUnprotect(refreshToken) is not { } decrypted)
+        if (decrypted == null)
         {
             Log.Error($"{CantDecrypt(savedUsername)} Run \"{Help.ExeName} login\" again with that account; it needs a person to scan a QR code.");
             return null;
@@ -97,7 +109,9 @@ internal static partial class AccountStore
     {
         // Steam usernames ignore case, so replace an existing entry with different casing. A new dictionary, since one
         // would put a re-added key back in its old place
-        stored.Accounts = new Dictionary<string, string>(stored.Accounts.Where(a => !a.Key.Equals(account.Username, StringComparison.OrdinalIgnoreCase)), StringComparer.OrdinalIgnoreCase)
+        var others = stored.Accounts.Where(a => !a.Key.Equals(account.Username, StringComparison.OrdinalIgnoreCase));
+
+        stored.Accounts = new Dictionary<string, string>(others, StringComparer.OrdinalIgnoreCase)
         {
             [account.Username] = Secrets.Protect(account.RefreshToken),
         };
@@ -120,19 +134,24 @@ internal static partial class AccountStore
     /// Forgets accounts. When the default is among them, the last saved of the remaining accounts becomes the default.
     /// Returns the default, or null when no account is left.
     /// </summary>
-    public static string? Remove(IEnumerable<string> usernames, string? path = null) => Update(path, stored =>
+    public static string? Remove(IEnumerable<string> usernames, string? path = null)
     {
-        foreach (var username in usernames)
+        var updated = Update(path, stored =>
         {
-            stored.Accounts.Remove(username);
-        }
+            foreach (var username in usernames)
+            {
+                stored.Accounts.Remove(username);
+            }
 
-        // Removing keeps the order of the others, so the last one is still the last saved
-        if (stored.LastUsername == null || !stored.Accounts.ContainsKey(stored.LastUsername))
-        {
-            stored.LastUsername = stored.Accounts.Count > 0 ? stored.Accounts.Keys.Last() : null;
-        }
-    }).LastUsername;
+            // Removing keeps the order of the others, so the last one is still the last saved
+            if (stored.LastUsername == null || !stored.Accounts.ContainsKey(stored.LastUsername))
+            {
+                stored.LastUsername = stored.Accounts.Count > 0 ? stored.Accounts.Keys.Last() : null;
+            }
+        });
+
+        return updated.LastUsername;
+    }
 
     public static string CantDecrypt(string username) => $"The saved login for {username} can't be decrypted, since another Windows user or machine saved it.";
 
@@ -154,9 +173,12 @@ internal static partial class AccountStore
         {
             using var payload = JsonDocument.Parse(Base64Url.DecodeFromChars(parts[1]));
 
-            return payload.RootElement.TryGetProperty("exp", out var exp) && exp.TryGetInt64(out var seconds)
-                ? DateTimeOffset.FromUnixTimeSeconds(seconds)
-                : null;
+            if (payload.RootElement.TryGetProperty("exp", out var exp) && exp.TryGetInt64(out var seconds))
+            {
+                return DateTimeOffset.FromUnixTimeSeconds(seconds);
+            }
+
+            return null;
         }
         catch (Exception e) when (e is FormatException or JsonException or ArgumentOutOfRangeException or InvalidOperationException)
         {

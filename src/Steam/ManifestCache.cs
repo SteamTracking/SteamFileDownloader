@@ -18,7 +18,9 @@ internal static class ManifestCache
     /// </summary>
     public static DepotManifest? Load(ManifestJob job)
     {
-        if (job.ManifestFile is not { } path || !File.Exists(path))
+        var path = job.ManifestFile;
+
+        if (path == null || !File.Exists(path))
         {
             return null;
         }
@@ -52,7 +54,9 @@ internal static class ManifestCache
 
     public static void Save(ManifestJob job)
     {
-        if (job.ManifestFile is not { } path)
+        var path = job.ManifestFile;
+
+        if (path == null)
         {
             return;
         }

@@ -174,10 +174,11 @@ public class VpkReaderTests
         var dirJob = JobWithArchives(1, 1, 0, "game\\pak01_dir.vpk", "game\\pak01_000.vpk");
         var other = JobWithArchives(1, 2, 0, "game\\pak01_000.vpk");
 
-        var found = VpkReader.FindArchive([other, dirJob], dirJob, "game\\pak01_dir.vpk", 0);
+        var found = VpkReader.TryFindArchive([other, dirJob], dirJob, "game\\pak01_dir.vpk", 0, out var archiveJob, out var archiveFile);
 
-        await Assert.That(found!.Value.Job).IsSameReferenceAs(dirJob);
-        await Assert.That(found.Value.File.FileName).IsEqualTo("game\\pak01_000.vpk");
+        await Assert.That(found).IsTrue();
+        await Assert.That(archiveJob!).IsSameReferenceAs(dirJob);
+        await Assert.That(archiveFile!.FileName).IsEqualTo("game\\pak01_000.vpk");
     }
 
     [Test]
@@ -190,9 +191,10 @@ public class VpkReaderTests
         var dirJob = JobWithArchives(1, 1, 0, "pak01_dir.vpk");
         var others = days.Select((d, i) => JobWithArchives(1, (uint)(i + 2), d, "pak01_002.vpk")).ToList();
 
-        var found = VpkReader.FindArchive([dirJob, .. others], dirJob, "pak01_dir.vpk", 2);
+        var found = VpkReader.TryFindArchive([dirJob, .. others], dirJob, "pak01_dir.vpk", 2, out var archiveJob, out _);
 
-        await Assert.That(found!.Value.Job).IsSameReferenceAs(others[expected]);
+        await Assert.That(found).IsTrue();
+        await Assert.That(archiveJob!).IsSameReferenceAs(others[expected]);
     }
 
     [Test]
@@ -203,7 +205,7 @@ public class VpkReaderTests
         var noManifest = JobWithArchives(1, 3, 0, "pak01_000.vpk");
         noManifest.Manifest = null;
 
-        await Assert.That(VpkReader.FindArchive([dirJob, otherApp, noManifest], dirJob, "pak01_dir.vpk", 0)).IsNull();
+        await Assert.That(VpkReader.TryFindArchive([dirJob, otherApp, noManifest], dirJob, "pak01_dir.vpk", 0, out _, out _)).IsFalse();
     }
 
     private static PackageEntry InArchive(ushort archive, uint offset, uint length) =>

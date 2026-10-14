@@ -14,7 +14,12 @@ internal static class Help
 {
     public static string ExeName { get; } = Path.GetFileNameWithoutExtension(Environment.ProcessPath) ?? nameof(SteamFileDownloader);
 
-    public static string UsageHint(string command = "") => $"Run \"{ExeName}{(command.Length > 0 ? " " + command : "")} --help\" for usage.";
+    public static string UsageHint(string command = "")
+    {
+        var commandPart = command.Length > 0 ? " " + command : "";
+
+        return $"Run \"{ExeName}{commandPart} --help\" for usage.";
+    }
 
     public const string IssuesUrl = "https://github.com/SteamTracking/SteamFileDownloader/issues";
 
@@ -25,10 +30,20 @@ internal static class Help
     /// An argument for a suggested command line, quoted when the shell would expand or split it. Single quotes keep
     /// everything literal in bash, zsh and PowerShell, so double quotes are only for an argument with a single quote.
     /// </summary>
-    public static string QuoteArgument(string argument) =>
-        argument.AsSpan().IndexOfAny(ShellSpecialChars) < 0 ? argument
-        : argument.Contains('\'', StringComparison.Ordinal) ? $"\"{argument}\""
-        : $"'{argument}'";
+    public static string QuoteArgument(string argument)
+    {
+        if (argument.AsSpan().IndexOfAny(ShellSpecialChars) < 0)
+        {
+            return argument;
+        }
+
+        if (argument.Contains('\'', StringComparison.Ordinal))
+        {
+            return $"\"{argument}\"";
+        }
+
+        return $"'{argument}'";
+    }
 
     private static string Targets => """
         Targets (all in one run: each run logs in to Steam once, and Steam rate limits logins):
@@ -62,8 +77,12 @@ internal static class Help
         """;
 
     // Near the top of the help, since the full exit codes are at the end, past where a truncated read stops
-    private static string ExitCodesSummary(string? details = "see the end") =>
-        $"Exit codes: 0 ok, 1 failed, 2 usage error, 3 log in again, 4 rate limited, 5 no access, 6 no match{(details == null ? "" : $" ({details})")}.";
+    private static string ExitCodesSummary(string? details = "see the end")
+    {
+        var detailsNote = details == null ? "" : $" ({details})";
+
+        return $"Exit codes: 0 ok, 1 failed, 2 usage error, 3 log in again, 4 rate limited, 5 no access, 6 no match{detailsNote}.";
+    }
 
     private static string LoginOptions => """
           --username <name>   saved login to use instead of the last one
@@ -618,14 +637,22 @@ internal static class Help
         var bare = args.Length == name.Count(static c => c == ' ') + 1;
 
         // --help anywhere before the patterns, and commands that only group subcommands
-        if (Array.Exists(ArgumentParser.SplitPatterns(args).Options, IsHelp) || (bare && name is "workshop" or "config" or "login remove"))
+        var asksForHelp = Array.Exists(ArgumentParser.SplitPatterns(args).Options, IsHelp);
+        var onlyGroupsSubcommands = bare && name is "workshop" or "config" or "login remove";
+
+        if (asksForHelp || onlyGroupsSubcommands)
         {
             Console.WriteLine(commandHelp ?? Overview);
             return ExitCodes.Ok;
         }
 
+        if (commandHelp == null || !bare)
+        {
+            return null;
+        }
+
         // Commands that need no arguments run bare instead
-        if (commandHelp == null || !bare || name is "login" or "login list" or "config output")
+        if (name is "login" or "login list" or "config output")
         {
             return null;
         }

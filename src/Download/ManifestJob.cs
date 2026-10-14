@@ -54,6 +54,16 @@ internal sealed class ManifestJob
     public static ManifestJob Create(uint appID, uint depotID, ulong manifestID, string branch, string parentFolder)
     {
         var outputFolder = Path.Combine(parentFolder, manifestID.ToString(CultureInfo.InvariantCulture));
+        string[] reuseFolders = [];
+
+        // Newest manifests first by their folder's date
+        if (Directory.Exists(parentFolder))
+        {
+            reuseFolders = [.. new DirectoryInfo(parentFolder).GetDirectories()
+                .Where(d => !string.Equals(d.FullName, outputFolder, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(static d => d.LastWriteTimeUtc)
+                .Select(static d => d.FullName)];
+        }
 
         return new ManifestJob
         {
@@ -62,14 +72,7 @@ internal sealed class ManifestJob
             ManifestID = manifestID,
             Branch = branch,
             OutputFolder = outputFolder,
-
-            // Newest manifests first by their folder's date
-            ReuseFolders = Directory.Exists(parentFolder)
-                ? [.. new DirectoryInfo(parentFolder).GetDirectories()
-                    .Where(d => !string.Equals(d.FullName, outputFolder, StringComparison.OrdinalIgnoreCase))
-                    .OrderByDescending(static d => d.LastWriteTimeUtc)
-                    .Select(static d => d.FullName)]
-                : [],
+            ReuseFolders = reuseFolders,
         };
     }
 

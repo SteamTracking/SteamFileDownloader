@@ -102,7 +102,7 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
             return (false, []);
         }
 
-        var downloaded = new ConcurrentBag<DownloadedFile>();
+        var downloadedFiles = new ConcurrentBag<DownloadedFile>();
         var resultCounts = new int[Enum.GetValues<DownloadResult>().Length];
         var failedFiles = new ConcurrentBag<FileJob>();
         var totalBytes = fileJobs.Sum(static f => (long)f.File.TotalSize);
@@ -135,7 +135,7 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
                 return null;
             }
 
-            downloaded.Add(new DownloadedFile(fileJob.Job, fileJob.File, finalPath));
+            downloadedFiles.Add(new DownloadedFile(fileJob.Job, fileJob.File, finalPath));
             Interlocked.Increment(ref resultCounts[(int)fileState]);
 
             if (fileState is not DownloadResult.Success)
@@ -147,7 +147,7 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         }
 
         (double, string) RenderProgress() => DownloadProgress.FormatProgress(
-            Interlocked.Read(ref DownloadedBytes) - startBytes,
+            BytesSince(startBytes),
             Interlocked.Read(ref skippedBytes),
             totalBytes,
             stopwatch.Elapsed,
@@ -162,23 +162,36 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         }
 
         var groups = fileJobs.GroupBy(static f => GetHashKey(f.File)).ToList();
-        Log.Info($"Downloading {Log.Plural(fileJobs.Count, "file")} ({DownloadProgress.FormatSize(groups.Sum(static g => (long)g.First().File.TotalSize))})...");
+        var uniqueBytes = groups.Sum(static g => (long)g.First().File.TotalSize);
+
+        Log.Info($"Downloading {Log.Plural(fileJobs.Count, "file")} ({DownloadProgress.FormatSize(uniqueBytes)})...");
 
         await using (Log.StartProgress(RenderProgress))
         {
             await Task.WhenAll(groups.Select(RunHashGroup));
         }
 
-        // Only the counts that aren't zero
-        var counts = new (DownloadResult Result, string What)[]
-            {
-                (DownloadResult.Success, $"downloaded ({DownloadProgress.FormatTransfer(Interlocked.Read(ref DownloadedBytes) - startBytes, stopwatch.Elapsed)})"),
-                (DownloadResult.Copied, "copied from identical files"),
-                (DownloadResult.AlreadyValid, "already present"),
-            }
-            .Where(c => resultCounts[(int)c.Result] > 0)
-            .Select(c => $"{resultCounts[(int)c.Result]} {c.What}")
-            .ToList();
+        var downloaded = resultCounts[(int)DownloadResult.Success];
+        var copied = resultCounts[(int)DownloadResult.Copied];
+        var alreadyPresent = resultCounts[(int)DownloadResult.AlreadyValid];
+        var counts = new List<string>();
+
+        if (downloaded > 0)
+        {
+            var transfer = DownloadProgress.FormatTransfer(BytesSince(startBytes), stopwatch.Elapsed);
+
+            counts.Add($"{downloaded} downloaded ({transfer})");
+        }
+
+        if (copied > 0)
+        {
+            counts.Add($"{copied} copied from identical files");
+        }
+
+        if (alreadyPresent > 0)
+        {
+            counts.Add($"{alreadyPresent} already present");
+        }
 
         if (LogFilesSummary && counts.Count > 0)
         {
@@ -189,7 +202,7 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
 
         LogFailures("files", failedFiles.Select(static f => $"{f.Job}/{FileFilter.NormalizePath(f.File.FileName)}"), "Running the same command again retries only those.");
 
-        return (failedFiles.IsEmpty, [.. downloaded]);
+        return (failedFiles.IsEmpty, [.. downloadedFiles]);
     }
 
     /// <summary>
@@ -209,10 +222,12 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
 
         (double, string) RenderProgress()
         {
-            var bytes = Interlocked.Read(ref DownloadedBytes) - startBytes;
+            var bytes = BytesSince(startBytes);
             var finished = Volatile.Read(ref done);
+            var speed = (long)DownloadProgress.Speed(bytes, stopwatch.Elapsed);
+            var text = $"{DownloadProgress.FormatSize(bytes)} at {DownloadProgress.FormatSize(speed)}/s{DownloadProgress.Separator}{finished} / {items.Count} {what}{FormatChunkErrorCount()}";
 
-            return ((double)finished / items.Count, $"{DownloadProgress.FormatSize(bytes)} at {DownloadProgress.FormatSize((long)DownloadProgress.Speed(bytes, stopwatch.Elapsed))}/s{DownloadProgress.Separator}{finished} / {items.Count} {what}{FormatChunkErrorCount()}");
+            return ((double)finished / items.Count, text);
         }
 
         await using (Log.StartProgress(RenderProgress))
@@ -226,7 +241,14 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         }
     }
 
-    private string FormatChunkErrorCount() => ChunkErrorReasons.Values.Sum() is > 0 and var errors ? $"{DownloadProgress.Separator}{errors} chunk errors" : "";
+    private long BytesSince(long startBytes) => Interlocked.Read(ref DownloadedBytes) - startBytes;
+
+    private string FormatChunkErrorCount()
+    {
+        var errors = ChunkErrorReasons.Values.Sum();
+
+        return errors > 0 ? $"{DownloadProgress.Separator}{errors} chunk errors" : "";
+    }
 
     /// <summary>
     /// Sums up the chunk errors since the last summary in one warning, when chunks failed for good. Errors that retries
@@ -356,7 +378,12 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         return null;
     }
 
-    private static bool HasExpectedSize(string path, DepotManifest.FileData file) => new FileInfo(path) is { Exists: true } info && info.Length == (long)file.TotalSize;
+    private static bool HasExpectedSize(string path, DepotManifest.FileData file)
+    {
+        var info = new FileInfo(path);
+
+        return info.Exists && info.Length == (long)file.TotalSize;
+    }
 
     // A chunk's id is the SHA-1 of its data
     private static bool IsChunkData(ReadOnlySpan<byte> data, DepotManifest.ChunkData chunk)
@@ -430,7 +457,7 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         var stopwatch = Stopwatch.StartNew();
 
         (double, string) RenderProgress() => DownloadProgress.FormatProgress(
-            Interlocked.Read(ref DownloadedBytes) - startBytes,
+            BytesSince(startBytes),
             Interlocked.Read(ref skippedBytes),
             totalBytes,
             stopwatch.Elapsed,
@@ -460,10 +487,21 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
             })));
         }
 
-        Log.Info($"VPK archives: {DownloadProgress.FormatTransfer(Interlocked.Read(ref DownloadedBytes) - startBytes, stopwatch.Elapsed)} downloaded, {DownloadProgress.FormatSize(skippedBytes)} already present.");
+        var transfer = DownloadProgress.FormatTransfer(BytesSince(startBytes), stopwatch.Elapsed);
+
+        Log.Info($"VPK archives: {transfer} downloaded, {DownloadProgress.FormatSize(skippedBytes)} already present.");
         LogChunkErrors();
 
-        var failedFiles = partialFiles.Where((_, i) => !results[i]).Select(static f => FileFilter.NormalizePath(f.File.FileName)).ToList();
+        var failedFiles = new List<string>();
+
+        for (var i = 0; i < partialFiles.Count; i++)
+        {
+            if (!results[i])
+            {
+                failedFiles.Add(FileFilter.NormalizePath(partialFiles[i].File.FileName));
+            }
+        }
+
         LogFailures("VPK archives", failedFiles, "Running the same command again retries only their missing chunks.");
 
         return failedFiles.Count == 0;
@@ -534,16 +572,22 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
             foreach (var chunk in chunks)
             {
                 var data = buffer.AsMemory(0, (int)chunk.UncompressedLength);
+                var offset = (long)chunk.Offset;
+                var isInFile = false;
 
-                if ((long)chunk.Offset + data.Length <= existingLength
-                    && await RandomAccess.ReadAsync(handle, data, (long)chunk.Offset, cancellationToken) == data.Length
-                    && IsChunkData(data.Span, chunk))
+                if (offset + data.Length <= existingLength)
+                {
+                    var read = await RandomAccess.ReadAsync(handle, data, offset, cancellationToken);
+                    isInFile = read == data.Length && IsChunkData(data.Span, chunk);
+                }
+
+                if (isInFile)
                 {
                     keptBytes += data.Length;
                     continue;
                 }
 
-                missing.Add(new ChunkPlacement(chunk, (long)chunk.Offset));
+                missing.Add(new ChunkPlacement(chunk, offset));
             }
         }
         finally
@@ -618,7 +662,9 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
             var isRefusal = SteamSession.IsRefusal(error);
 
             // Refused by a second server too, so the CDN doesn't have it, rather than one server
-            if (attempt >= MaxChunkRetries || (isRefusal && refusedBy != null && refusedBy != server))
+            var refusedByAnotherServer = isRefusal && refusedBy != null && refusedBy != server;
+
+            if (attempt >= MaxChunkRetries || refusedByAnotherServer)
             {
                 Interlocked.Increment(ref FailedChunks);
                 return false;
@@ -631,9 +677,14 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
                 continue;
             }
 
-            if (attempt >= ImmediateRetries && !await DelayUnlessCancelled(SteamSession.ExponentialBackoff(attempt - ImmediateRetries + 1), chunkCancellation))
+            if (attempt >= ImmediateRetries)
             {
-                return false;
+                var delay = SteamSession.ExponentialBackoff(attempt - ImmediateRetries + 1);
+
+                if (!await DelayUnlessCancelled(delay, chunkCancellation))
+                {
+                    return false;
+                }
             }
         }
     }
@@ -641,7 +692,12 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
     // One attempt, on another server than the one to avoid if there is one. The download slot is held until the chunk is
     // written, so a disk slower than the network slows the downloads instead of piling up chunks in memory, and it's
     // free during the waits between attempts. Returns the error and its server, or no error once the chunk is in the file.
-    private async Task<(Exception? Error, Server? Server)> TryDownloadChunk(ManifestJob job, ChunkPlacement placement, SafeFileHandle handle, Server? avoid, CancellationToken chunkCancellation)
+    private async Task<(Exception? Error, Server? Server)> TryDownloadChunk(
+        ManifestJob job,
+        ChunkPlacement placement,
+        SafeFileHandle handle,
+        Server? avoid,
+        CancellationToken chunkCancellation)
     {
         var chunk = placement.Chunk;
         byte[]? buffer = null;

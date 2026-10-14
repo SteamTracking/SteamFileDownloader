@@ -44,19 +44,22 @@ internal static partial class WorkshopArgumentParser
     public static WorkshopArguments? Parse(string[] args)
     {
         // An item given where the subcommand goes
-        if (args.Length > 0 && (ulong.TryParse(args[0], NumberStyles.None, CultureInfo.InvariantCulture, out _) || UrlRegex().IsMatch(args[0])))
+        if (args.Length > 0)
         {
-            Log.Error($"workshop needs a subcommand before the item, like: {Help.ExeName} workshop info {args[0]} or {Help.ExeName} workshop ls {args[0]}.");
-            return null;
+            var isItem = ulong.TryParse(args[0], NumberStyles.None, CultureInfo.InvariantCulture, out _) || UrlRegex().IsMatch(args[0]);
+
+            if (isItem)
+            {
+                Log.Error($"workshop needs a subcommand before the item, like: {Help.ExeName} workshop info {args[0]} or {Help.ExeName} workshop ls {args[0]}.");
+                return null;
+            }
         }
 
         var command = ArgumentParser.GetCommandName("workshop", args);
 
         if (command == "workshop")
         {
-            Log.Error(args.Length == 0
-                ? $"workshop needs a subcommand, expected {string.Join(", ", Subcommands)}. {Help.UsageHint("workshop")}"
-                : $"Unknown workshop subcommand \"{args[0]}\".{ArgumentParser.DidYouMean(args[0], Subcommands)} Expected {string.Join(", ", Subcommands)}. {Help.UsageHint("workshop")}");
+            ArgumentParser.ReportUnknownSubcommand("workshop", "subcommand", args, Subcommands);
             return null;
         }
 
@@ -91,13 +94,15 @@ internal static partial class WorkshopArgumentParser
                 return null;
             }
 
-            if (ParseLimit(limitText) is not { } parsedLimit)
+            var parsedLimit = ParseLimit(limitText);
+
+            if (parsedLimit == null)
             {
                 Log.Error($"--limit needs a positive number or all, got \"{limitText}\".");
                 return null;
             }
 
-            limit = parsedLimit;
+            limit = parsedLimit.Value;
         }
 
         var options = DepotOptions.From(parsed, app: null);
@@ -122,7 +127,9 @@ internal static partial class WorkshopArgumentParser
                 return null;
             }
 
-            return new WorkshopArguments(command, options, [], [], Limit: limit, SearchApp: app, SearchText: string.Join(' ', parsed.Positionals.Skip(1)));
+            var text = string.Join(' ', parsed.Positionals.Skip(1));
+
+            return new WorkshopArguments(command, options, [], [], Limit: limit, SearchApp: app, SearchText: text);
         }
 
         if (parsed.Positionals.Count == 0)
@@ -135,7 +142,9 @@ internal static partial class WorkshopArgumentParser
 
         foreach (var arg in parsed.Positionals)
         {
-            if (ParseTarget(arg, itemOnly: args[0] == "info") is not { } target)
+            var target = ParseTarget(arg, itemOnly: args[0] == "info");
+
+            if (target == null)
             {
                 return null;
             }
@@ -172,9 +181,12 @@ internal static partial class WorkshopArgumentParser
 
         if (url.Success)
         {
-            return ulong.TryParse(url.Groups["id"].ValueSpan, NumberStyles.None, CultureInfo.InvariantCulture, out var urlID) && urlID != 0
-                ? new WorkshopTarget(arg, urlID, null)
-                : Invalid();
+            if (!ulong.TryParse(url.Groups["id"].ValueSpan, NumberStyles.None, CultureInfo.InvariantCulture, out var urlID) || urlID == 0)
+            {
+                return Invalid();
+            }
+
+            return new WorkshopTarget(arg, urlID, null);
         }
 
         if (arg.Contains("://", StringComparison.Ordinal) || arg.Contains("steamcommunity.com", StringComparison.OrdinalIgnoreCase))
@@ -185,7 +197,12 @@ internal static partial class WorkshopArgumentParser
 
         var match = TargetRegex().Match(arg);
 
-        if (!match.Success || !ulong.TryParse(match.Groups["id"].ValueSpan, NumberStyles.None, CultureInfo.InvariantCulture, out var itemID) || itemID == 0)
+        if (!match.Success)
+        {
+            return Invalid();
+        }
+
+        if (!ulong.TryParse(match.Groups["id"].ValueSpan, NumberStyles.None, CultureInfo.InvariantCulture, out var itemID) || itemID == 0)
         {
             return Invalid();
         }
@@ -212,9 +229,15 @@ internal static partial class WorkshopArgumentParser
 
         WorkshopTarget? Invalid()
         {
-            Log.Error(itemOnly
-                ? $"Invalid item \"{arg}\", expected an item id or URL, like 3070715607. \"{Help.ExeName} workshop search <app> <text>\" finds items by text."
-                : $"Invalid item \"{arg}\", expected <item>[:<manifest>|:latest] or an item's URL, like 3070715607 or 3070715607:<manifest>. Patterns go after --.");
+            if (itemOnly)
+            {
+                Log.Error($"Invalid item \"{arg}\", expected an item id or URL, like 3070715607. \"{Help.ExeName} workshop search <app> <text>\" finds items by text.");
+            }
+            else
+            {
+                Log.Error($"Invalid item \"{arg}\", expected <item>[:<manifest>|:latest] or an item's URL, like 3070715607 or 3070715607:<manifest>. Patterns go after --.");
+            }
+
             return null;
         }
     }

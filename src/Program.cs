@@ -10,7 +10,8 @@ namespace SteamFileDownloader;
 
 internal static class Program
 {
-    private static readonly (string Version, string? Commit) VersionInfo = ParseVersion(Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "");
+    private static readonly (string Version, string? Commit) VersionInfo = ParseVersion(
+        Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "");
 
     public static string Version => VersionInfo.Version;
 
@@ -26,9 +27,11 @@ internal static class Program
             return ExitCodes.Ok;
         }
 
-        if (Help.TryPrint(args) is { } helpExitCode)
+        var helpExitCode = Help.TryPrint(args);
+
+        if (helpExitCode != null)
         {
-            return helpExitCode;
+            return helpExitCode.Value;
         }
 
         using var cts = new CancellationTokenSource();
@@ -84,12 +87,19 @@ internal static class Program
             return ExitCodes.ForUsageError(command);
         }
 
+        if (arguments.Command is "workshop get" or "workshop ls")
+        {
+            var items = arguments.Targets
+                .Select(static t => new WorkshopTarget(t, ulong.Parse(t, CultureInfo.InvariantCulture), null))
+                .ToList();
+            var workshopArguments = new WorkshopArguments(arguments.Command, arguments.Options, items, arguments.Patterns);
+
+            return await WorkshopCommands.RunAsync(workshopArguments, cancellationToken);
+        }
+
         return arguments.Command switch
         {
             "get" or "ls" => await GetCommand.RunAsync(arguments, cancellationToken),
-            "workshop get" or "workshop ls" => await WorkshopCommands.RunAsync(
-                new WorkshopArguments(arguments.Command, arguments.Options, [.. arguments.Targets.Select(static t => new WorkshopTarget(t, ulong.Parse(t, CultureInfo.InvariantCulture), null))], arguments.Patterns),
-                cancellationToken),
             _ => await DepotsCommand.ListDepotsAsync(arguments, cancellationToken),
         };
     }
@@ -156,7 +166,14 @@ internal static class Program
     {
         var parts = informationalVersion.Split('+', 2);
 
-        return (parts[0], parts.Length > 1 && parts[1].Length > 0 ? parts[1][..Math.Min(7, parts[1].Length)] : null);
+        if (parts.Length == 1 || parts[1].Length == 0)
+        {
+            return (parts[0], null);
+        }
+
+        var commit = parts[1];
+
+        return (parts[0], commit[..Math.Min(7, commit.Length)]);
     }
 
     internal static string FormatVersion(string version, string? commit) => commit != null ? $"{version} ({commit})" : version;
@@ -168,15 +185,18 @@ internal static class Program
         // GameTracking mode used to be the command line without a command name
         if (argument.StartsWith("--", StringComparison.Ordinal))
         {
-            var option = ArgumentParser.Suggest(argument[2..], ["help", "version"]);
+            hint = ArgumentParser.DidYouMean(argument[2..], ["help", "version"], "--");
 
-            hint = option != null
-                ? $" Did you mean --{option}?"
-                : $" The command goes first, before its options. Downloading the files in files.json is now: {Help.ExeName} track <app> --output <dir> ...";
+            if (hint.Length == 0)
+            {
+                hint = $" The command goes first, before its options. Downloading the files in files.json is now: {Help.ExeName} track <app> --output <dir> ...";
+            }
         }
         else
         {
-            hint = $"{ArgumentParser.DidYouMean(argument, [.. Commands, "version", "help"])} Commands are {string.Join(", ", Commands[..^1])} and {Commands[^1]}.";
+            var didYouMean = ArgumentParser.DidYouMean(argument, [.. Commands, "version", "help"]);
+
+            hint = $"{didYouMean} Commands are {string.Join(", ", Commands[..^1])} and {Commands[^1]}.";
         }
 
         Log.Error($"Unknown command \"{argument}\".{hint} {Help.UsageHint()}");

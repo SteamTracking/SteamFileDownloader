@@ -110,7 +110,9 @@ internal static class GetCommand
 
         foreach (var arg in arguments.Targets)
         {
-            if (DepotArgumentParser.ParseTarget(arg, arguments) is not { } target)
+            var target = DepotArgumentParser.ParseTarget(arg, arguments);
+
+            if (target == null)
             {
                 return ExitCodes.ForUsageError(arguments.Command);
             }
@@ -125,7 +127,12 @@ internal static class GetCommand
     /// Runs get or ls, or workshop get or ls: logs in, adds the run's jobs with resolveJobs, gets every manifest, and
     /// lists or downloads the matching files.
     /// </summary>
-    internal static async Task<int> RunAsync(string command, DepotOptions options, List<string> patterns, Func<Run, Task> resolveJobs, CancellationToken cancellationToken)
+    internal static async Task<int> RunAsync(
+        string command,
+        DepotOptions options,
+        List<string> patterns,
+        Func<Run, Task> resolveJobs,
+        CancellationToken cancellationToken)
     {
         FileFilter filter;
 
@@ -140,7 +147,9 @@ internal static class GetCommand
         }
 
         // Before logging in, since a settings file that can't be read fails the run
-        if (Settings.GetOutputRoot(options.Output) is not { } outputRoot)
+        var outputRoot = Settings.GetOutputRoot(options.Output);
+
+        if (outputRoot == null)
         {
             return ExitCodes.Failed;
         }
@@ -209,7 +218,12 @@ internal static class GetCommand
             var requested = run.Matches.SelectMany(static m => m.Value.Where(static f => f.Requested).Select(static f => f.File)).ToHashSet();
 
             // Directory files that were only fetched for VPK patterns are not printed. Rows follow the targets, like in ls
-            foreach (var file in files.Where(f => requested.Contains(f.File)).OrderBy(f => run.Jobs.IndexOf(f.Job)).ThenBy(static f => f.Path, StringComparer.Ordinal))
+            var rows = files
+                .Where(f => requested.Contains(f.File))
+                .OrderBy(f => run.Jobs.IndexOf(f.Job))
+                .ThenBy(static f => f.Path, StringComparer.Ordinal);
+
+            foreach (var file in rows)
             {
                 run.WriteRow(file.Job, file.Path);
             }
@@ -221,7 +235,10 @@ internal static class GetCommand
         try
         {
             // Directories extract in parallel, the shared chunk limit keeps the total in check
-            var results = await downloader.RunWithProgress("directory files", directories, d => VpkReader.ExtractAsync(downloader, run.Jobs, d.Job, d.DirFileName, d.Package, d.Matches));
+            var results = await downloader.RunWithProgress(
+                "directory files",
+                directories,
+                d => VpkReader.ExtractAsync(downloader, run.Jobs, d.Job, d.DirFileName, d.Package, d.Matches));
 
             for (var i = 0; i < directories.Count; i++)
             {
@@ -267,7 +284,10 @@ internal static class GetCommand
         {
             foreach (var file in files.Where(static f => f.Requested).OrderBy(static f => f.Path, StringComparer.Ordinal))
             {
-                run.WriteRow(job, Convert.ToHexStringLower(file.File.FileHash), file.File.TotalSize.ToString(CultureInfo.InvariantCulture), file.Path);
+                var hash = Convert.ToHexStringLower(file.File.FileHash);
+                var size = file.File.TotalSize.ToString(CultureInfo.InvariantCulture);
+
+                run.WriteRow(job, hash, size, file.Path);
             }
         }
 
@@ -290,7 +310,10 @@ internal static class GetCommand
                 // An entry matched by several patterns is listed once
                 foreach (var match in matches.DistinctBy(static m => m.Entry).OrderBy(static m => m.Path, StringComparer.Ordinal))
                 {
-                    run.WriteRow(job, match.Entry.CRC32.ToString("x8", CultureInfo.InvariantCulture), match.Entry.TotalLength.ToString(CultureInfo.InvariantCulture), $"{dirFileName}:{match.Path}");
+                    var crc = match.Entry.CRC32.ToString("x8", CultureInfo.InvariantCulture);
+                    var size = match.Entry.TotalLength.ToString(CultureInfo.InvariantCulture);
+
+                    run.WriteRow(job, crc, size, $"{dirFileName}:{match.Path}");
                 }
             }
         }
@@ -302,7 +325,12 @@ internal static class GetCommand
 
     private static async Task ResolveJobsAsync(Run run, List<Target> targets)
     {
-        var appInfos = await run.Session.GetAppInfosAsync([.. targets.Where(static t => t.DepotID == null || t.ManifestID == null).Select(static t => t.AppID).Distinct()]);
+        var appIDs = targets
+            .Where(static t => t.DepotID == null || t.ManifestID == null)
+            .Select(static t => t.AppID)
+            .Distinct()
+            .ToList();
+        var appInfos = await run.Session.GetAppInfosAsync(appIDs);
 
         run.SearchAllHint = GetSearchAllHint(targets);
 
@@ -310,8 +338,12 @@ internal static class GetCommand
         var publicFallbacks = new PublicFallbacks();
 
         // Earlier runs of other manifests of the depot may already have identical files
-        ManifestJob AddJob(Target target, uint depotID, ulong manifestID, string branch, bool optional) =>
-            run.AddJob(target.AppID, depotID, manifestID, branch, optional, Path.Combine(run.OutputRoot, depotID.ToString(CultureInfo.InvariantCulture)));
+        ManifestJob AddJob(Target target, uint depotID, ulong manifestID, string branch, bool optional)
+        {
+            var parentFolder = Path.Combine(run.OutputRoot, depotID.ToString(CultureInfo.InvariantCulture));
+
+            return run.AddJob(target.AppID, depotID, manifestID, branch, optional, parentFolder);
+        }
 
         foreach (var target in targets)
         {
@@ -385,9 +417,16 @@ internal static class GetCommand
             if (latestID == 0)
             {
                 var fromApp = depotInfo["depotfromapp"].Value;
-                Log.Error(fromApp != null
-                    ? $"Depot {target.DepotID} is shared from app {fromApp}, use {fromApp}/{target.DepotID} as the target instead."
-                    : $"Depot {target.DepotID} has no manifest on branch \"{target.Branch}\" (it may be a DLC or another branch's depot), see \"{Help.ExeName} depots {target.AppID}\".");
+
+                if (fromApp != null)
+                {
+                    Log.Error($"Depot {target.DepotID} is shared from app {fromApp}, use {fromApp}/{target.DepotID} as the target instead.");
+                }
+                else
+                {
+                    Log.Error($"Depot {target.DepotID} has no manifest on branch \"{target.Branch}\" (it may be a DLC or another branch's depot), see \"{Help.ExeName} depots {target.AppID}\".");
+                }
+
                 run.Fail($"{target.Source} (no manifest)");
                 continue;
             }
@@ -404,14 +443,25 @@ internal static class GetCommand
     /// </summary>
     internal static string? GetSearchAllHint(IReadOnlyList<Target> targets)
     {
-        if (targets.Count == 0 || targets.Select(static t => t.AppID).Distinct().Count() > 1 || targets.Any(static t => t.DepotID == null))
+        if (targets.Count == 0)
+        {
+            return null;
+        }
+
+        if (targets.Select(static t => t.AppID).Distinct().Count() > 1)
+        {
+            return null;
+        }
+
+        if (targets.Any(static t => t.DepotID == null))
         {
             return null;
         }
 
         var what = targets.Any(static t => t.ManifestID != null) ? "every depot's latest manifest" : "every depot";
         var branches = targets.Select(static t => t.Branch).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        var branch = branches.Count == 1 && !branches[0].Equals("public", StringComparison.OrdinalIgnoreCase) ? $" --branch {Help.QuoteArgument(branches[0])}" : "";
+        var needsBranch = branches.Count == 1 && !branches[0].Equals("public", StringComparison.OrdinalIgnoreCase);
+        var branch = needsBranch ? $" --branch {Help.QuoteArgument(branches[0])}" : "";
 
         return $"To search {what}: {Help.ExeName} ls {targets[0].AppID}{branch} --";
     }
@@ -487,8 +537,10 @@ internal static class GetCommand
             var dirFileName = directory.Path;
 
 #pragma warning disable CA2000 // Disposed by the caller
-            if (VpkReader.TryRead(file.Job, file.Path, dirFileName) is not { } package)
+            var package = VpkReader.TryRead(file.Job, file.Path, dirFileName);
 #pragma warning restore CA2000
+
+            if (package == null)
             {
                 run.FailedVpkPatterns.UnionWith(directory.VpkPatterns.Select(static p => p.Source));
                 run.Fail();
@@ -516,14 +568,29 @@ internal static class GetCommand
         {
             if (jobs.All(static j => j.Manifest == null))
             {
-                run.Fail($"{source} ({Log.Plural(jobs.Count, jobs[0].ItemID != null ? "item" : "depot")})", jobs.All(static j => j.NoAccess));
+                var noun = jobs[0].ItemID != null ? "item" : "depot";
+
+                run.Fail($"{source} ({Log.Plural(jobs.Count, noun)})", jobs.All(static j => j.NoAccess));
                 failedWhole.UnionWith(jobs);
             }
         }
 
         // Patterns can only be judged against manifests that were downloaded, and VPK patterns against directory files
         // that were read
-        var unmatched = run.Matches.Count > 0 ? run.MatchCounts.Where(p => p.Value == 0 && !run.FailedVpkPatterns.Contains(p.Key)).Select(static p => p.Key).ToList() : [];
+        List<string> unmatched;
+
+        if (run.Matches.Count > 0)
+        {
+            unmatched = run.MatchCounts
+                .Where(p => p.Value == 0 && !run.FailedVpkPatterns.Contains(p.Key))
+                .Select(static p => p.Key)
+                .ToList();
+        }
+        else
+        {
+            unmatched = [];
+        }
+
         var skippedJobs = run.Jobs.Where(j => j.Optional && j.NoAccess && !failedWhole.Contains(j)).ToList();
         var skipped = skippedJobs.Select(static j => j.ItemID != null ? j.ToString() : j.DepotID.ToString(CultureInfo.InvariantCulture)).ToList();
 
@@ -546,22 +613,43 @@ internal static class GetCommand
         // A target without a match is fine, like a build from before the file existed. When no pattern matched at all, the error says so already
         var withoutMatches = run.Matches.Where(static m => m.Value.Count == 0 && !m.Key.Optional).Select(static m => m.Key.ToString()).ToList();
 
-        if (withoutMatches.Count > 0 && (unmatched.Count == 0 || unmatched.Count < run.MatchCounts.Count))
+        var someMatched = unmatched.Count == 0 || unmatched.Count < run.MatchCounts.Count;
+
+        if (withoutMatches.Count > 0 && someMatched)
         {
             notes.Add($"nothing matched in {Log.JoinFirst(withoutMatches)}");
         }
 
         var manifests = Log.PluralOf(run.Matches.Count, run.Jobs.Count, "manifest");
-        var rows = run.HideRows ? Log.Plural(run.Rows, "file")
-            : run.VpkOnly ? Log.Plural(run.Rows, "VPK entry", "VPK entries")
-            : Log.Plural(run.Rows, "row");
+        string rows;
 
-        Log.Info($"Done: {rows} from {manifests}{(notes.Count > 0 ? $" ({string.Join("; ", notes)})" : "")}.{(downloads ? $" Files are in {run.OutputRoot}" : "")}");
+        if (run.HideRows)
+        {
+            rows = Log.Plural(run.Rows, "file");
+        }
+        else if (run.VpkOnly)
+        {
+            rows = Log.Plural(run.Rows, "VPK entry", "VPK entries");
+        }
+        else
+        {
+            rows = Log.Plural(run.Rows, "row");
+        }
+
+        var notesText = notes.Count > 0 ? $" ({string.Join("; ", notes)})" : "";
+        var outputNote = downloads ? $" Files are in {run.OutputRoot}" : "";
+
+        Log.Info($"Done: {rows} from {manifests}{notesText}.{outputNote}");
 
         // Another saved login only helps targets that failed for lack of access
-        if (run.FailedForAccess && AccountStore.GetUsernames() is { Count: > 1 } usernames)
+        if (run.FailedForAccess)
         {
-            Log.Info($"If another saved login owns this content, pick it with --username ({string.Join(", ", usernames)}).");
+            var usernames = AccountStore.GetUsernames();
+
+            if (usernames.Count > 1)
+            {
+                Log.Info($"If another saved login owns this content, pick it with --username ({string.Join(", ", usernames)}).");
+            }
         }
 
         // The failed targets are named in the error that explains the exit code
@@ -572,7 +660,13 @@ internal static class GetCommand
     /// The error for patterns that matched nothing: in which manifests, how many were skipped without access, and how to
     /// search every depot. onlyManifest names the one manifest searched, if there was one, and skippedNoun is depot or item.
     /// </summary>
-    internal static string DescribeUnmatched(IReadOnlyList<string> unmatched, int manifests, string? onlyManifest, int skipped, string skippedNoun, string? searchAllHint)
+    internal static string DescribeUnmatched(
+        IReadOnlyList<string> unmatched,
+        int manifests,
+        string? onlyManifest,
+        int skipped,
+        string skippedNoun,
+        string? searchAllHint)
     {
         var where = onlyManifest ?? $"any of the {manifests} manifests";
         var skippedNote = skipped > 0 ? $" ({Log.Plural(skipped, skippedNoun)} skipped without access)" : "";

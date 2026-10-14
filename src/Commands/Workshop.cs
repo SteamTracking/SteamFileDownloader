@@ -39,7 +39,7 @@ internal sealed record WorkshopVersion(ulong ManifestID, uint Timestamp, string 
 /// Why an item has no files to download: the error for an item given on its own, the short reason for one skipped in a
 /// collection, and whether it's for lack of access.
 /// </summary>
-internal readonly record struct ItemProblem(string Message, string SkipReason, bool NoAccess = false);
+internal sealed record ItemProblem(string Message, string SkipReason, bool NoAccess = false);
 
 /// <summary>
 /// Workshop items: an item's files are a manifest in the workshop depot of the app it's for.
@@ -85,12 +85,27 @@ internal static class Workshop
                 details.TryAdd(item.publishedfileid, item);
             }
 
-            pending = [.. pending
-                .Select(details.GetValueOrDefault)
-                .Where(static d => IsAvailable(d) && IsCollection(d))
-                .SelectMany(static d => d!.children)
-                .Select(static c => c.publishedfileid)
-                .Where(seen.Add)];
+            var nextLevel = new List<ulong>();
+
+            foreach (var itemID in pending)
+            {
+                var item = details.GetValueOrDefault(itemID);
+
+                if (!IsAvailable(item) || !IsCollection(item))
+                {
+                    continue;
+                }
+
+                foreach (var child in item.children)
+                {
+                    if (seen.Add(child.publishedfileid))
+                    {
+                        nextLevel.Add(child.publishedfileid);
+                    }
+                }
+            }
+
+            pending = nextLevel;
         }
 
         return details;
@@ -117,7 +132,9 @@ internal static class Workshop
                     continue;
                 }
 
-                if (details.GetValueOrDefault(child.publishedfileid) is { } item && IsAvailable(item) && IsCollection(item))
+                var item = details.GetValueOrDefault(child.publishedfileid);
+
+                if (IsAvailable(item) && IsCollection(item))
                 {
                     Add(item);
                 }
@@ -135,12 +152,13 @@ internal static class Workshop
     public static ItemProblem? GetProblem(ulong itemID, PublishedFileDetails? details)
     {
         var result = details == null ? EResult.FileNotFound : (EResult)details.result;
+        var appIdHint = itemID < SmallItemID ? $" If {itemID} is an app id, find its items with \"{Help.ExeName} workshop search {itemID} <text>\"." : "";
 
         return result switch
         {
             EResult.OK when IsLegacy(details!) => new($"Item {itemID} is a legacy (non-SteamPipe) workshop item, which is not implemented.", "legacy"),
             EResult.OK => null,
-            EResult.FileNotFound => new($"Item {itemID} does not exist.{(itemID < SmallItemID ? $" If {itemID} is an app id, find its items with \"{Help.ExeName} workshop search {itemID} <text>\"." : "")}", "removed"),
+            EResult.FileNotFound => new($"Item {itemID} does not exist.{appIdHint}", "removed"),
             EResult.AccessDenied => new($"Item {itemID} is private, or this account can't see it.", "private", NoAccess: true),
             _ => new($"Steam gave no details for item {itemID} ({result}).", "without details"),
         };
@@ -149,8 +167,12 @@ internal static class Workshop
     /// <summary>
     /// The app's workshop depot, which holds the files of its items, or 0 when it has none.
     /// </summary>
-    public static uint GetWorkshopDepot(KeyValue? appInfo) =>
-        uint.TryParse(appInfo?["depots"]["workshopdepot"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var depotID) ? depotID : 0;
+    public static uint GetWorkshopDepot(KeyValue? appInfo)
+    {
+        var depot = appInfo?["depots"]["workshopdepot"].Value;
+
+        return uint.TryParse(depot, NumberStyles.None, CultureInfo.InvariantCulture, out var depotID) ? depotID : 0;
+    }
 
     /// <summary>
     /// Gets the changes of an item's newest versions, up to limit, and its number of changes. Pages until a version past
@@ -189,8 +211,12 @@ internal static class Workshop
     /// <summary>
     /// The newest manifest in an item's history, or 0. Items sold in the game have their manifest only there.
     /// </summary>
-    public static async Task<ulong> GetNewestManifestAsync(IWorkshopSource source, ulong itemID) =>
-        (await source.GetChangeHistoryAsync(itemID, 0, 1)).changes.FirstOrDefault()?.manifest_id ?? 0;
+    public static async Task<ulong> GetNewestManifestAsync(IWorkshopSource source, ulong itemID)
+    {
+        var history = await source.GetChangeHistoryAsync(itemID, 0, 1);
+
+        return history.changes.FirstOrDefault()?.manifest_id ?? 0;
+    }
 
     /// <summary>
     /// The versions in changes listed newest first. Changes that only edited the item's text keep its manifest, so each
@@ -227,26 +253,52 @@ internal static class Workshop
         return builder.ToString().TrimEnd();
     }
 
-    public static string FormatTime(uint unixTime) =>
-        unixTime == 0 ? "-" : DateTimeOffset.FromUnixTimeSeconds(unixTime).UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+    public static string FormatTime(uint unixTime)
+    {
+        if (unixTime == 0)
+        {
+            return "-";
+        }
+
+        return DateTimeOffset.FromUnixTimeSeconds(unixTime).UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+    }
 
     /// <summary>
     /// The columns shared by the rows of info and search: item, app, depot, manifest, updated and size.
     /// </summary>
-    public static string FormatColumns(PublishedFileDetails details, uint depotID, string manifest) => string.Join('\t',
-        details.publishedfileid.ToString(CultureInfo.InvariantCulture),
-        details.consumer_appid.ToString(CultureInfo.InvariantCulture),
-        depotID == 0 ? "-" : depotID.ToString(CultureInfo.InvariantCulture),
-        manifest,
-        FormatTime(details.time_updated),
-        details.file_size.ToString(CultureInfo.InvariantCulture));
+    public static string FormatColumns(PublishedFileDetails details, uint depotID, string manifest)
+    {
+        var depot = depotID == 0 ? "-" : depotID.ToString(CultureInfo.InvariantCulture);
+
+        return string.Join('\t',
+            details.publishedfileid.ToString(CultureInfo.InvariantCulture),
+            details.consumer_appid.ToString(CultureInfo.InvariantCulture),
+            depot,
+            manifest,
+            FormatTime(details.time_updated),
+            details.file_size.ToString(CultureInfo.InvariantCulture));
+    }
 
     /// <summary>
     /// The manifest column when it's known without the change history: "collection", "legacy", the manifest, or null.
     /// </summary>
-    public static string? GetManifestColumn(PublishedFileDetails details) =>
-        IsCollection(details) ? "collection"
-        : IsLegacy(details) ? "legacy"
-        : details.hcontent_file != 0 ? details.hcontent_file.ToString(CultureInfo.InvariantCulture)
-        : null;
+    public static string? GetManifestColumn(PublishedFileDetails details)
+    {
+        if (IsCollection(details))
+        {
+            return "collection";
+        }
+
+        if (IsLegacy(details))
+        {
+            return "legacy";
+        }
+
+        if (details.hcontent_file != 0)
+        {
+            return details.hcontent_file.ToString(CultureInfo.InvariantCulture);
+        }
+
+        return null;
+    }
 }

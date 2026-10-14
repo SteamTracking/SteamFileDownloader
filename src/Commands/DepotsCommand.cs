@@ -48,13 +48,18 @@ internal static class DepotsCommand
         var appInfos = await session.GetAppInfosAsync(appIDs);
         session.Disconnect();
 
-        // Apps without info were already reported
-        var depotsByApp = appIDs.Where(appInfos.ContainsKey).Select(appID => (AppID: appID, Depots: appInfos[appID]["depots"])).ToList();
-        var success = depotsByApp.Count == appIDs.Count;
+        var success = true;
 
-        foreach (var (appID, depots) in depotsByApp)
+        foreach (var appID in appIDs)
         {
-            success &= ListAppDepots(appID, depots, options.Branch);
+            // Apps without info were already reported
+            if (!appInfos.TryGetValue(appID, out var appInfo))
+            {
+                success = false;
+                continue;
+            }
+
+            success &= ListAppDepots(appID, appInfo["depots"], options.Branch);
         }
 
         return success ? ExitCodes.Ok : ExitCodes.Failed;
@@ -68,8 +73,15 @@ internal static class DepotsCommand
             return false;
         }
 
-        var branches = depots["branches"].Children
-            .Select(static b => $"{b.Name} (build {b["buildid"].Value}{(b["pwdrequired"].AsBoolean() ? ", password" : "")}{FormatTime(b["timeupdated"].AsLong())})");
+        var branches = new List<string>();
+
+        foreach (var branch in depots["branches"].Children)
+        {
+            var password = branch["pwdrequired"].AsBoolean() ? ", password" : "";
+            var updated = FormatTime(branch["timeupdated"].AsLong());
+
+            branches.Add($"{branch.Name} (build {branch["buildid"].Value}{password}{updated})");
+        }
 
         Log.Info("");
         Log.Info($"App {appID} branches: {string.Join(", ", branches)}");
@@ -100,7 +112,8 @@ internal static class DepotsCommand
             }
 
             // A target for ls and get. Shared depots are downloaded through the app that owns them
-            var target = $"{fromApp ?? appID.ToString(CultureInfo.InvariantCulture)}/{depotID}{(manifestID == 0 ? "" : $":{manifestID}")}";
+            var manifest = manifestID == 0 ? "" : $":{manifestID}";
+            var target = $"{fromApp ?? appID.ToString(CultureInfo.InvariantCulture)}/{depotID}{manifest}";
 
             Log.Result($"{target}\t{depot["maxsize"].Value ?? "-"}\t{string.Join(", ", notes)}");
 
@@ -115,6 +128,6 @@ internal static class DepotsCommand
 
         return true;
 
-        static string FormatTime(long unixTime) => unixTime > 0 ? $", {DateTimeOffset.FromUnixTimeSeconds(unixTime):yyyy-MM-dd}" : "";
+        static string FormatTime(long unixTime) => unixTime > 0 ? $", {AccountStore.FormatDate(DateTimeOffset.FromUnixTimeSeconds(unixTime))}" : "";
     }
 }

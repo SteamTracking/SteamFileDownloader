@@ -42,14 +42,27 @@ internal static partial class Settings
         }
     }
 
-    public static void Write(StoredSettings settings, string? path = null) => Secrets.WriteJson(path ?? FilePath, settings, SettingsJsonContext.Default.StoredSettings);
+    public static void Write(StoredSettings settings, string? path = null) =>
+        Secrets.WriteJson(path ?? FilePath, settings, SettingsJsonContext.Default.StoredSettings);
 
     /// <summary>
     /// The absolute root output folder: the one given on the command line, or else the saved one, or else depots in the
     /// current folder. Null after an error when the settings can't be read.
     /// </summary>
-    public static string? GetOutputRoot(string? output, string? path = null) =>
-        output != null ? Path.GetFullPath(output)
-        : TryRead(path) is { } settings ? Path.GetFullPath(settings.Output ?? "depots")
-        : null;
+    public static string? GetOutputRoot(string? output, string? path = null)
+    {
+        if (output != null)
+        {
+            return Path.GetFullPath(output);
+        }
+
+        var settings = TryRead(path);
+
+        if (settings == null)
+        {
+            return null;
+        }
+
+        return Path.GetFullPath(settings.Output ?? "depots");
+    }
 }

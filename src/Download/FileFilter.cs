@@ -29,7 +29,15 @@ internal sealed partial class FileFilter
     public List<FilePattern> GetMatchingPatterns(string path) => [.. Patterns.Where(p => p.Regex.IsMatch(path))];
 
     // The VPK patterns whose directory file this is
-    public IReadOnlyList<VpkPattern> GetVpkPatterns(string path) => VpkPatterns.Count == 0 ? [] : [.. VpkPatterns.Where(p => p.Dir.IsMatch(path))];
+    public IReadOnlyList<VpkPattern> GetVpkPatterns(string path)
+    {
+        if (VpkPatterns.Count == 0)
+        {
+            return [];
+        }
+
+        return [.. VpkPatterns.Where(p => p.Dir.IsMatch(path))];
+    }
 
     [JsonSourceGenerationOptions(AllowTrailingCommas = true, ReadCommentHandling = JsonCommentHandling.Skip)]
     [JsonSerializable(typeof(Dictionary<uint, List<string>>))]
@@ -72,9 +80,20 @@ internal sealed partial class FileFilter
                 }
 
                 // Paths here are whole paths from the depot root, so globs match the whole path too
-                var pattern = fileMatch.StartsWith(RegexPrefix, StringComparison.Ordinal) ? fileMatch[RegexPrefix.Length..] : GlobToRegex(NormalizePath(fileMatch));
+                string pattern;
 
-                filter.Patterns.Add(new FilePattern(fileMatch, new Regex($"^({pattern})$", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture)));
+                if (fileMatch.StartsWith(RegexPrefix, StringComparison.Ordinal))
+                {
+                    pattern = fileMatch[RegexPrefix.Length..];
+                }
+                else
+                {
+                    pattern = GlobToRegex(NormalizePath(fileMatch));
+                }
+
+                var regex = new Regex($"^({pattern})$", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture);
+
+                filter.Patterns.Add(new FilePattern(fileMatch, regex));
             }
 
             filters.Add(depotID, filter);
@@ -124,7 +143,13 @@ internal sealed partial class FileFilter
         var dirPattern = pattern[..(vpkSplit + DirVpkSuffix.Length - 1)];
         var entryPattern = pattern[(vpkSplit + DirVpkSuffix.Length)..];
 
-        VpkPatterns.Add(new VpkPattern(pattern, ParsePattern(dirPattern), ParsePattern(entryPattern.Length == 0 ? "regex:" : entryPattern)));
+        // An empty regex, which matches every entry
+        if (entryPattern.Length == 0)
+        {
+            entryPattern = RegexPrefix;
+        }
+
+        VpkPatterns.Add(new VpkPattern(pattern, ParsePattern(dirPattern), ParsePattern(entryPattern)));
         return true;
     }
 
@@ -143,7 +168,9 @@ internal sealed partial class FileFilter
         else
         {
             pattern = NormalizePath(pattern);
-            regex = $"{(pattern.Contains('/', StringComparison.Ordinal) ? "^" : "(^|/)")}{GlobToRegex(pattern)}$";
+
+            var start = pattern.Contains('/', StringComparison.Ordinal) ? "^" : "(^|/)";
+            regex = $"{start}{GlobToRegex(pattern)}$";
         }
 
         return new Regex(regex, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -154,11 +181,16 @@ internal sealed partial class FileFilter
 
     // "**/" is any number of folders, "**" anything, "*" anything within a folder, and "?" one character. Text without them
     // stays literal. Repeated "**/" mean the same as one, and each would make the regex backtrack a lot more
-    private static string GlobToRegex(string glob) => Regex.Escape(RepeatedGlobstarRegex().Replace(glob, "**/"))
-        .Replace(@"\*\*/", "(.*/)?", StringComparison.Ordinal)
-        .Replace(@"\*\*", ".*", StringComparison.Ordinal)
-        .Replace(@"\*", "[^/]*", StringComparison.Ordinal)
-        .Replace(@"\?", "[^/]", StringComparison.Ordinal);
+    private static string GlobToRegex(string glob)
+    {
+        var escaped = Regex.Escape(RepeatedGlobstarRegex().Replace(glob, "**/"));
+
+        return escaped
+            .Replace(@"\*\*/", "(.*/)?", StringComparison.Ordinal)
+            .Replace(@"\*\*", ".*", StringComparison.Ordinal)
+            .Replace(@"\*", "[^/]*", StringComparison.Ordinal)
+            .Replace(@"\?", "[^/]", StringComparison.Ordinal);
+    }
 
     public static string NormalizePath(string path) => path.Replace('\\', '/').TrimStart('/');
 }

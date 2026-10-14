@@ -34,16 +34,23 @@ internal static class DepotDownloaderArguments
             // Flags without a value are followed by the next flag
             var value = i + 1 < args.Length && !args[i + 1].StartsWith('-') ? args[i + 1] : null;
 
+            if (args[i].StartsWith("--", StringComparison.Ordinal))
+            {
+                return Fail("dd takes DepotDownloader's single-dash options, like -app 730.");
+            }
+
+            if (!args[i].StartsWith('-'))
+            {
+                return Fail($"Unexpected argument \"{args[i]}\"; dd takes options like -app 730.");
+            }
+
             switch (name)
             {
                 case "-manifest-only":
                     manifestOnly = true;
                     continue;
-                case var _ when args[i].StartsWith("--", StringComparison.Ordinal):
-                    return Fail("dd takes DepotDownloader's single-dash options, like -app 730.");
-                case var _ when !args[i].StartsWith('-'):
-                    return Fail($"Unexpected argument \"{args[i]}\"; dd takes options like -app 730.");
-                case "-app" or "-depot" or "-manifest" or "-pubfile" or "-ugc" or "-filelist" or "-dir" or "-branch" or "-beta" or "-username" or "-user" when value == null:
+                case "-app" or "-depot" or "-manifest" or "-pubfile" or "-ugc" or "-filelist"
+                    or "-dir" or "-branch" or "-beta" or "-username" or "-user" when value == null:
                     return Fail($"{args[i]} needs a value.");
                 case "-app":
                     if (!uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var appID))
@@ -68,17 +75,17 @@ internal static class DepotDownloaderArguments
                     manifests.Add(value);
                     break;
                 case "-filelist":
-                    if (ReadLines(value, "-filelist") is not { } lines)
+                    var lines = ReadLines(value, "-filelist");
+
+                    if (lines == null)
                     {
                         return null;
                     }
 
-                    // DepotDownloader's file lists are "regex:" lines and exact paths from the depot root, even for a bare
-                    // name, and without globs
                     var filePatterns = lines
                         .Select(static l => l.Trim())
                         .Where(static l => l.Length > 0)
-                        .Select(static l => l.StartsWith("regex:", StringComparison.Ordinal) ? l : $"regex:^{Regex.Escape(FileFilter.NormalizePath(l))}$")
+                        .Select(ToFileListPattern)
                         .ToList();
 
                     // A list without entries downloads nothing in DepotDownloader, rather than every file
@@ -140,9 +147,14 @@ internal static class DepotDownloaderArguments
             Log.Warn($"Ignoring {string.Join(", ", depotFilters)}: depots aren't filtered by platform or language, so pick them with -depot.");
         }
 
-        if ((pubfile != null || ugc != null) && (depots.Count > 0 || manifests.Count > 0))
+        var hasItem = pubfile != null || ugc != null;
+        var hasDepots = depots.Count > 0 || manifests.Count > 0;
+
+        if (hasItem && hasDepots)
         {
-            return Fail($"{(pubfile != null ? "-pubfile" : "-ugc")} downloads a workshop item, so it can't be combined with -depot or -manifest.");
+            var itemOption = pubfile != null ? "-pubfile" : "-ugc";
+
+            return Fail($"{itemOption} downloads a workshop item, so it can't be combined with -depot or -manifest.");
         }
 
         if (pubfile != null && ugc != null)
@@ -172,9 +184,25 @@ internal static class DepotDownloaderArguments
 
         // A UGC id is a manifest of the depot with the app's id. Without -depot, DepotDownloader takes every depot of
         // the app, and -depot and -manifest pair up in order
-        var targets = ugc != null ? new List<string> { $"{options.App}:{ugc}" }
-            : depots.Count == 0 ? ["all"]
-            : [.. depots.Select((depot, index) => index < manifests.Count ? $"{depot}:{manifests[index]}" : depot)];
+        List<string> targets;
+
+        if (ugc != null)
+        {
+            targets = [$"{options.App}:{ugc}"];
+        }
+        else if (depots.Count == 0)
+        {
+            targets = ["all"];
+        }
+        else
+        {
+            targets = [];
+
+            for (var index = 0; index < depots.Count; index++)
+            {
+                targets.Add(index < manifests.Count ? $"{depots[index]}:{manifests[index]}" : depots[index]);
+            }
+        }
 
         return new DepotArguments(manifestOnly ? "ls" : "get", options, targets, patterns);
     }
@@ -202,16 +230,40 @@ internal static class DepotDownloaderArguments
     // Why the value of an id option is invalid, or null for a nonzero number that fits the id
     private static string? InvalidId(string option, string value)
     {
-        var id = option == "-depot"
-            ? uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var depotID) ? depotID : (ulong?)null
-            : ulong.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var otherID) ? otherID : null;
+        ulong? id = null;
+
+        if (option == "-depot")
+        {
+            if (uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var depotID))
+            {
+                id = depotID;
+            }
+        }
+        else if (ulong.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var otherID))
+        {
+            id = otherID;
+        }
+
+        var idKind = option == "-pubfile" ? "item" : "manifest";
 
         return id switch
         {
             null => $"{option} needs a numeric id, got \"{value}\".",
             0 when option == "-depot" => $"-depot needs a nonzero depot id, got \"{value}\". \"{Help.ExeName} depots <app>\" lists an app's depots.",
-            0 => $"{option} needs a nonzero {(option == "-pubfile" ? "item" : "manifest")} id, got \"{value}\".",
+            0 => $"{option} needs a nonzero {idKind} id, got \"{value}\".",
             _ => null,
         };
+    }
+
+    // DepotDownloader's file lists are "regex:" lines and exact paths from the depot root, even for a bare name, and
+    // without globs
+    private static string ToFileListPattern(string line)
+    {
+        if (line.StartsWith("regex:", StringComparison.Ordinal))
+        {
+            return line;
+        }
+
+        return $"regex:^{Regex.Escape(FileFilter.NormalizePath(line))}$";
     }
 }

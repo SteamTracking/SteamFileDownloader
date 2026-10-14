@@ -36,8 +36,17 @@ internal static class ArgumentParser
     /// <summary>
     /// The command with its subcommand, like "workshop info", when the arguments after it start with one.
     /// </summary>
-    public static string GetCommandName(string command, string[] args) =>
-        args.Length > 0 && CommandOptions.ContainsKey($"{command} {args[0]}") ? $"{command} {args[0]}" : command;
+    public static string GetCommandName(string command, string[] args)
+    {
+        if (args.Length == 0)
+        {
+            return command;
+        }
+
+        var subcommand = $"{command} {args[0]}";
+
+        return CommandOptions.ContainsKey(subcommand) ? subcommand : command;
+    }
 
     /// <summary>
     /// The subcommands of a command, like info and search of workshop.
@@ -45,6 +54,24 @@ internal static class ArgumentParser
     public static string[] GetSubcommands(string command) => [.. CommandOptions.Keys
         .Where(k => k.StartsWith($"{command} ", StringComparison.Ordinal))
         .Select(k => k[(command.Length + 1)..])];
+
+    /// <summary>
+    /// The error for a command that only groups subcommands, run without one or with one it doesn't have.
+    /// </summary>
+    public static void ReportUnknownSubcommand(string command, string noun, string[] args, string[] subcommands)
+    {
+        var expected = string.Join(", ", subcommands);
+        var usage = Help.UsageHint(command);
+
+        if (args.Length == 0)
+        {
+            Log.Error($"{command} needs a {noun}, expected {expected}. {usage}");
+        }
+        else
+        {
+            Log.Error($"Unknown {command} {noun} \"{args[0]}\".{DidYouMean(args[0], subcommands)} Expected {expected}. {usage}");
+        }
+    }
 
     public static ParsedArguments? Parse(string command, string[] args)
     {
@@ -101,13 +128,14 @@ internal static class ArgumentParser
                 return null;
             }
 
+            var nextIsValue = i + 1 < optionArgs.Length && !optionArgs[i + 1].StartsWith("--", StringComparison.Ordinal);
             string value;
 
-            if (inlineValue is { Length: > 0 })
+            if (!string.IsNullOrEmpty(inlineValue))
             {
                 value = inlineValue;
             }
-            else if (inlineValue != null || i + 1 >= optionArgs.Length || optionArgs[i + 1].StartsWith("--", StringComparison.Ordinal))
+            else if (inlineValue != null || !nextIsValue)
             {
                 Log.Error($"--{name} needs a value. {usage}");
                 return null;
@@ -245,27 +273,44 @@ internal static class ArgumentParser
         // Short names are close to each other, so one edit is the most they can be off by
         var maxDistance = Math.Min(2, Math.Max(1, input.Length / 2));
         var lowerInput = input.ToLowerInvariant();
-        var close = list
-            .Select(c => (Candidate: c, Distance: EditDistance(lowerInput, c.ToLowerInvariant())))
-            .Where(c => c.Distance <= maxDistance)
-            .ToList();
+        string? closest = null;
+        var closestDistance = int.MaxValue;
+        var closestCount = 0;
 
-        if (close.Count == 0)
+        foreach (var candidate in list)
         {
-            return null;
+            var distance = EditDistance(lowerInput, candidate.ToLowerInvariant());
+
+            if (distance > maxDistance)
+            {
+                continue;
+            }
+
+            if (distance < closestDistance)
+            {
+                closest = candidate;
+                closestDistance = distance;
+                closestCount = 1;
+            }
+            else if (distance == closestDistance)
+            {
+                closestCount++;
+            }
         }
 
-        var best = close.Min(static c => c.Distance);
-        var closest = close.Where(c => c.Distance == best).ToList();
-
-        return closest.Count == 1 ? closest[0].Candidate : null;
+        // Several candidates at the closest distance are ambiguous
+        return closestCount == 1 ? closest : null;
     }
 
     /// <summary>
     /// " Did you mean X?" with the suggestion for a mistyped name, or an empty string when there is none.
     /// </summary>
-    public static string DidYouMean(string input, IEnumerable<string> candidates, string prefix = "") =>
-        Suggest(input, candidates) is { } suggestion ? $" Did you mean {prefix}{suggestion}?" : "";
+    public static string DidYouMean(string input, IEnumerable<string> candidates, string prefix = "")
+    {
+        var suggestion = Suggest(input, candidates);
+
+        return suggestion != null ? $" Did you mean {prefix}{suggestion}?" : "";
+    }
 
     /// <summary>
     /// The number of insertions, deletions, substitutions and swaps of adjacent characters that turn a into b.
@@ -291,7 +336,10 @@ internal static class ArgumentParser
             for (var j = 1; j <= b.Length; j++)
             {
                 var cost = a[i - 1] == b[j - 1] ? 0 : 1;
-                var distance = Math.Min(Math.Min(distances[((i - 1) * width) + j] + 1, distances[(i * width) + j - 1] + 1), distances[((i - 1) * width) + j - 1] + cost);
+                var deletion = distances[((i - 1) * width) + j] + 1;
+                var insertion = distances[(i * width) + j - 1] + 1;
+                var substitution = distances[((i - 1) * width) + j - 1] + cost;
+                var distance = Math.Min(Math.Min(deletion, insertion), substitution);
 
                 if (i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1])
                 {
@@ -312,6 +360,11 @@ internal static class ArgumentParser
     {
         var patternsStart = Array.IndexOf(args, "--");
 
-        return patternsStart < 0 ? (args, []) : (args[..patternsStart], [.. args[(patternsStart + 1)..]]);
+        if (patternsStart < 0)
+        {
+            return (args, []);
+        }
+
+        return (args[..patternsStart], [.. args[(patternsStart + 1)..]]);
     }
 }

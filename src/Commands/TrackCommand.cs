@@ -93,7 +93,9 @@ internal static class TrackCommand
 
         if (options.ContainsKey("password") && LogOnCredentials.IsAnonymousName(options["username"]))
         {
-            Log.Error($"--password can't be combined with {(options.ContainsKey("anonymous") ? "--anonymous" : "--username anonymous")}. {Help.UsageHint("track")}");
+            var anonymousOption = options.ContainsKey("anonymous") ? "--anonymous" : "--username anonymous";
+
+            Log.Error($"--password can't be combined with {anonymousOption}. {Help.UsageHint("track")}");
             return null;
         }
 
@@ -144,7 +146,8 @@ internal static class TrackCommand
             }
         }
 
-        var (loggedOn, logOnExitCode) = await SteamSession.CreateLoggedOnAsync(GetCredentials(username, password), cacheDepotKeys: false, takesTargets: false, cancellationToken);
+        var credentials = GetCredentials(username, password);
+        var (loggedOn, logOnExitCode) = await SteamSession.CreateLoggedOnAsync(credentials, cacheDepotKeys: false, takesTargets: false, cancellationToken);
 
         if (loggedOn == null)
         {
@@ -208,7 +211,9 @@ internal static class TrackCommand
             }
 
             // Shared depots are tracked in the app that owns them
-            if (depot["depotfromapp"].Value is { } fromApp)
+            var fromApp = depot["depotfromapp"].Value;
+
+            if (fromApp != null)
             {
                 if (filter != null)
                 {
@@ -218,9 +223,18 @@ internal static class TrackCommand
                 continue;
             }
 
-            var (manifestID, manifestBranch) = manifestIds != null
-                ? (manifestIds.GetValueOrDefault(depotID), branch)
-                : publicFallbacks.Resolve(appID, depotID, depot, branch);
+            ulong manifestID;
+            string manifestBranch;
+
+            if (manifestIds != null)
+            {
+                manifestID = manifestIds.GetValueOrDefault(depotID);
+                manifestBranch = branch;
+            }
+            else
+            {
+                (manifestID, manifestBranch) = publicFallbacks.Resolve(appID, depotID, depot, branch);
+            }
 
             // Depots like DLC and other branches often have no manifest, which is only a problem for tracked ones
             if (manifestID == 0)
@@ -265,8 +279,19 @@ internal static class TrackCommand
 
         if (saveManifest)
         {
-            foreach (var job in manifestJobs.Where(job => job.Manifest != null && (job.Filter != null || saveAllManifests)))
+            foreach (var job in manifestJobs)
             {
+                if (job.Manifest == null)
+                {
+                    continue;
+                }
+
+                // Depots that aren't in files.json are saved only with --save-all-manifests
+                if (job.Filter == null && !saveAllManifests)
+                {
+                    continue;
+                }
+
                 writeFailed |= !TryWrite($"the manifest of depot {job.DepotID}", () => ManifestWriter.DumpToTextFile(outputPath, job));
             }
         }
@@ -289,7 +314,9 @@ internal static class TrackCommand
 
         if (allSucceeded && buildId.HasValue)
         {
-            allSucceeded = TryWrite("steam_buildid.txt", () => File.WriteAllText(Path.Combine(outputPath, "steam_buildid.txt"), buildId.Value.ToString(CultureInfo.InvariantCulture)));
+            allSucceeded = TryWrite(
+                "steam_buildid.txt",
+                () => File.WriteAllText(Path.Combine(outputPath, "steam_buildid.txt"), buildId.Value.ToString(CultureInfo.InvariantCulture)));
         }
 
         var elapsed = downloadTimer.Elapsed.ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture);
@@ -319,9 +346,21 @@ internal static class TrackCommand
     internal static string DescribeFailure(string elapsed, List<uint> failedDepots, bool hasBuildId, bool writeFailed)
     {
         var depots = Log.JoinFirst([.. failedDepots.Select(static d => d.ToString(CultureInfo.InvariantCulture))]);
-        var what = failedDepots.Count > 0
-            ? $"tracked {(failedDepots.Count == 1 ? $"depot {depots} has" : $"depots {depots} have")} no manifest"
-            : "some manifests or files failed, see above";
+        string what;
+
+        if (failedDepots.Count == 0)
+        {
+            what = "some manifests or files failed, see above";
+        }
+        else if (failedDepots.Count == 1)
+        {
+            what = $"tracked depot {depots} has no manifest";
+        }
+        else
+        {
+            what = $"tracked depots {depots} have no manifest";
+        }
+
         var buildIdNote = hasBuildId ? "; steam_buildid.txt not written" : "";
         var rerun = failedDepots.Count > 0 || writeFailed ? ". Rerun to retry" : "";
 
@@ -344,7 +383,8 @@ internal static class TrackCommand
     }
 
     // The files to download, and the VPK patterns of the directory files among them
-    internal static (List<FileJob> Files, Dictionary<DepotManifest.FileData, IReadOnlyList<VpkPattern>> VpkDirectories) CollectFiles(List<ManifestJob> jobs)
+    internal static (List<FileJob> Files, Dictionary<DepotManifest.FileData, IReadOnlyList<VpkPattern>> VpkDirectories) CollectFiles(
+        List<ManifestJob> jobs)
     {
         var fileJobs = new List<FileJob>();
         var vpkDirectories = new Dictionary<DepotManifest.FileData, IReadOnlyList<VpkPattern>>();

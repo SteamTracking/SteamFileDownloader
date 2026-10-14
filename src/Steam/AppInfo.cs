@@ -46,10 +46,15 @@ internal static class AppInfo
         }
 
         // Password protected branches only list their manifests to accounts with access
-        if (branchInfo["pwdrequired"].AsBoolean() && !GetDepots(depots).Any(d => d.Depot["manifests"][branch] != KeyValue.Invalid))
+        if (branchInfo["pwdrequired"].AsBoolean())
         {
-            Log.Error($"Branch \"{branch}\" of app {appID} is password protected, which is not supported.");
-            return false;
+            var hasVisibleManifest = GetDepots(depots).Any(d => d.Depot["manifests"][branch] != KeyValue.Invalid);
+
+            if (!hasVisibleManifest)
+            {
+                Log.Error($"Branch \"{branch}\" of app {appID} is password protected, which is not supported.");
+                return false;
+            }
         }
 
         return true;
@@ -73,7 +78,12 @@ internal static class AppInfo
         return (manifestID, manifestID != 0);
 
         // Either the id itself, or a "gid" child
-        static ulong ParseManifestId(KeyValue manifest) => ulong.TryParse(manifest.Value ?? manifest["gid"].Value, out var id) ? id : 0;
+        static ulong ParseManifestId(KeyValue manifest)
+        {
+            var value = manifest.Value ?? manifest["gid"].Value;
+
+            return ulong.TryParse(value, out var id) ? id : 0;
+        }
     }
 
     /// <summary>
@@ -86,9 +96,14 @@ internal static class AppInfo
             return;
         }
 
-        Log.Info(depotIDs.Count == 1
-            ? $"Depot {depotIDs.First()} of app {appID} has no manifest on \"{branch}\", using the one on \"public\"."
-            : $"{depotIDs.Count} depots of app {appID} have no manifest on \"{branch}\", using \"public\": {Log.JoinFirst([.. depotIDs.Order().Select(static d => d.ToString(CultureInfo.InvariantCulture))])}.");
+        if (depotIDs.Count == 1)
+        {
+            Log.Info($"Depot {depotIDs.First()} of app {appID} has no manifest on \"{branch}\", using the one on \"public\".");
+            return;
+        }
+
+        List<string> sortedIDs = [.. depotIDs.Order().Select(static d => d.ToString(CultureInfo.InvariantCulture))];
+        Log.Info($"{depotIDs.Count} depots of app {appID} have no manifest on \"{branch}\", using \"public\": {Log.JoinFirst(sortedIDs)}.");
     }
 }
 

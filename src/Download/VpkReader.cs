@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.IO.Hashing;
 using System.Linq;
@@ -47,31 +48,61 @@ internal static class VpkReader
     /// Of several manifests of that depot, the closest one not newer than the directory file's is likely from the same build,
     /// since a build that changes an archive changes the directory file too. Entries from another build fail their CRC check.
     /// </summary>
-    public static (ManifestJob Job, DepotManifest.FileData File)? FindArchive(IEnumerable<ManifestJob> jobs, ManifestJob dirJob, string dirFileName, int archiveIndex)
+    public static bool TryFindArchive(
+        IEnumerable<ManifestJob> jobs,
+        ManifestJob dirJob,
+        string dirFileName,
+        int archiveIndex,
+        [NotNullWhen(true)] out ManifestJob? archiveJob,
+        [NotNullWhen(true)] out DepotManifest.FileData? archiveFile)
     {
-        if (FindArchiveFile(dirJob, dirFileName, archiveIndex) is { } file)
+        archiveJob = null;
+        archiveFile = FindArchiveFile(dirJob, dirFileName, archiveIndex);
+
+        if (archiveFile != null)
         {
-            return (dirJob, file);
+            archiveJob = dirJob;
+            return true;
         }
 
         var dirTime = dirJob.Manifest!.CreationTime;
 
-        (ManifestJob Job, DepotManifest.FileData File)? closest = null;
-
-        foreach (var job in jobs.Where(j => j != dirJob && j.AppID == dirJob.AppID && j.Manifest != null))
+        foreach (var job in jobs)
         {
-            if (FindArchiveFile(job, dirFileName, archiveIndex) is { } archiveFile && (closest == null || IsCloser(job, closest.Value.Job)))
+            if (job == dirJob || job.AppID != dirJob.AppID || job.Manifest == null)
             {
-                closest = (job, archiveFile);
+                continue;
+            }
+
+            var file = FindArchiveFile(job, dirFileName, archiveIndex);
+
+            if (file == null)
+            {
+                continue;
+            }
+
+            if (archiveJob == null || IsCloser(job, archiveJob, dirTime))
+            {
+                archiveJob = job;
+                archiveFile = file;
             }
         }
 
-        return closest;
+        return archiveJob != null && archiveFile != null;
+    }
 
-        // Not newer than the directory file first, then by time apart
-        bool IsCloser(ManifestJob job, ManifestJob other) =>
-            (job.Manifest!.CreationTime > dirTime, (job.Manifest.CreationTime - dirTime).Duration())
-                .CompareTo((other.Manifest!.CreationTime > dirTime, (other.Manifest.CreationTime - dirTime).Duration())) < 0;
+    // Not newer than the directory file first, then by time apart
+    private static bool IsCloser(ManifestJob job, ManifestJob other, DateTime dirTime)
+    {
+        var jobIsNewer = job.Manifest!.CreationTime > dirTime;
+        var otherIsNewer = other.Manifest!.CreationTime > dirTime;
+
+        if (jobIsNewer != otherIsNewer)
+        {
+            return otherIsNewer;
+        }
+
+        return (job.Manifest.CreationTime - dirTime).Duration() < (other.Manifest.CreationTime - dirTime).Duration();
     }
 
     // pak01_NNN.vpk next to pak01_dir.vpk in the job's manifest
@@ -121,7 +152,7 @@ internal static class VpkReader
 
         foreach (var archive in entries.Where(static e => e.ArchiveIndex != DirArchiveIndex && e.Length > 0).GroupBy(static e => e.ArchiveIndex))
         {
-            if (FindArchive(jobs, dirJob, dirFileName, archive.Key) is not { } found)
+            if (!TryFindArchive(jobs, dirJob, dirFileName, archive.Key, out var archiveJob, out var archiveFile))
             {
                 Log.Error($"[{dirJob}] Failed to find archive {archive.Key} of {dirFileName} in any depot of app {dirJob.AppID}.");
                 success = false;
@@ -133,7 +164,7 @@ internal static class VpkReader
 
             foreach (var entry in archive)
             {
-                if ((ulong)entry.Offset + entry.Length > found.File.TotalSize)
+                if ((ulong)entry.Offset + entry.Length > archiveFile.TotalSize)
                 {
                     Log.Error($"[{dirJob}] {entry.GetFullPath()} in {dirFileName} is past the end of archive {archive.Key}.");
                     success = false;
@@ -145,7 +176,7 @@ internal static class VpkReader
 
             if (inArchive.Count > 0)
             {
-                archives.Add(new PartialFile(found.Job, found.File, FindChunks(found.File, inArchive)));
+                archives.Add(new PartialFile(archiveJob, archiveFile, FindChunks(archiveFile, inArchive)));
             }
         }
 
@@ -276,7 +307,7 @@ internal static class VpkReader
         int archiveIndex,
         IEnumerable<PackageEntry> entries)
     {
-        if (FindArchive(jobs, job, dirFileName, archiveIndex) is not var (archiveJob, archiveFile))
+        if (!TryFindArchive(jobs, job, dirFileName, archiveIndex, out var archiveJob, out var archiveFile))
         {
             Log.Error($"[{job}] Archive {archiveIndex} of {dirFileName} is in none of the manifests of this run. It may be in another depot of app {job.AppID}: add the target \"all\" for the latest build, or that depot's manifest from the same build.");
             return null;
@@ -405,7 +436,9 @@ internal static class VpkReader
 
     private static bool IsAlreadyExtracted(PackageEntry entry, string path)
     {
-        if (new FileInfo(path) is not { Exists: true } info || info.Length != entry.TotalLength)
+        var info = new FileInfo(path);
+
+        if (!info.Exists || info.Length != entry.TotalLength)
         {
             return false;
         }

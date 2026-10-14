@@ -32,16 +32,29 @@ internal static class WorkshopCommands
         }
     }
 
-    public static Task<int> InfoAsync(WorkshopArguments arguments, CancellationToken cancellationToken) =>
-        RunWithSessionAsync(arguments.Options, takesTargets: true, "Failed to get workshop items from Steam", (session, outcome) => WriteInfoAsync(session, arguments, outcome), cancellationToken);
+    public static Task<int> InfoAsync(WorkshopArguments arguments, CancellationToken cancellationToken) => RunWithSessionAsync(
+        arguments.Options,
+        takesTargets: true,
+        "Failed to get workshop items from Steam",
+        (session, outcome) => WriteInfoAsync(session, arguments, outcome),
+        cancellationToken);
 
-    public static Task<int> SearchAsync(WorkshopArguments arguments, CancellationToken cancellationToken) =>
-        RunWithSessionAsync(arguments.Options, takesTargets: false, "Failed to search the workshop", (session, _) => WriteSearchAsync(session, arguments), cancellationToken);
+    public static Task<int> SearchAsync(WorkshopArguments arguments, CancellationToken cancellationToken) => RunWithSessionAsync(
+        arguments.Options,
+        takesTargets: false,
+        "Failed to search the workshop",
+        (session, _) => WriteSearchAsync(session, arguments),
+        cancellationToken);
 
     /// <summary>
     /// Logs in, runs write, and returns the exit code of its outcome. A failed Steam request fails the run with failure.
     /// </summary>
-    private static async Task<int> RunWithSessionAsync(DepotOptions options, bool takesTargets, string failure, Func<SteamSession, Outcome, Task> write, CancellationToken cancellationToken)
+    private static async Task<int> RunWithSessionAsync(
+        DepotOptions options,
+        bool takesTargets,
+        string failure,
+        Func<SteamSession, Outcome, Task> write,
+        CancellationToken cancellationToken)
     {
         var (loggedOn, logOnExitCode) = await SteamSession.CreateLoggedOnAsync(options, takesTargets, cancellationToken);
 
@@ -82,7 +95,7 @@ internal static class WorkshopCommands
 
             if (!Workshop.IsAvailable(item))
             {
-                var problem = Workshop.GetProblem(target.ItemID, item)!.Value;
+                var problem = Workshop.GetProblem(target.ItemID, item)!;
                 Log.Error(problem.Message);
                 outcome.Fail(problem.NoAccess);
                 continue;
@@ -117,7 +130,7 @@ internal static class WorkshopCommands
                 }
                 else
                 {
-                    skipped.Add((Workshop.GetProblem(childID, child)!.Value.SkipReason, childID));
+                    skipped.Add((Workshop.GetProblem(childID, child)!.SkipReason, childID));
                 }
             }
 
@@ -139,17 +152,38 @@ internal static class WorkshopCommands
             return;
         }
 
-        var appInfosTask = source.GetAppInfosAsync([.. items.Where(static d => !Workshop.IsCollection(d)).Select(static d => d.consumer_appid).Where(static a => a != 0).Distinct()]);
-        var withoutManifest = items.Where(static d => Workshop.GetManifestColumn(d) == null).Select(static d => d.publishedfileid).Distinct().ToList();
+        var appIDs = items
+            .Where(static d => !Workshop.IsCollection(d))
+            .Select(static d => d.consumer_appid)
+            .Where(static a => a != 0)
+            .Distinct()
+            .ToList();
+        var appInfosTask = source.GetAppInfosAsync(appIDs);
+        var withoutManifest = items
+            .Where(static d => Workshop.GetManifestColumn(d) == null)
+            .Select(static d => d.publishedfileid)
+            .Distinct()
+            .ToList();
         var newest = await Task.WhenAll(withoutManifest.Select(id => Workshop.GetNewestManifestAsync(source, id)));
-        var newestByItem = withoutManifest.Zip(newest).ToDictionary(static p => p.First, static p => p.Second);
+        var newestByItem = new Dictionary<ulong, ulong>();
+
+        for (var i = 0; i < withoutManifest.Count; i++)
+        {
+            newestByItem.Add(withoutManifest[i], newest[i]);
+        }
+
         var appInfos = await appInfosTask;
 
         foreach (var item in items)
         {
             var depotID = Workshop.IsCollection(item) ? 0 : Workshop.GetWorkshopDepot(appInfos.GetValueOrDefault(item.consumer_appid));
-            var manifest = Workshop.GetManifestColumn(item)
-                ?? (newestByItem[item.publishedfileid] is var newestID and not 0 ? newestID.ToString(CultureInfo.InvariantCulture) : "-");
+            var manifest = Workshop.GetManifestColumn(item);
+
+            if (manifest == null)
+            {
+                var newestID = newestByItem[item.publishedfileid];
+                manifest = newestID != 0 ? newestID.ToString(CultureInfo.InvariantCulture) : "-";
+            }
 
             Log.Result($"{Workshop.FormatColumns(item, depotID, manifest)}\t{Workshop.CleanText(item.title)}");
         }
@@ -161,8 +195,10 @@ internal static class WorkshopCommands
         var (total, changes) = history;
         var versions = Workshop.CollapseHistory(changes);
         var more = changes.Count < total;
+        var versionsText = more ? "newest versions" : "versions";
+        var limitHint = more ? ", --limit lists more" : "";
 
-        Log.Info($"Item {itemID} ({Workshop.CleanText(item.title)}): {versions.Count} {(more ? "newest " : "")}versions from {changes.Count} of its {total} changes{(more ? ", --limit lists more" : "")}.");
+        Log.Info($"Item {itemID} ({Workshop.CleanText(item.title)}): {versions.Count} {versionsText} from {changes.Count} of its {total} changes{limitHint}.");
 
         if (Workshop.IsLegacy(item))
         {
@@ -209,12 +245,16 @@ internal static class WorkshopCommands
             {
                 var depotID = Workshop.GetWorkshopDepot(appInfos.GetValueOrDefault(item.consumer_appid));
                 var manifest = Workshop.GetManifestColumn(item) ?? "-";
+                var subscriptions = item.subscriptions.ToString(CultureInfo.InvariantCulture);
 
-                Log.Result($"{Workshop.FormatColumns(item, depotID, manifest)}\t{item.subscriptions.ToString(CultureInfo.InvariantCulture)}\t{Workshop.CleanText(item.title)}");
+                Log.Result($"{Workshop.FormatColumns(item, depotID, manifest)}\t{subscriptions}\t{Workshop.CleanText(item.title)}");
                 listed++;
             }
 
-            if (page.publishedfiledetails.Count == 0 || string.IsNullOrEmpty(page.next_cursor) || page.next_cursor == cursor)
+            var pageWasEmpty = page.publishedfiledetails.Count == 0;
+            var cursorStopped = string.IsNullOrEmpty(page.next_cursor) || page.next_cursor == cursor;
+
+            if (pageWasEmpty || cursorStopped)
             {
                 break;
             }
@@ -222,7 +262,9 @@ internal static class WorkshopCommands
             cursor = page.next_cursor;
         }
 
-        Log.Info($"{listed} of {total} items of app {appID} match \"{arguments.SearchText}\"{(listed < total ? ", --limit lists more" : "")}.");
+        var limitHint = listed < total ? ", --limit lists more" : "";
+
+        Log.Info($"{listed} of {total} items of app {appID} match \"{arguments.SearchText}\"{limitHint}.");
     }
 
     /// <summary>
@@ -248,15 +290,27 @@ internal static class WorkshopCommands
         public ulong ItemID => Details.publishedfileid;
     }
 
+    // A collection given as a target, with the jobs of its items and the ones skipped
+    private sealed record CollectionTarget(ulong ItemID, int Items)
+    {
+        public HashSet<ManifestJob> Jobs { get; } = [];
+
+        public List<(string Reason, ulong ItemID)> Skipped { get; } = [];
+    }
+
     /// <summary>
     /// Adds a job per item, with collections expanded. Items of collections are like the depots of an "all" target:
     /// skipped with a note when they have no files, and the collection fails only when none of them can be downloaded.
     /// </summary>
-    internal static async Task ResolveJobsAsync(GetCommand.Run run, IWorkshopSource source, List<WorkshopTarget> targets, CancellationToken cancellationToken)
+    internal static async Task ResolveJobsAsync(
+        GetCommand.Run run,
+        IWorkshopSource source,
+        List<WorkshopTarget> targets,
+        CancellationToken cancellationToken)
     {
         var details = await Workshop.GetDetailsAsync(source, targets.Select(static t => t.ItemID));
         var candidates = new List<Candidate>();
-        var collections = new Dictionary<string, (ulong ItemID, int Items, HashSet<ManifestJob> Jobs, List<(string Reason, ulong ItemID)> Skipped)>();
+        var collections = new Dictionary<string, CollectionTarget>();
 
         foreach (var target in targets)
         {
@@ -272,8 +326,9 @@ internal static class WorkshopCommands
                 }
 
                 var items = Workshop.GetCollectionItems(item, details);
+                var collection = new CollectionTarget(target.ItemID, items.Count);
 
-                if (!collections.TryAdd(target.Source, (target.ItemID, items.Count, [], [])))
+                if (!collections.TryAdd(target.Source, collection))
                 {
                     continue;
                 }
@@ -281,10 +336,11 @@ internal static class WorkshopCommands
                 foreach (var childID in items)
                 {
                     var child = details.GetValueOrDefault(childID);
+                    var problem = Workshop.GetProblem(childID, child);
 
-                    if (Workshop.GetProblem(childID, child) is { } problem)
+                    if (problem != null)
                     {
-                        collections[target.Source].Skipped.Add((problem.SkipReason, childID));
+                        collection.Skipped.Add((problem.SkipReason, childID));
                     }
                     else
                     {
@@ -295,7 +351,9 @@ internal static class WorkshopCommands
                 continue;
             }
 
-            if (Workshop.GetProblem(target.ItemID, item) is { } itemProblem)
+            var itemProblem = Workshop.GetProblem(target.ItemID, item);
+
+            if (itemProblem != null)
             {
                 Log.Error(itemProblem.Message);
                 run.Fail(target.Source, itemProblem.NoAccess);
@@ -305,11 +363,27 @@ internal static class WorkshopCommands
             candidates.Add(new Candidate(target, item!, FromCollection: false));
         }
 
+        var appIDs = candidates.Select(static c => c.Details.consumer_appid).Distinct().ToList();
+        var appInfosTask = source.GetAppInfosAsync(appIDs);
+
         // An item given twice, or both directly and in a collection, is looked up once
-        var appInfosTask = source.GetAppInfosAsync([.. candidates.Select(static c => c.Details.consumer_appid).Distinct()]);
         var lookups = new Dictionary<(ulong ItemID, ulong? ManifestID), Task<(ulong ManifestID, ItemProblem? Problem)>>();
-        var manifests = await Task.WhenAll(candidates.Select(c =>
-            lookups.TryGetValue((c.ItemID, c.Target.ManifestID), out var lookup) ? lookup : lookups[(c.ItemID, c.Target.ManifestID)] = GetManifestAsync(source, c, cancellationToken)));
+        var manifestTasks = new List<Task<(ulong ManifestID, ItemProblem? Problem)>>(candidates.Count);
+
+        foreach (var candidate in candidates)
+        {
+            var key = (candidate.ItemID, candidate.Target.ManifestID);
+
+            if (!lookups.TryGetValue(key, out var lookup))
+            {
+                lookup = GetManifestAsync(source, candidate, cancellationToken);
+                lookups[key] = lookup;
+            }
+
+            manifestTasks.Add(lookup);
+        }
+
+        var manifests = await Task.WhenAll(manifestTasks);
         var appInfos = await appInfosTask;
 
         for (var i = 0; i < candidates.Count; i++)
@@ -325,15 +399,15 @@ internal static class WorkshopCommands
                 problem = new ItemProblem($"App {appID} has no workshop depot, so item {candidate.ItemID} has no files to download.", "without files");
             }
 
-            if (problem is { } candidateProblem)
+            if (problem != null)
             {
                 if (candidate.FromCollection)
                 {
-                    collections[candidate.Target.Source].Skipped.Add((candidateProblem.SkipReason, candidate.ItemID));
+                    collections[candidate.Target.Source].Skipped.Add((problem.SkipReason, candidate.ItemID));
                 }
                 else
                 {
-                    Log.Error(candidateProblem.Message);
+                    Log.Error(problem.Message);
                     run.Fail(candidate.Target.Source);
                 }
 
@@ -356,19 +430,19 @@ internal static class WorkshopCommands
             }
         }
 
-        foreach (var (targetSource, (itemID, items, jobs, skipped)) in collections)
+        foreach (var (targetSource, collection) in collections)
         {
-            var skippedNote = skipped.Count > 0 ? $" ({FormatSkipped(skipped)})" : "";
+            var skippedNote = collection.Skipped.Count > 0 ? $" ({FormatSkipped(collection.Skipped)})" : "";
 
-            if (jobs.Count == 0)
+            if (collection.Jobs.Count == 0)
             {
-                Log.Error($"None of the {items} items of collection {itemID} have files to download{skippedNote}.");
+                Log.Error($"None of the {collection.Items} items of collection {collection.ItemID} have files to download{skippedNote}.");
                 run.Fail(targetSource);
             }
             else
             {
-                Log.Info($"Collection {itemID}: {jobs.Count} of {Log.Plural(items, "item")}{skippedNote}.");
-                run.AllTargets[targetSource] = [.. jobs];
+                Log.Info($"Collection {collection.ItemID}: {collection.Jobs.Count} of {Log.Plural(collection.Items, "item")}{skippedNote}.");
+                run.AllTargets[targetSource] = [.. collection.Jobs];
             }
         }
     }
@@ -380,9 +454,16 @@ internal static class WorkshopCommands
     internal static string FormatSkipped(IReadOnlyCollection<(string Reason, ulong ItemID)> skipped)
     {
         var groups = skipped.GroupBy(static s => s.Reason);
-        var reasons = skipped.Count <= 5
-            ? groups.Select(static g => $"{string.Join(", ", g.Select(static s => s.ItemID))} {g.Key}")
-            : groups.Select(static g => $"{g.Count()} {g.Key}");
+        IEnumerable<string> reasons;
+
+        if (skipped.Count <= 5)
+        {
+            reasons = groups.Select(static g => $"{string.Join(", ", g.Select(static s => s.ItemID))} {g.Key}");
+        }
+        else
+        {
+            reasons = groups.Select(static g => $"{g.Count()} {g.Key}");
+        }
 
         return $"{skipped.Count} skipped: {string.Join(", ", reasons)}";
     }
@@ -391,15 +472,20 @@ internal static class WorkshopCommands
     /// The manifest of an item to download: the one asked for, the one in its details, or the newest in its history.
     /// Without one, the problem says why.
     /// </summary>
-    private static async Task<(ulong ManifestID, ItemProblem? Problem)> GetManifestAsync(IWorkshopSource source, Candidate candidate, CancellationToken cancellationToken)
+    private static async Task<(ulong ManifestID, ItemProblem? Problem)> GetManifestAsync(
+        IWorkshopSource source,
+        Candidate candidate,
+        CancellationToken cancellationToken)
     {
         var itemID = candidate.ItemID;
         var current = candidate.Details.hcontent_file;
 
         try
         {
-            if (candidate.Target.ManifestID is { } pinned)
+            if (candidate.Target.ManifestID != null)
             {
+                var pinned = candidate.Target.ManifestID.Value;
+
                 if (pinned != current)
                 {
                     var history = await source.GetChangeHistoryAsync(itemID, 0, Workshop.HistoryPageSize);
@@ -420,7 +506,12 @@ internal static class WorkshopCommands
 
             var newest = await Workshop.GetNewestManifestAsync(source, itemID);
 
-            return newest != 0 ? (newest, null) : (0, new ItemProblem($"Item {itemID} has no manifest in its details or change history.", "without files"));
+            if (newest == 0)
+            {
+                return (0, new ItemProblem($"Item {itemID} has no manifest in its details or change history.", "without files"));
+            }
+
+            return (newest, null);
         }
         catch (Exception e) when (SteamSession.IsError(e, cancellationToken))
         {

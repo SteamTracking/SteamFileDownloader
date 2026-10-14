@@ -30,10 +30,18 @@ internal static class ManifestWriter
         sw.WriteLine();
         sw.WriteLine($"{ManifestIdLabel}{job.ManifestID} / {manifest.CreationTime} ");
 
-        var uniqueChunks = manifest.Files.SelectMany(static f => f.Chunks).Select(static c => Convert.ToHexString(c.ChunkID!)).Distinct().Count();
+        var uniqueChunks = new HashSet<string>();
+
+        foreach (var file in manifest.Files)
+        {
+            foreach (var chunk in file.Chunks)
+            {
+                uniqueChunks.Add(Convert.ToHexString(chunk.ChunkID!));
+            }
+        }
 
         sw.WriteLine($"Total number of files  : {manifest.Files.Count} ");
-        sw.WriteLine($"Total number of chunks : {uniqueChunks} ");
+        sw.WriteLine($"Total number of chunks : {uniqueChunks.Count} ");
         sw.WriteLine($"Total bytes on disk    : {manifest.TotalUncompressedSize} ");
         sw.WriteLine($"Total bytes compressed : {manifest.TotalCompressedSize} ");
         sw.WriteLine();

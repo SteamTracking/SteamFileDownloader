@@ -47,8 +47,10 @@ internal static class LoginCommand
         var subcommands = ArgumentParser.GetSubcommands("login");
 
         // A mistyped subcommand, or a lone username given without --username that looks like one
-        if (command == "login" && args.Length > 0 && parsed.Positionals.Count > 0 && args[0] == parsed.Positionals[0]
-            && ArgumentParser.Suggest(args[0], subcommands) is { } subcommand)
+        var startsWithPositional = command == "login" && args.Length > 0 && parsed.Positionals.Count > 0 && args[0] == parsed.Positionals[0];
+        var subcommand = startsWithPositional ? ArgumentParser.Suggest(args[0], subcommands) : null;
+
+        if (subcommand != null)
         {
             var asUsername = parsed.Positionals.Count == 1 ? $" To log in as {args[0]}: {Help.ExeName} login --username {args[0]}." : "";
             Log.Error($"Unknown login subcommand \"{args[0]}\". Did you mean {subcommand}? Expected {string.Join(", ", subcommands)}.{asUsername} {Help.UsageHint(command)}");
@@ -61,7 +63,12 @@ internal static class LoginCommand
             return null;
         }
 
-        return ArgumentParser.NoPositionals(parsed, command) ? new LoginArguments(command, parsed.Options.GetValueOrDefault("username"), []) : null;
+        if (!ArgumentParser.NoPositionals(parsed, command))
+        {
+            return null;
+        }
+
+        return new LoginArguments(command, parsed.Options.GetValueOrDefault("username"), []);
     }
 
     /// <summary>
@@ -84,8 +91,12 @@ internal static class LoginCommand
         // Tokens Steam already rejects need no revoking
         var deadToken = false;
 
-        if (username != null && AccountStore.Find(username) is { RefreshToken: { } savedToken } saved)
+        var saved = username == null ? null : AccountStore.Find(username);
+
+        if (saved?.RefreshToken != null)
         {
+            var savedToken = saved.RefreshToken;
+
             if (AccountStore.GetExpiry(savedToken) <= DateTimeOffset.UtcNow)
             {
                 deadToken = true;
@@ -177,7 +188,9 @@ internal static class LoginCommand
         {
             using var api = WebAPI.GetAsyncInterface("IAuthenticationService");
 
-            if (await RevokeAsync(api, replaced, EAuthTokenRevokeAction.k_EAuthTokenRevokeLogout, cancellationToken) is { } failure)
+            var failure = await RevokeAsync(api, replaced, EAuthTokenRevokeAction.k_EAuthTokenRevokeLogout, cancellationToken);
+
+            if (failure != null)
             {
                 Log.Info($"Revoking the replaced token of {account.Username} failed ({failure}); a token Steam already rejected can't be revoked.");
             }
@@ -217,7 +230,10 @@ internal static class LoginCommand
         {
             var expiry = login.RefreshToken == null ? null : AccountStore.GetExpiry(login.RefreshToken);
 
-            Log.Result($"{login.Username}\t{(login.IsDefault ? "default" : "-")}\t{(expiry is { } date ? AccountStore.FormatDate(date) : "-")}");
+            var defaultColumn = login.IsDefault ? "default" : "-";
+            var expiryColumn = expiry != null ? AccountStore.FormatDate(expiry.Value) : "-";
+
+            Log.Result($"{login.Username}\t{defaultColumn}\t{expiryColumn}");
 
             if (login.RefreshToken == null)
             {
@@ -272,9 +288,14 @@ internal static class LoginCommand
             Console.WriteLine($"Removed the saved login for {login.Username}.");
         }
 
-        if (defaultLogin != null && !logins.Exists(l => l.IsDefault && l.Username.Equals(defaultLogin, StringComparison.OrdinalIgnoreCase)))
+        if (defaultLogin != null)
         {
-            Console.WriteLine($"{defaultLogin} is now the default login.");
+            var wasDefault = logins.Exists(l => l.IsDefault && l.Username.Equals(defaultLogin, StringComparison.OrdinalIgnoreCase));
+
+            if (!wasDefault)
+            {
+                Console.WriteLine($"{defaultLogin} is now the default login.");
+            }
         }
 
         return ExitCodes.Ok;
@@ -288,12 +309,15 @@ internal static class LoginCommand
             return;
         }
 
-        if (await RevokeAsync(api, login.RefreshToken, EAuthTokenRevokeAction.k_EAuthTokenRevokePermanent, cancellationToken) is not { } failure)
+        var failure = await RevokeAsync(api, login.RefreshToken, EAuthTokenRevokeAction.k_EAuthTokenRevokePermanent, cancellationToken);
+
+        if (failure == null)
         {
             return;
         }
 
-        var until = AccountStore.GetExpiry(login.RefreshToken) is { } expiry ? $" until {AccountStore.FormatDate(expiry)}" : "";
+        var expiry = AccountStore.GetExpiry(login.RefreshToken);
+        var until = expiry != null ? $" until {AccountStore.FormatDate(expiry.Value)}" : "";
 
         Log.Warn($"Revoking the token of {login.Username} with Steam failed ({failure}). Steam answers Fail for a token that is already revoked; otherwise a copy of it keeps working{until}. It's removed here anyway.");
     }
@@ -302,7 +326,11 @@ internal static class LoginCommand
     /// Revokes a refresh token, which takes only the token itself, so no Steam login is needed. Returns why it failed,
     /// or null when Steam revoked it.
     /// </summary>
-    private static async Task<string?> RevokeAsync(WebAPI.AsyncInterface api, string refreshToken, EAuthTokenRevokeAction action, CancellationToken cancellationToken)
+    private static async Task<string?> RevokeAsync(
+        WebAPI.AsyncInterface api,
+        string refreshToken,
+        EAuthTokenRevokeAction action,
+        CancellationToken cancellationToken)
     {
         try
         {
