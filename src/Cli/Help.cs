@@ -274,7 +274,7 @@ internal static class Help
 
         Usage:
           {ExeName} depots <app>... [--branch <name>]
-        stdout has a tab-separated row per depot: app  depot  manifest  max size  notes
+        stdout has a tab-separated row per depot: target  max size  notes
 
         Examples:
           {ExeName} depots 570
@@ -285,9 +285,10 @@ internal static class Help
         {LoginOptions}
 
         Output:
-          manifest is the latest on the branch, or public's when the branch has none ("manifest from public"
-          in notes), or - when neither has one. max size is in bytes, or -. notes lists the name, os, arch,
-          language, dlc and "shared from app <app>"; a shared depot is downloaded as <that app>/<depot>.
+          target is <app>/<depot>:<manifest>, ready to pass to ls or get. The manifest is the latest on the
+          branch, or public's when the branch has none ("manifest from public" in notes), and a depot with
+          neither is just <app>/<depot>. max size is in bytes, or -. notes lists the name, os, arch, language,
+          dlc and "shared from app <app>"; a shared depot's target names the app it is shared from.
           Branches, with build ids and dates, are on stderr.
 
         {DepotsExitCodesText}
@@ -378,7 +379,7 @@ internal static class Help
 
         Usage:
           {ExeName} workshop ls <item>... [-- <pattern>...]
-        stdout has a tab-separated row per file: depot  manifest  sha1  size  path. Without patterns, every file.
+        stdout has a tab-separated row per file: item  manifest  sha1  size  path. Without patterns, every file.
         {ExitCodesSummary()}
 
         Examples:
@@ -394,7 +395,7 @@ internal static class Help
         {LoginOptions}
 
         Output:
-          depot is the app's workshop depot. A VPK entry's row is: depot  manifest  crc32  size  <dir.vpk>:<entry path>.
+          A VPK entry's row is: item  manifest  crc32  size  <dir.vpk>:<entry path>.
           For those, only the _dir.vpk is downloaded. stderr has a line per item with its manifest and title.
           To see what changed between versions, list them in one run and compare the sha1 column.
 
@@ -413,7 +414,7 @@ internal static class Help
         Usage:
           {ExeName} workshop get <item>... -- <pattern>...
           {ExeName} workshop get <item>... --all-files     every file of the items
-        stdout has a tab-separated row per matching file: depot  manifest  absolute path (none with --all-files).
+        stdout has a tab-separated row per matching file: item  manifest  absolute path (none with --all-files).
         {ExitCodesSummary()}
 
         Examples:

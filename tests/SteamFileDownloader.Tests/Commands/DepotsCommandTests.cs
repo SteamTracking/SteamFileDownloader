@@ -46,7 +46,7 @@ public class DepotsCommandTests
 
     private static KeyValue Parse(string text) => KeyValue.LoadFromString(text)!;
 
-    // The result rows of the app by depot id, as their columns: app, depot, manifest, max size, notes
+    // The result rows by depot id, as their columns: target, max size, notes
     private static (bool Result, Dictionary<string, string[]> Rows) List(string depots, string branch)
     {
         var result = DepotsCommand.ListAppDepots(AppID, Parse(depots), branch);
@@ -54,26 +54,38 @@ public class DepotsCommandTests
         var rows = TestContext.Current!.GetStandardOutput()
             .Split(Environment.NewLine)
             .Select(static line => line.Split('\t'))
-            .Where(static columns => columns.Length == 5 && columns[0] == AppID.ToString())
-            .ToDictionary(static columns => columns[1]);
+            .Where(static columns => columns.Length == 3)
+            .ToDictionary(static columns => columns[0].Split('/', ':')[1]);
 
         return (result, rows);
     }
 
     [Test]
-    [Arguments("public", "100", "1000")]
-    [Arguments("public", "101", "1010")]
-    [Arguments("beta", "100", "1001")]
-    [Arguments("beta", "101", "1010")]
-    [Arguments("public", "102", "-")]
-    [Arguments("public", "103", "-")]
-    public async Task EveryDepotGetsARowWithTheManifestOfTheBranch(string branch, string depot, string manifest)
+    [Arguments("public", "100", "4242/100:1000")]
+    [Arguments("public", "101", "4242/101:1010")]
+    [Arguments("beta", "100", "4242/100:1001")]
+    [Arguments("beta", "101", "4242/101:1010")]
+    [Arguments("public", "102", "4242/102")]
+    [Arguments("public", "103", "228980/103")]
+    public async Task EveryDepotGetsARowWithATargetOfTheBranch(string branch, string depot, string target)
     {
         var (result, rows) = List(Depots, branch);
 
         await Assert.That(result).IsTrue();
         await Assert.That(rows.Keys).IsEquivalentTo(["100", "101", "102", "103"]);
-        await Assert.That(rows[depot][2]).IsEqualTo(manifest);
+        await Assert.That(rows[depot][0]).IsEqualTo(target);
+    }
+
+    [Test]
+    public async Task TargetsParseAsTargets()
+    {
+        var (_, rows) = List(Depots, "public");
+        var arguments = DepotArgumentParser.ParseArguments("ls", ["730", "1"])!;
+
+        foreach (var columns in rows.Values)
+        {
+            await Assert.That(DepotArgumentParser.ParseTarget(columns[0], arguments)).IsNotNull();
+        }
     }
 
     [Test]
@@ -81,8 +93,8 @@ public class DepotsCommandTests
     {
         var (_, rows) = List(Depots, "beta");
 
-        await Assert.That(rows["101"][4]).Contains("public");
-        await Assert.That(rows["100"][4]).DoesNotContain("public");
+        await Assert.That(rows["101"][2]).Contains("public");
+        await Assert.That(rows["100"][2]).DoesNotContain("public");
         await Assert.That(TestContext.Current!.GetErrorOutput()).DoesNotContain("using the one on");
     }
 

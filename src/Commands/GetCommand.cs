@@ -93,9 +93,10 @@ internal static class GetCommand
         {
             Rows++;
 
+            // Workshop rows start with the item, since all items of an app share its workshop depot
             if (!HideRows)
             {
-                Log.Result($"{job.DepotID}\t{job.ManifestID}\t{string.Join('\t', columns)}");
+                Log.Result($"{job.ItemID ?? job.DepotID}\t{job.ManifestID}\t{string.Join('\t', columns)}");
             }
         }
     }

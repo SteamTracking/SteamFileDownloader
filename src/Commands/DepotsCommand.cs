@@ -84,6 +84,7 @@ internal static class DepotsCommand
         {
             var (manifestID, fromPublic) = AppInfo.GetManifestIdForBranch(depot, branchName);
             var config = depot["config"];
+            var fromApp = depot["depotfromapp"].Value;
             var notes = new List<string>();
 
             AddNote("name", depot["name"].Value);
@@ -91,14 +92,17 @@ internal static class DepotsCommand
             AddNote("arch", config["osarch"].Value);
             AddNote("language", config["language"].Value);
             AddNote("dlc", depot["dlcappid"].Value);
-            AddNote("shared from app", depot["depotfromapp"].Value);
+            AddNote("shared from app", fromApp);
 
             if (fromPublic)
             {
                 notes.Add("manifest from public");
             }
 
-            Log.Result($"{appID}\t{depotID}\t{(manifestID == 0 ? "-" : manifestID.ToString(CultureInfo.InvariantCulture))}\t{depot["maxsize"].Value ?? "-"}\t{string.Join(", ", notes)}");
+            // A target for ls and get. Shared depots are downloaded through the app that owns them
+            var target = $"{fromApp ?? appID.ToString(CultureInfo.InvariantCulture)}/{depotID}{(manifestID == 0 ? "" : $":{manifestID}")}";
+
+            Log.Result($"{target}\t{depot["maxsize"].Value ?? "-"}\t{string.Join(", ", notes)}");
 
             void AddNote(string name, string? value)
             {

@@ -22,7 +22,7 @@ Typical uses are datamining and reverse engineering Source 2 games like Counter-
 # Save a login by scanning a QR code in the Steam mobile app (or: login --username <name>)
 SteamFileDownloader login
 
-# List an app's depots and branches: app, depot, manifest, max size, notes
+# List an app's depots and branches: <app>/<depot>:<manifest> (a target for ls and get), max size, notes
 SteamFileDownloader depots 730
 
 # List files of several builds without downloading: depot, manifest, sha1, size, path
@@ -84,7 +84,8 @@ SteamFileDownloader workshop info 3070715607 --history
 # Find items by text: the same columns plus subscribers
 SteamFileDownloader workshop search 730 dust2
 
-# List or download files of the current and an older version, into <output>/workshop/<item>/<manifest>/
+# List or download files of the current and an older version, into <output>/workshop/<item>/<manifest>/.
+# Rows start with the item instead of the depot: item, manifest, sha1, size, path for ls, and item, manifest, path for get
 SteamFileDownloader workshop ls 3070715607
 SteamFileDownloader workshop get 3070715607 3070715607:5179645662803098587 -- "*.vpk"
 ```
