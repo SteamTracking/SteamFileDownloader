@@ -135,7 +135,7 @@ public class TrackCommandTests
     public async Task MissingAppIdIsReported()
     {
         await Assert.That(TrackCommand.ParseArguments(["--output", "."])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("track needs --appid <app>");
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("track needs an app id, like: ").And.Contains("track 730 --output .");
     }
 
     [Test]
@@ -146,10 +146,34 @@ public class TrackCommandTests
     }
 
     [Test]
-    public async Task NumericPositionalIsPointedAtAppId()
+    public async Task LeadingAppIdIsTheSameAsAppIdOption()
     {
-        await Assert.That(TrackCommand.ParseArguments(["730", "--output", "."])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("track takes the app as --appid, like: ").And.Contains("track --appid 730 --output .");
+        await Assert.That(TrackCommand.ParseArguments(["730", "--output", "."])?.AppID).IsEqualTo(730u);
+        await Assert.That(TrackCommand.ParseArguments(["--output", ".", "570"])?.AppID).IsEqualTo(570u);
+        await Assert.That(TrackCommand.ParseArguments(["--appid", "730", "--output", "."])?.AppID).IsEqualTo(730u);
+    }
+
+    [Test]
+    public async Task AppGivenTwiceIsRejected()
+    {
+        await Assert.That(TrackCommand.ParseArguments(["730", "--appid", "730", "--output", "."])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("The app is given twice");
+    }
+
+    [Test]
+    public async Task MoreThanOnePositionalIsRejected()
+    {
+        await Assert.That(TrackCommand.ParseArguments(["730", "570", "--output", "."])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("Unexpected argument \"570\"");
+    }
+
+    [Test]
+    public async Task AnonymousIsTheSameAsUsernameAnonymous()
+    {
+        await Assert.That(TrackCommand.ParseArguments(["730", "--output", ".", "--anonymous"])?.Username).IsEqualTo("anonymous");
+        await Assert.That(TrackCommand.ParseArguments(["730", "--output", ".", "--anonymous", "--username", "me"])).IsNull();
+        await Assert.That(TrackCommand.ParseArguments(["730", "--output", ".", "--anonymous", "--password", "x"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("--password can't be combined with --anonymous.");
     }
 
     [Test]

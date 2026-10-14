@@ -41,10 +41,19 @@ internal static class TrackCommand
             return null;
         }
 
+        var options = parsed.Options;
+
+        // A leading app id is the same as --appid
         if (parsed.Positionals.Count > 0 && uint.TryParse(parsed.Positionals[0], NumberStyles.None, CultureInfo.InvariantCulture, out _))
         {
-            Log.Error($"track takes the app as --appid, like: {Help.ExeName} track --appid {parsed.Positionals[0]} --output . {Help.UsageHint("track")}");
-            return null;
+            if (options.ContainsKey("appid"))
+            {
+                Log.Error($"The app is given twice, as {parsed.Positionals[0]} and as --appid; give one of them. {Help.UsageHint("track")}");
+                return null;
+            }
+
+            options["appid"] = parsed.Positionals[0];
+            parsed = parsed with { Positionals = parsed.Positionals[1..] };
         }
 
         if (!ArgumentParser.NoPositionals(parsed, "track"))
@@ -52,17 +61,15 @@ internal static class TrackCommand
             return null;
         }
 
-        var options = parsed.Options;
-
         if (!options.TryGetValue("output", out var output))
         {
-            Log.Error($"track needs --output <dir>, like: {Help.ExeName} track --appid 730 --output . {Help.UsageHint("track")}");
+            Log.Error($"track needs --output <dir>, like: {Help.ExeName} track {options.GetValueOrDefault("appid") ?? "<app>"} --output . {Help.UsageHint("track")}");
             return null;
         }
 
         if (!options.TryGetValue("appid", out var appText))
         {
-            Log.Error($"track needs --appid <app>, like: {Help.ExeName} track --appid 730 --output . {Help.UsageHint("track")}");
+            Log.Error($"track needs an app id, like: {Help.ExeName} track 730 --output . {Help.UsageHint("track")}");
             return null;
         }
 
@@ -70,6 +77,12 @@ internal static class TrackCommand
         {
             Log.Error($"--appid needs a numeric app id, got \"{appText}\". {Help.UsageHint("track")}");
             return null;
+        }
+
+        // --anonymous is the same as --username anonymous, which the parser already keeps apart from --username
+        if (options.ContainsKey("anonymous"))
+        {
+            options["username"] = "anonymous";
         }
 
         if (options.ContainsKey("password") && !options.ContainsKey("username"))
@@ -80,7 +93,7 @@ internal static class TrackCommand
 
         if (options.ContainsKey("password") && LogOnCredentials.IsAnonymousName(options["username"]))
         {
-            Log.Error($"--password can't be combined with --username anonymous. {Help.UsageHint("track")}");
+            Log.Error($"--password can't be combined with {(options.ContainsKey("anonymous") ? "--anonymous" : "--username anonymous")}. {Help.UsageHint("track")}");
             return null;
         }
 

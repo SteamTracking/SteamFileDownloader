@@ -10,4 +10,12 @@ public class ProgramTests
         await Assert.That(Program.UnknownCommand(command)).IsEqualTo(ExitCodes.UsageError);
         await Assert.That(TestContext.Current!.GetErrorOutput()).Contains(expected);
     }
+
+    [Test]
+    public async Task OldGameTrackingCommandLineGetsTheTrackCommand()
+    {
+        Program.UnknownCommand("--appid");
+
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains($"{Help.ExeName} track <app> --output <dir> ...");
+    }
 }

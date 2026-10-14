@@ -25,7 +25,7 @@ internal static class ArgumentParser
         ["login"] = (["username"], []),
         ["login list"] = ([], []),
         ["login remove"] = ([], []),
-        ["track"] = (["appid", "output", "username", "password", "branch", "manifests"], ["save-manifest", "save-all-manifests"]),
+        ["track"] = (["appid", "output", "username", "password", "branch", "manifests"], ["anonymous", "save-manifest", "save-all-manifests"]),
         ["workshop info"] = (["limit", "username"], ["history", "anonymous"]),
         ["workshop search"] = (["limit", "username"], ["anonymous"]),
         ["workshop ls"] = (["output", "username"], ["anonymous"]),

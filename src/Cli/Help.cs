@@ -125,7 +125,7 @@ internal static class Help
           {ExeName} get [<app>] <target>... -- <pattern>...   download matching files (or --all-files)
           {ExeName} workshop <subcommand> ...                 workshop items: info, search, ls and get
           {ExeName} dd <DepotDownloader arguments>            run a DepotDownloader command line
-          {ExeName} track --appid <app> --output <dir>        download the files in ./files.json (GameTracking)
+          {ExeName} track <app> --output <dir>                download the files in ./files.json (GameTracking)
           {ExeName} <command> --help                          details and examples
           {ExeName} --version                                 print the version
 
@@ -150,20 +150,21 @@ internal static class Help
         Downloads the files listed in ./files.json from the latest manifests of a branch, for GameTracking.
 
         Usage:
-          {ExeName} track --appid <app> --output <dir> [--username <name> [--password <password>]]
+          {ExeName} track <app> --output <dir> [--username <name> [--password <password>] | --anonymous]
             [--branch <name>] [--manifests <folder>] [--save-manifest] [--save-all-manifests]
 
         Examples:
-          {ExeName} track --appid 570 --output . --save-all-manifests
+          {ExeName} track 570 --output . --save-all-manifests
           An older build into another folder, with the files.json and manifests of an old commit:
             git worktree add ../old <commit>
-            cd ../old && {ExeName} track --appid 570 --output . --manifests manifests
+            cd ../old && {ExeName} track 570 --output . --manifests manifests
 
         Options:
-          --appid <app>          Steam app id
+          <app>, --appid <app>   Steam app id
           --output <dir>         output folder
           --username <name>      Steam username, or anonymous; without --password a saved login
                                  (default: the last saved login)
+          --anonymous            the same as --username anonymous
           --password <password>  Steam password, needs --username
           --branch <name>        branch to download (default: public), also for --manifests from a beta
           --manifests <folder>   manifest ids from the manifest_<depot>.txt files of an older run

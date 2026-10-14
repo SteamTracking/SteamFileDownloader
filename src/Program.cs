@@ -136,7 +136,7 @@ internal static class Program
     {
         // GameTracking mode used to be the command line without a command name
         var hint = argument.StartsWith("--", StringComparison.Ordinal)
-            ? $" The command goes first, before its options. Downloading the files in files.json is now: {Help.ExeName} track --appid <app> --output <dir> ..."
+            ? $" The command goes first, before its options. Downloading the files in files.json is now: {Help.ExeName} track <app> --output <dir> ..."
             : " Commands are get, ls, depots, workshop, dd, login and track.";
 
         Log.Error($"Unknown command \"{argument}\".{hint} {Help.UsageHint()}");

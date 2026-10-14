@@ -127,14 +127,15 @@ It uses `-app`, `-depot`, `-manifest`, `-filelist`, `-dir`, `-branch`, `-usernam
 [GameTracking](https://github.com/SteamTracking/GameTracking) runs the `track` command with a `files.json` to download the tracked files of the latest build:
 
 ```bash
-SteamFileDownloader track --appid 730 --output csgo --save-all-manifests
+SteamFileDownloader track 730 --output csgo --save-all-manifests
 ```
 
 | Option | Description | Default |
 |---|---|---|
-| `--appid` | Steam app id | Required |
+| `<app>` or `--appid` | Steam app id | Required |
 | `--output` | Output directory | Required |
 | `--username` | Steam username, or `anonymous` | Last saved login |
+| `--anonymous` | The same as `--username anonymous` | |
 | `--password` | Steam password; without it a saved login is used | Saved login |
 | `--branch` | Branch to download | `public` |
 | `--manifests` | Folder of `manifest_<depot>.txt` files from an older run, to download that build | Latest manifests |
