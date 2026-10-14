@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -36,12 +37,18 @@ internal static class Program
 
         using var cts = new CancellationTokenSource();
 
-        // The first Ctrl+C stops cleanly, a second one kills the process
-        Console.CancelKeyPress += (_, e) =>
+        // The first Ctrl+C, or SIGTERM from kill, docker stop or systemd, stops cleanly, which deletes partial files and
+        // writes out buffered results; a second one kills the process. Returns whether the process keeps running
+        bool RequestStop()
         {
-            e.Cancel = !cts.IsCancellationRequested;
+            var isFirst = !cts.IsCancellationRequested;
             cts.Cancel();
-        };
+            return isFirst;
+        }
+
+        Console.CancelKeyPress += (_, e) => e.Cancel = RequestStop();
+
+        using var terminateRegistration = OperatingSystem.IsWindows() ? null : PosixSignalRegistration.Create(PosixSignal.SIGTERM, context => context.Cancel = RequestStop());
 
         // Paths and the progress bar can have characters that the default Windows console code page lacks
         Console.OutputEncoding = Encoding.UTF8;

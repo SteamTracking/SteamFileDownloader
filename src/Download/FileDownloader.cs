@@ -2,7 +2,6 @@ using System;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -45,6 +44,9 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
     // Chunks downloaded at once, which fills a gigabit line, while many more only slow down the last files
     private const int Connections = 64;
 
+    // Most files are one chunk, and a file also holds its worker while it's hashed or written, so files can't be what limits downloads, only chunks are
+    private ParallelOptions FileWorkers => new() { MaxDegreeOfParallelism = Connections * 2, CancellationToken = cancellationToken };
+
     private enum DownloadResult
     {
         Success,
@@ -60,11 +62,9 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
     // they are only directory files to read VPK entries from
     public bool LogFilesSummary { get; init; } = true;
 
-    // The clock of the waits between chunk retries
+    // The clock of the download speeds and of the waits between chunk retries
     public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
 
-    // Most files are one chunk, and a file also holds its slot while it's hashed or written, so files can't be what limits downloads, only chunks are
-    private readonly SemaphoreSlim SemaphorePerFile = new(Connections * 2, Connections * 2);
     private readonly SemaphoreSlim SemaphorePerDownloadChunk = new(Connections, Connections);
 
     // Chunk bytes downloaded from the CDN, for the progress line
@@ -75,11 +75,7 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
     private readonly ConcurrentDictionary<string, int> ChunkErrorServers = new();
     private int FailedChunks;
 
-    public void Dispose()
-    {
-        SemaphorePerFile.Dispose();
-        SemaphorePerDownloadChunk.Dispose();
-    }
+    public void Dispose() => SemaphorePerDownloadChunk.Dispose();
 
     /// <summary>
     /// Identifies identical file contents across depots and manifests.
@@ -108,9 +104,7 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         var totalBytes = fileJobs.Sum(static f => (long)f.File.TotalSize);
         var skippedBytes = 0L;
         var startBytes = Interlocked.Read(ref DownloadedBytes);
-        var stopwatch = Stopwatch.StartNew();
-
-        Task<string?> RunFileTask(FileJob fileJob, string? copyFrom = null) => RunPerFile(() => DownloadFileLocal(fileJob, copyFrom));
+        var startTime = TimeProvider.GetTimestamp();
 
         // Returns the file's path, or null when it failed
         async Task<string?> DownloadFileLocal(FileJob fileJob, string? copyFrom)
@@ -150,25 +144,31 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
             BytesSince(startBytes),
             Interlocked.Read(ref skippedBytes),
             totalBytes,
-            stopwatch.Elapsed,
+            TimeProvider.GetElapsedTime(startTime),
             $"{resultCounts.Sum()} / {fileJobs.Count} files{FormatChunkErrorCount()}");
-
-        // The first file of each hash is downloaded, the rest are copied from it once it's done
-        async Task RunHashGroup(IGrouping<string, FileJob> group)
-        {
-            var source = await RunFileTask(group.First());
-
-            await Task.WhenAll(group.Skip(1).Select(fileJob => RunFileTask(fileJob, source)));
-        }
 
         var groups = fileJobs.GroupBy(static f => GetHashKey(f.File)).ToList();
         var uniqueBytes = groups.Sum(static g => (long)g.First().File.TotalSize);
+        var sources = new string?[groups.Count];
 
         Log.Info($"Downloading {Log.Plural(fileJobs.Count, "file")} ({DownloadProgress.FormatSize(uniqueBytes)})...");
 
         await using (Log.StartProgress(RenderProgress))
         {
-            await Task.WhenAll(groups.Select(RunHashGroup));
+            // The first file of each hash is downloaded, then the rest are copied from it
+            await Parallel.ForAsync(0, groups.Count, FileWorkers, async (i, _) => sources[i] = await DownloadFileLocal(groups[i].First(), null));
+
+            var copies = new List<(FileJob FileJob, string? Source)>();
+
+            for (var i = 0; i < groups.Count; i++)
+            {
+                foreach (var fileJob in groups[i].Skip(1))
+                {
+                    copies.Add((fileJob, sources[i]));
+                }
+            }
+
+            await Parallel.ForEachAsync(copies, FileWorkers, async (copy, _) => await DownloadFileLocal(copy.FileJob, copy.Source));
         }
 
         var downloaded = resultCounts[(int)DownloadResult.Success];
@@ -178,7 +178,7 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
 
         if (downloaded > 0)
         {
-            var transfer = DownloadProgress.FormatTransfer(BytesSince(startBytes), stopwatch.Elapsed);
+            var transfer = DownloadProgress.FormatTransfer(BytesSince(startBytes), TimeProvider.GetElapsedTime(startTime));
 
             counts.Add($"{downloaded} downloaded ({transfer})");
         }
@@ -218,13 +218,13 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
 
         var done = 0;
         var startBytes = Interlocked.Read(ref DownloadedBytes);
-        var stopwatch = Stopwatch.StartNew();
+        var startTime = TimeProvider.GetTimestamp();
 
         (double, string) RenderProgress()
         {
             var bytes = BytesSince(startBytes);
             var finished = Volatile.Read(ref done);
-            var speed = (long)DownloadProgress.Speed(bytes, stopwatch.Elapsed);
+            var speed = (long)DownloadProgress.Speed(bytes, TimeProvider.GetElapsedTime(startTime));
             var text = $"{DownloadProgress.FormatSize(bytes)} at {DownloadProgress.FormatSize(speed)}/s{DownloadProgress.Separator}{finished} / {items.Count} {what}{FormatChunkErrorCount()}";
 
             return ((double)finished / items.Count, text);
@@ -452,75 +452,56 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         var totalBytes = partialFiles.Sum(static f => f.Chunks.Sum(static c => c.UncompressedLength));
         var skippedBytes = 0L;
         var doneFiles = 0;
-        bool[] results;
+        var failedFiles = new ConcurrentBag<string>();
         var startBytes = Interlocked.Read(ref DownloadedBytes);
-        var stopwatch = Stopwatch.StartNew();
+        var startTime = TimeProvider.GetTimestamp();
 
         (double, string) RenderProgress() => DownloadProgress.FormatProgress(
             BytesSince(startBytes),
             Interlocked.Read(ref skippedBytes),
             totalBytes,
-            stopwatch.Elapsed,
+            TimeProvider.GetElapsedTime(startTime),
             $"{Volatile.Read(ref doneFiles)} / {partialFiles.Count} archives{FormatChunkErrorCount()}");
+
+        async ValueTask DownloadPartialFileLocal(PartialFile partialFile)
+        {
+            try
+            {
+                var (success, keptBytes) = await DownloadPartialFile(partialFile);
+                Interlocked.Add(ref skippedBytes, keptBytes);
+
+                if (!success)
+                {
+                    failedFiles.Add(FileFilter.NormalizePath(partialFile.File.FileName));
+                }
+            }
+            catch (Exception e) when (OutputFiles.IsFileError(e))
+            {
+                Log.Error($"[{partialFile.Job}] Failed to write {partialFile.File.FileName}: {e.Message}");
+                failedFiles.Add(FileFilter.NormalizePath(partialFile.File.FileName));
+            }
+            finally
+            {
+                Interlocked.Increment(ref doneFiles);
+            }
+        }
 
         Log.Info($"Downloading {partialFiles.Sum(static f => f.Chunks.Count)} chunks ({DownloadProgress.FormatSize(totalBytes)}) of {partialFiles.Count} VPK archives...");
 
         await using (Log.StartProgress(RenderProgress))
         {
-            results = await Task.WhenAll(partialFiles.Select(partialFile => RunPerFile(async () =>
-            {
-                try
-                {
-                    var (success, keptBytes) = await DownloadPartialFile(partialFile);
-                    Interlocked.Add(ref skippedBytes, keptBytes);
-                    return success;
-                }
-                catch (Exception e) when (OutputFiles.IsFileError(e))
-                {
-                    Log.Error($"[{partialFile.Job}] Failed to write {partialFile.File.FileName}: {e.Message}");
-                    return false;
-                }
-                finally
-                {
-                    Interlocked.Increment(ref doneFiles);
-                }
-            })));
+            await Parallel.ForEachAsync(partialFiles, FileWorkers, (partialFile, _) => DownloadPartialFileLocal(partialFile));
         }
 
-        var transfer = DownloadProgress.FormatTransfer(BytesSince(startBytes), stopwatch.Elapsed);
+        var transfer = DownloadProgress.FormatTransfer(BytesSince(startBytes), TimeProvider.GetElapsedTime(startTime));
 
         Log.Info($"VPK archives: {transfer} downloaded, {DownloadProgress.FormatSize(skippedBytes)} already present.");
         LogChunkErrors();
 
-        var failedFiles = new List<string>();
-
-        for (var i = 0; i < partialFiles.Count; i++)
-        {
-            if (!results[i])
-            {
-                failedFiles.Add(FileFilter.NormalizePath(partialFiles[i].File.FileName));
-            }
-        }
-
         LogFailures("VPK archives", failedFiles, "Running the same command again retries only their missing chunks.");
 
-        return failedFiles.Count == 0;
+        return failedFiles.IsEmpty;
     }
-
-    // On the thread pool, with at most SemaphorePerFile files at once
-    private Task<T> RunPerFile<T>(Func<Task<T>> work) => Task.Run(async () =>
-    {
-        await SemaphorePerFile.WaitAsync(cancellationToken);
-
-        try
-        {
-            return await work();
-        }
-        finally
-        {
-            SemaphorePerFile.Release();
-        }
-    });
 
     private static void LogFailures(string what, IEnumerable<string> names, string retryHint)
     {
@@ -614,14 +595,17 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         using var chunkCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var failed = false;
 
-        await Task.WhenAll(placements.Select(placement => Task.Run(async () =>
+        // The first chunk that fails cancels the others of the file
+        async Task DownloadChunkOrCancelFile(ChunkPlacement placement)
         {
             if (!await DownloadChunk(job, placement, handle, chunkCancellation.Token))
             {
                 failed = true;
                 await chunkCancellation.CancelAsync();
             }
-        })));
+        }
+
+        await Task.WhenAll(placements.Select(DownloadChunkOrCancelFile));
 
         return !failed;
     }
