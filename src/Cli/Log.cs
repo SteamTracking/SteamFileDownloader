@@ -69,6 +69,17 @@ internal static partial class Log
     public static string JoinFirst(IReadOnlyCollection<string> items, int max = 5) =>
         string.Join(", ", items.Take(max)) + (items.Count > max ? $" and {items.Count - max} more" : "");
 
+    /// <summary>
+    /// The count with the noun, in its plural form unless the count is 1. The plural form defaults to the noun with an s.
+    /// </summary>
+    public static string Plural(int count, string noun, string? plural = null) => $"{count} {(count == 1 ? noun : plural ?? noun + "s")}";
+
+    /// <summary>
+    /// The count of a total, like "3 manifests" when it is all of them, or else "2 of 3 manifests".
+    /// </summary>
+    public static string PluralOf(int count, int total, string noun, string? plural = null) =>
+        count == total ? Plural(total, noun, plural) : $"{count} of {total} {plural ?? noun + "s"}";
+
     public static void Info(string message) => Write(ResultsOnStdout ? Console.Error : Console.Out, message);
 
     /// <summary>
