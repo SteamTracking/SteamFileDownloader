@@ -10,21 +10,25 @@ namespace SteamFileDownloader;
 
 internal static class Program
 {
-    public static string Version { get; } = (Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "").Split('+')[0];
+    private static readonly (string Version, string? Commit) VersionInfo = ParseVersion(Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "");
+
+    public static string Version => VersionInfo.Version;
+
+    public static string? Commit => VersionInfo.Commit;
 
     private static readonly string[] Commands = ["get", "ls", "depots", "workshop", "dd", "login", "config", "track"];
 
     private static async Task<int> Main(string[] args)
     {
+        if (args.Length > 0 && args[0] is "-V" or "--version" or "version")
+        {
+            Console.WriteLine($"{nameof(SteamFileDownloader)} {FormatVersion(Version, Commit)}");
+            return ExitCodes.Ok;
+        }
+
         if (Help.TryPrint(args) is { } helpExitCode)
         {
             return helpExitCode;
-        }
-
-        if (args[0] == "--version")
-        {
-            Console.WriteLine(Version);
-            return ExitCodes.Ok;
         }
 
         using var cts = new CancellationTokenSource();
@@ -59,7 +63,7 @@ internal static class Program
         catch (Exception e)
         {
             // Still exit code 1 rather than a crash code, with the details for a bug report
-            Log.Error($"Unexpected error, this is a bug in {Help.ExeName}: {e}");
+            Log.Error($"Unexpected error, this is a bug in {Help.ExeName} {FormatVersion(Version, Commit)}, please report it at {Help.IssuesUrl}: {e}");
             return ExitCodes.Failed;
         }
         finally
@@ -145,6 +149,18 @@ internal static class Program
         return arguments == null ? ExitCodes.ForUsageError("track") : await TrackCommand.RunAsync(arguments, cancellationToken);
     }
 
+    /// <summary>
+    /// The version and the short hash of the build's commit, which the SDK appends to the informational version after a +.
+    /// </summary>
+    internal static (string Version, string? Commit) ParseVersion(string informationalVersion)
+    {
+        var parts = informationalVersion.Split('+', 2);
+
+        return (parts[0], parts.Length > 1 && parts[1].Length > 0 ? parts[1][..Math.Min(7, parts[1].Length)] : null);
+    }
+
+    internal static string FormatVersion(string version, string? commit) => commit != null ? $"{version} ({commit})" : version;
+
     internal static int UnknownCommand(string argument)
     {
         string hint;
@@ -160,7 +176,7 @@ internal static class Program
         }
         else
         {
-            hint = $"{ArgumentParser.DidYouMean(argument, [.. Commands, "help"])} Commands are {string.Join(", ", Commands[..^1])} and {Commands[^1]}.";
+            hint = $"{ArgumentParser.DidYouMean(argument, [.. Commands, "version", "help"])} Commands are {string.Join(", ", Commands[..^1])} and {Commands[^1]}.";
         }
 
         Log.Error($"Unknown command \"{argument}\".{hint} {Help.UsageHint()}");

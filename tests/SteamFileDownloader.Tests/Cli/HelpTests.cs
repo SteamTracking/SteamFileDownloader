@@ -87,6 +87,15 @@ public partial class HelpTests
         await Assert.That(head).Contains("Typical run").And.Contains("Targets").And.Contains("<dir.vpk>:<pattern>");
     }
 
+    [Test]
+    public async Task OverviewHasConfigVersionAndTheIssuesUrl()
+    {
+        await Assert.That(Normalize(Help.Overview))
+            .Contains("SteamFileDownloader config output <dir>")
+            .And.Contains("--version")
+            .And.Contains("https://github.com/SteamTracking/SteamFileDownloader/issues");
+    }
+
     private static string FirstLine(string text) => text.Split('\n')[0].TrimEnd('\r');
 
     [Test]
@@ -100,7 +109,6 @@ public partial class HelpTests
     [Arguments("login")]
     [Arguments("login list")]
     [Arguments("login remove someone")]
-    [Arguments("--version")]
     [Arguments("config output")]
     [Arguments("config output D:/SteamDepots")]
     [Arguments("get 730 1 -- --help")]

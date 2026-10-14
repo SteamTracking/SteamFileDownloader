@@ -16,6 +16,8 @@ internal static class Help
 
     public static string UsageHint(string command = "") => $"Run \"{ExeName}{(command.Length > 0 ? " " + command : "")} --help\" for usage.";
 
+    public const string IssuesUrl = "https://github.com/SteamTracking/SteamFileDownloader/issues";
+
     // Characters that bash, zsh or PowerShell expand, split on or treat as syntax
     private static readonly SearchValues<char> ShellSpecialChars = SearchValues.Create(" *?()|$&;<>'\"\\[]{}!#~`");
 
@@ -127,8 +129,7 @@ internal static class Help
           {ExeName} dd <DepotDownloader arguments>            run a DepotDownloader command line
           {ExeName} config output <dir>                       save the default output folder
           {ExeName} track <app> --output <dir>                download the files in ./files.json (GameTracking)
-          {ExeName} <command> --help                          details and examples
-          {ExeName} --version                                 print the version
+          {ExeName} <command> --help                          details and examples; --version prints the version
 
         Typical run, with every target in one call and rows of downloaded files on stdout:
           {ExeName} get 730 2347771 2347773 --output D:/SteamDepots -- server.dll "regex:lib(tier0|engine2)\.so$"
@@ -145,6 +146,7 @@ internal static class Help
         <output>/manifests/<depot>_<manifest>.manifest, where Steam's depotcache files can be copied too.
 
         Saved logins: {AccountStore.FilePath}
+        Report bugs: {IssuesUrl}
         """;
 
     public static string Track => $"""

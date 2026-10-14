@@ -51,7 +51,7 @@ SteamFileDownloader ls 570 -- hammer.dll
 SteamFileDownloader get 730 2347779:2591545799285498410@animgraph_2_beta -- resourcecompiler.dll
 ```
 
-Run `SteamFileDownloader` without arguments, or `SteamFileDownloader <command> --help`, for the full usage. Options take their value after a space or an equals sign, like `--output D:/SteamDepots` or `--output=D:/SteamDepots`.
+Run `SteamFileDownloader` without arguments, or `SteamFileDownloader <command> --help`, for the full usage. Options take their value after a space or an equals sign, like `--output D:/SteamDepots` or `--output=D:/SteamDepots`. `SteamFileDownloader --version` (or `-V`, or `version`) prints the version and commit.
 
 ## Targets and patterns
 
@@ -123,6 +123,8 @@ It uses `-app`, `-depot`, `-manifest`, `-filelist`, `-dir`, `-branch`, `-usernam
 | `4` | Steam is rate limiting logins: wait about 15 minutes |
 | `5` | Only access failed: Steam gave no depot key or manifest request code for some targets. Another account may own them (`--username`), or the manifest is on another branch or in another app |
 | `6` | A pattern matched nothing in any target, and nothing failed |
+
+Report bugs at https://github.com/SteamTracking/SteamFileDownloader/issues.
 
 ## GameTracking
 
