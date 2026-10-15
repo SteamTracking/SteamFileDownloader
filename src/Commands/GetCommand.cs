@@ -32,8 +32,8 @@ internal static class GetCommand
         public Dictionary<ManifestJob, List<MatchedFile>> Matches = [];
         public Dictionary<string, int> MatchCounts = [];
 
-        // The jobs of each target that names several manifests, like all, by the target's source. Its manifests fail
-        // quietly one by one, but not all of them
+        // The jobs of each target that names several manifests, like every depot of an app, by the target's source.
+        // Its manifests fail quietly one by one, but not all of them
         public Dictionary<string, List<ManifestJob>> AllTargets = [];
         public int Rows;
 
@@ -120,6 +120,13 @@ internal static class GetCommand
             targets.Add(target);
         }
 
+        if (targets.Count == 0)
+        {
+            var app = arguments.Options.App!.Value;
+
+            targets.Add(new Target($"app {app}", app, DepotID: null, ManifestID: null, arguments.Options.Branch));
+        }
+
         return await RunAsync(arguments.Command, arguments.Options, arguments.Patterns, run => ResolveJobsAsync(run, targets), cancellationToken);
     }
 
@@ -163,12 +170,13 @@ internal static class GetCommand
 
         using var session = loggedOn;
 
+        var downloads = command is "get" or "workshop get";
         var run = new Run
         {
             Filter = filter,
             Session = session,
             OutputRoot = outputRoot,
-            HideRows = options.AllFiles,
+            HideRows = downloads && patterns.Count == 0,
         };
 
         // Manifests come from the CDN too, so its server list loads while the jobs resolve
@@ -189,7 +197,7 @@ internal static class GetCommand
 
         MatchFiles(run);
 
-        return command is "ls" or "workshop ls" ? await ListFilesAsync(run, cancellationToken) : await GetFilesAsync(run, cancellationToken);
+        return downloads ? await GetFilesAsync(run, cancellationToken) : await ListFilesAsync(run, cancellationToken);
     }
 
     private static async Task<int> GetFilesAsync(Run run, CancellationToken cancellationToken)
@@ -357,6 +365,12 @@ internal static class GetCommand
 
             if (depots == null)
             {
+                // A lone depot id reads as the app id
+                if (target.DepotID == null)
+                {
+                    Log.Info($"If {target.AppID} is a depot, put its app id before it, like <app> {target.AppID}.");
+                }
+
                 run.Fail($"{target.Source} (no app info for {target.AppID})");
                 continue;
             }
@@ -389,7 +403,7 @@ internal static class GetCommand
                 }
                 else
                 {
-                    Log.Info($"Target {target.Source}: {allJobs.Count} depots of app {target.AppID} with a manifest on \"{target.Branch}\".");
+                    Log.Info($"App {target.AppID}: {allJobs.Count} depots with a manifest on \"{target.Branch}\".");
                     run.AllTargets[target.Source] = allJobs;
                 }
 

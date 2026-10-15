@@ -25,7 +25,7 @@ internal sealed class ManifestJob
     // The files.json filter of the track command; depots without one are only fetched for their manifest
     public FileFilter? Filter;
 
-    // Lacking access is expected and only informational, like for a depot from an "all" target
+    // Lacking access is expected and only informational, like for one of every depot of an app
     public bool Optional;
 
     // Any failure is only a warning, since the run doesn't need this manifest, like track's depots that aren't in files.json

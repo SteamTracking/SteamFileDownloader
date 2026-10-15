@@ -41,8 +41,9 @@ SteamFileDownloader get 730 2347771:8344780363095656278 2347771:latest 2347770 5
 SteamFileDownloader ls 730 2347770 -- "game/core/pak01_dir.vpk:regex:^scripts/"
 SteamFileDownloader get 730 2347770 -- "game/core/pak01_dir.vpk:scripts/scenes.vdata_c"
 
-# A whole depot, or every depot the account can access with "all" (can be tens of gigabytes)
-SteamFileDownloader get 730 2347771:8344780363095656278 --all-files
+# Without patterns, every file: a whole depot, or without targets every depot the account can access
+# (can be tens of gigabytes)
+SteamFileDownloader get 730 2347771:8344780363095656278
 
 # Find which depot has a file: without targets, ls searches every depot of the app
 SteamFileDownloader ls 570 -- hammer.dll
@@ -55,9 +56,9 @@ Run `SteamFileDownloader` without arguments, or `SteamFileDownloader <command> -
 
 ## Targets and patterns
 
-Targets are `[<app>/]<depot>[:<manifest>|:latest][@<branch>]`, where `<depot>` can be `all` for every depot of the app, and `<app>/<depot>/<manifest>` works too. The app id before the targets can be left out when every target names its app, like `get 730/2347771 570/373303 -- resourcecompiler.dll`. `depots <app>` shows the latest manifests, and old manifest ids are in the history of a GameTracking `manifests/` folder.
+Targets are `[<app>/]<depot>[:<manifest>|:latest][@<branch>]`, and `<app>/<depot>/<manifest>` works too. Without targets, `ls` and `get` take every depot of the app except shared ones, skipping ones the account can't access. The app id before the targets can be left out when every target names its app, like `get 730/2347771 570/373303 -- resourcecompiler.dll`. `depots <app>` shows the latest manifests, and old manifest ids are in the history of a GameTracking `manifests/` folder.
 
-Patterns go after `--` and ignore case:
+Patterns go after `--` and ignore case. Without them, `ls` lists every file and `get` downloads every file:
 
 - A path with a slash matches exactly; a bare name matches that file in any folder.
 - Globs: `*` and `?` match within a folder and `**` across folders, like `*.vpk` or `game/**/bin/**`.
@@ -92,7 +93,7 @@ SteamFileDownloader workshop ls 3070715607
 SteamFileDownloader workshop get 3070715607 3070715607:5179645662803098587 -- "*.vpk"
 ```
 
-`ls` and `get` take the patterns, `--all-files` and `--output` of the root commands. Items of the legacy workshop, from before it kept files in depots, are not supported.
+`ls` and `get` take the patterns and `--output` of the root commands. Items of the legacy workshop, from before it kept files in depots, are not supported.
 
 ## Logins and rate limits
 

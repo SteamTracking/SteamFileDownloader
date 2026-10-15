@@ -77,8 +77,7 @@ internal static partial class WorkshopArgumentParser
             return null;
         }
 
-        if (!ArgumentParser.CheckPatterns(parsed, get: args[0] == "get",
-            $"workshop get needs patterns after --, like: {Help.ExeName} workshop get 3070715607 -- \"*.vpk\". Use workshop ls to see an item's files, or --all-files to download every file."))
+        if (!ArgumentParser.CheckPatterns(parsed))
         {
             return null;
         }

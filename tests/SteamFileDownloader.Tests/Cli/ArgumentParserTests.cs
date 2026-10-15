@@ -39,11 +39,11 @@ public class ArgumentParserTests
     [Test]
     public async Task OptionNamesIgnoreCase()
     {
-        var parsed = ArgumentParser.Parse("get", ["--OUTPUT", "out", "--All-Files"]);
+        var parsed = ArgumentParser.Parse("get", ["--OUTPUT", "out", "--Anonymous"]);
 
         await Assert.That(parsed).IsNotNull();
         await Assert.That(parsed!.Options.ContainsKey("output")).IsTrue();
-        await Assert.That(parsed.Options.ContainsKey("all-files")).IsTrue();
+        await Assert.That(parsed.Options.ContainsKey("anonymous")).IsTrue();
     }
 
     [Test]
@@ -162,8 +162,8 @@ public class ArgumentParserTests
     [Test]
     public async Task FlagWithAValueIsRejected()
     {
-        await Assert.That(ArgumentParser.Parse("get", ["--all-files=true"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("--all-files is a flag and takes no value, got \"--all-files=true\".");
+        await Assert.That(ArgumentParser.Parse("get", ["--anonymous=true"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("--anonymous is a flag and takes no value, got \"--anonymous=true\".");
     }
 
     [Test]
@@ -171,7 +171,6 @@ public class ArgumentParserTests
     [Arguments("--outpt=x", "--output")]
     [Arguments("--BRANH", "--branch")]
     [Arguments("--anon", "--anonymous")]
-    [Arguments("--al", "--all-files")]
     public async Task MistypedOptionGetsAHint(string option, string expected)
     {
         await Assert.That(ArgumentParser.Parse("get", [option, "x"])).IsNull();

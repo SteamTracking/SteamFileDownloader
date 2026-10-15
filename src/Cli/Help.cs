@@ -48,9 +48,9 @@ internal static class Help
     private static string Targets => """
         Targets (all in one run: each run logs in to Steam once, and Steam rate limits logins):
           <depot>[:<manifest>]   the latest manifest on the branch, or that one, old ones too (2347771:8344780363095656278)
-          all                    every depot of the app except shared ones, skipping ones without access
           <app>/<depot>...       a depot of another app (570/373303:latest, or 570/373303/<manifest>)
           ...@<branch>           a manifest on that branch, needed for beta-only manifests
+        Without targets, every depot of the app except shared ones, skipping ones without access.
         """;
 
     private static string TargetNotes => """
@@ -141,9 +141,9 @@ internal static class Help
         Usage:
           {ExeName} login                                     save a Steam login (QR code)
           {ExeName} depots <app>...                           list apps' depots and branches
-          {ExeName} ls [<app>] <target>... [-- <pattern>...]  list files without downloading
+          {ExeName} ls <app> [<target>...] [-- <pattern>...]  list files without downloading
           {ExeName} ls <app> -- <pattern>...                  find which depot of the app has a file
-          {ExeName} get [<app>] <target>... -- <pattern>...   download matching files (or --all-files)
+          {ExeName} get <app> [<target>...] [-- <pattern>...] download files, all without patterns
           {ExeName} workshop <subcommand> ...                 workshop items: info, search, ls and get
           {ExeName} dd <DepotDownloader arguments>            run a DepotDownloader command line
           {ExeName} config output <dir>                       save the default output folder
@@ -224,7 +224,7 @@ internal static class Help
         Lists files of depot manifests without downloading them, over one Steam login.
 
         Usage:
-          {ExeName} ls [<app>] <target>... [-- <pattern>...]
+          {ExeName} ls <app> [<target>...] [-- <pattern>...]
           {ExeName} ls <app> -- <pattern>...     every depot of the app, to find which one has a file
         stdout has a tab-separated row per file: depot  manifest  sha1  size  path. Without patterns, every file.
         {ExitCodesSummary()}
@@ -259,9 +259,9 @@ internal static class Help
         Downloads matching files from depot manifests, over one Steam login.
 
         Usage:
-          {ExeName} get [<app>] <target>... -- <pattern>...
-          {ExeName} get [<app>] <target>... --all-files     every file, which can be tens of gigabytes per depot
-        stdout has a tab-separated row per matching file: depot  manifest  absolute path (none with --all-files).
+          {ExeName} get <app> [<target>...] [-- <pattern>...]
+        stdout has a tab-separated row per matching file: depot  manifest  absolute path. Without patterns, every
+        file is downloaded, which can be tens of gigabytes per depot, and stdout has no rows.
         {ExitCodesSummary()}
 
         Examples:
@@ -331,8 +331,8 @@ internal static class Help
 
         -depot and -manifest pair up in order. Without -depot every depot of the app is used. File list
         lines are exact paths from the depot root, without globs, or "regex:" patterns, like in DepotDownloader,
-        and a list without entries is an error. Without -filelist every file is downloaded, like get --all-files,
-        so stdout has no rows. -dir sets the root output folder; files still go to <dir>/<depot>/<manifest>/<path>.
+        and a list without entries is an error. Without -filelist every file is downloaded, like get without
+        patterns, so stdout has no rows. -dir sets the root output folder; files still go to <dir>/<depot>/<manifest>/<path>.
         Without -dir, it is the folder saved with config output, else depots in the current folder.
         Other flags, like -remember-password or -loginid, are skipped: a random login id is used.
         -os and -language don't filter depots, so pick them with -depot.
@@ -388,7 +388,7 @@ internal static class Help
           {ExeName} workshop info <item>... --history [--limit <n|all>]    versions, newest first
           {ExeName} workshop search <app> <text>... [--limit <n|all>]      find items by text
           {ExeName} workshop ls <item>... [-- <pattern>...]                list files without downloading
-          {ExeName} workshop get <item>... -- <pattern>...                 download matching files (or --all-files)
+          {ExeName} workshop get <item>... [-- <pattern>...]               download files, all without patterns
           {ExeName} workshop <subcommand> --help                           details and examples
 
         Files go to <output>/workshop/<item>/<manifest>/<path>, and ls and get take the patterns of get.
@@ -436,14 +436,14 @@ internal static class Help
         Downloads matching files of workshop items, over one Steam login.
 
         Usage:
-          {ExeName} workshop get <item>... -- <pattern>...
-          {ExeName} workshop get <item>... --all-files     every file of the items
-        stdout has a tab-separated row per matching file: item  manifest  absolute path (none with --all-files).
+          {ExeName} workshop get <item>... [-- <pattern>...]
+        stdout has a tab-separated row per matching file: item  manifest  absolute path. Without patterns, every
+        file is downloaded, and stdout has no rows.
         {ExitCodesSummary()}
 
         Examples:
           {ExeName} workshop get 3070715607 -- "*.vpk"
-          {ExeName} workshop get https://steamcommunity.com/sharedfiles/filedetails/?id=3818412809 --all-files
+          {ExeName} workshop get https://steamcommunity.com/sharedfiles/filedetails/?id=3818412809
 
         {WorkshopItems}
 

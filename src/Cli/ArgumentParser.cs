@@ -19,7 +19,7 @@ internal static class ArgumentParser
     // Options of each command: ones followed by a value, and flags
     internal static readonly Dictionary<string, (string[] Values, string[] Flags)> CommandOptions = new()
     {
-        ["get"] = (["output", "branch", "username"], ["anonymous", "all-files"]),
+        ["get"] = (["output", "branch", "username"], ["anonymous"]),
         ["ls"] = (["output", "branch", "username"], ["anonymous"]),
         ["depots"] = (["branch", "username"], ["anonymous"]),
         ["login"] = (["username"], []),
@@ -29,7 +29,7 @@ internal static class ArgumentParser
         ["workshop info"] = (["limit", "username"], ["history", "anonymous"]),
         ["workshop search"] = (["limit", "username"], ["anonymous"]),
         ["workshop ls"] = (["output", "username"], ["anonymous"]),
-        ["workshop get"] = (["output", "username"], ["anonymous", "all-files"]),
+        ["workshop get"] = (["output", "username"], ["anonymous"]),
         ["config output"] = ([], ["reset"]),
     };
 
@@ -168,31 +168,15 @@ internal static class ArgumentParser
     }
 
     /// <summary>
-    /// Checks what follows "--": only patterns, and for a get command patterns or --all-files but not both, explained
-    /// by noPatternsError when neither is given. Returns false after printing an error.
+    /// Checks that only patterns follow "--". Returns false after printing an error.
     /// </summary>
-    public static bool CheckPatterns(ParsedArguments parsed, bool get, string noPatternsError)
+    public static bool CheckPatterns(ParsedArguments parsed)
     {
         var misplacedOption = parsed.Patterns.FirstOrDefault(static p => p.StartsWith("--", StringComparison.Ordinal));
 
         if (misplacedOption != null)
         {
             Log.Error($"\"{misplacedOption}\" is after --, which is only for patterns. Put options before --.");
-            return false;
-        }
-
-        var allFiles = parsed.Options.ContainsKey("all-files");
-
-        // Whole depots can be tens of gigabytes, so downloading every file has to be asked for
-        if (get && parsed.Patterns.Count == 0 && !allFiles)
-        {
-            Log.Error(noPatternsError);
-            return false;
-        }
-
-        if (get && parsed.Patterns.Count > 0 && allFiles)
-        {
-            Log.Error("--all-files downloads every file, so it can't be combined with patterns.");
             return false;
         }
 

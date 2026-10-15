@@ -299,7 +299,7 @@ internal static class WorkshopCommands
     }
 
     /// <summary>
-    /// Adds a job per item, with collections expanded. Items of collections are like the depots of an "all" target:
+    /// Adds a job per item, with collections expanded. Items of collections are like every depot of an app:
     /// skipped with a note when they have no files, and the collection fails only when none of them can be downloaded.
     /// </summary>
     internal static async Task ResolveJobsAsync(

@@ -12,8 +12,7 @@ public class DepotDownloaderArgumentsTests
         await Assert.That(result).IsNotNull();
         await Assert.That(result!.Command).IsEqualTo("get");
         await Assert.That(result.Options.App).IsEqualTo(730u);
-        await Assert.That(result.Options.AllFiles).IsTrue();
-        await Assert.That(string.Join(",", result.Targets)).IsEqualTo("all");
+        await Assert.That(result.Targets.Count).IsEqualTo(0);
         await Assert.That(result.Patterns.Count).IsEqualTo(0);
     }
 
@@ -52,7 +51,6 @@ public class DepotDownloaderArgumentsTests
         await Assert.That(result).IsNotNull();
         await Assert.That(result!.Command).IsEqualTo(command);
         await Assert.That(result.Targets).IsEquivalentTo(["3070715607"]);
-        await Assert.That(result.Options.AllFiles).IsEqualTo(!manifestOnly);
     }
 
     [Test]
@@ -119,7 +117,6 @@ public class DepotDownloaderArgumentsTests
 
         await Assert.That(result).IsNotNull();
         await Assert.That(result!.Command).IsEqualTo("ls");
-        await Assert.That(result.Options.AllFiles).IsFalse();
     }
 
     [Test]
@@ -165,9 +162,8 @@ public class DepotDownloaderArgumentsTests
         var result = DepotDownloaderArguments.Parse(["-app", "730", "-filelist", list]);
 
         await Assert.That(result).IsNotNull();
-        await Assert.That(result!.Options.AllFiles).IsFalse();
 
-        var filter = FileFilter.FromPatterns(result.Patterns);
+        var filter = FileFilter.FromPatterns(result!.Patterns);
 
         await Assert.That(result.Patterns.Count).IsEqualTo(4);
         await Assert.That(filter.GetMatchingPatterns("game/bin/a+b.dll").Count).IsEqualTo(1);

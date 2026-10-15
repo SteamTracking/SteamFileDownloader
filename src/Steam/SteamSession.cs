@@ -976,8 +976,8 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     }
 
     // Jobs of one depot share its key, and often the reason Steam gave no request code, so each problem is reported once
-    // per depot. Lacking access to an optional depot, like one of an "all" target, is expected and goes unsaid, since
-    // get and ls list those as skipped
+    // per depot. Lacking access to an optional depot, like one of every depot of an app, is expected and goes unsaid,
+    // since get and ls list those as skipped
     internal static void ReportSharedProblems(IEnumerable<(ManifestJob Job, string Problem, bool NoAccess)> problems)
     {
         var groups = problems

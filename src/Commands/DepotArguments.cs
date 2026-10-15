@@ -14,20 +14,18 @@ internal sealed record DepotOptions(
     string? Output = null,
     string Branch = "public",
     bool Anonymous = false,
-    string? Username = null,
-    bool AllFiles = false)
+    string? Username = null)
 {
     public static DepotOptions From(ParsedArguments parsed, uint? app) => new(
         app,
         parsed.Options.GetValueOrDefault("output"),
         parsed.Options.GetValueOrDefault("branch") ?? "public",
         parsed.Options.ContainsKey("anonymous"),
-        parsed.Options.GetValueOrDefault("username"),
-        parsed.Options.ContainsKey("all-files"));
+        parsed.Options.GetValueOrDefault("username"));
 }
 
 /// <summary>
-/// A parsed get, ls or depots command line.
+/// A parsed get, ls or depots command line. Get and ls without targets take every depot of the app.
 /// </summary>
 internal sealed record DepotArguments(
     string Command,
@@ -50,8 +48,12 @@ internal static partial class DepotArgumentParser
 {
     // The manifest can follow a slash too, since app/depot/manifest is an easy mistake to make. Without an app, a slash
     // means app/depot, so depot/manifest is never read as such
-    [GeneratedRegex(@"^(?:(?<app>\d+)/)?(?<depot>\d+|all)(?:[:/](?<manifest>\d+|latest))?(?:@(?<branch>[^@/:]+))?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^(?:(?<app>\d+)/)?(?<depot>\d+)(?:[:/](?<manifest>\d+|latest))?(?:@(?<branch>[^@/:]+))?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex TargetRegex();
+
+    // "all" with an app or branch, which leaving out the targets does
+    [GeneratedRegex(@"^(?:(?<app>\d+)/)?all(?:[:/@].*)?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex AllTargetRegex();
 
     /// <summary>
     /// Parses "[app] [options] [targets] [-- patterns]" for get, ls and depots. Options can go anywhere before "--".
@@ -118,17 +120,29 @@ internal static partial class DepotArgumentParser
             return null;
         }
 
-        // ls with patterns searches every depot of the app when no target narrows it
-        var searchesEveryDepot = command == "ls" && app != null && targets.Count == 0 && parsed.Patterns.Count > 0;
-
-        if (searchesEveryDepot)
+        if (command is "get" or "ls" && app == null && targets.Count == 0)
         {
-            targets = ["all"];
+            Log.Error(DescribeMissingApp(command, parsed.Patterns));
+            return null;
         }
 
-        if (command is "get" or "ls" && targets.Count == 0)
+        foreach (var target in targets)
         {
-            Log.Error(DescribeMissingTargets(command, app, parsed.Patterns));
+            var allTarget = AllTargetRegex().Match(target);
+
+            if (!allTarget.Success)
+            {
+                continue;
+            }
+
+            var allApp = app;
+
+            if (uint.TryParse(allTarget.Groups["app"].ValueSpan, NumberStyles.None, CultureInfo.InvariantCulture, out var targetApp))
+            {
+                allApp = targetApp;
+            }
+
+            Log.Error($"\"{target}\" is not a target: without targets, {command} takes every depot of the app, like: {SuggestCommand(command, allApp, [], parsed.Patterns)}.");
             return null;
         }
 
@@ -157,59 +171,39 @@ internal static partial class DepotArgumentParser
             }
         }
 
-        if (!ArgumentParser.CheckPatterns(parsed, get: command == "get",
-            $"get needs patterns after --, like: {SuggestCommand(command, app, targets, [])}. Use ls to see a manifest's files, or --all-files to download every file."))
+        if (!ArgumentParser.CheckPatterns(parsed))
         {
             return null;
+        }
+
+        // Whole depots can be tens of gigabytes, which a forgotten pattern shouldn't download unnoticed
+        if (command == "get" && parsed.Patterns.Count == 0)
+        {
+            Log.Info(DescribeEveryFile(app, targets));
         }
 
         return new DepotArguments(command, DepotOptions.From(parsed, app), targets, parsed.Patterns);
     }
 
     /// <summary>
-    /// The error for get or ls without targets, with commands built from the app and patterns given.
+    /// The error for get or ls without an app id or targets.
     /// </summary>
-    internal static string DescribeMissingTargets(string command, uint? app, List<string> patterns)
+    internal static string DescribeMissingApp(string command, List<string> patterns) =>
+        $"{command} needs an app id, the number in the app's store page URL, like: {SuggestCommand(command, null, [], patterns)}.";
+
+    /// <summary>
+    /// The tip for get without patterns, on how patterns pick files.
+    /// </summary>
+    internal static string DescribeEveryFile(uint? app, List<string> targets)
     {
-        // ls with an app and patterns searches every depot, so only get gets here with both
-        if (app == null || patterns.Count > 0)
-        {
-            var findDepot = SuggestCommand("ls", app, [], patterns);
+        var getSome = SuggestCommand("get", app, targets, ["*.dll"]);
+        var list = SuggestCommand("ls", app, targets, []);
 
-            if (command == "ls")
-            {
-                return $"ls needs an app id, like: {findDepot} to find which depot of the app has a file, or {Help.ExeName} ls <app> <target>... to list the files of targets.";
-            }
-
-            var getAll = SuggestCommand("get", app, [], patterns);
-
-            if (app == null)
-            {
-                return $"get needs an app id and targets, like: {getAll}, or {findDepot} to find the depot first.";
-            }
-
-            return $"get {app} needs targets, like: {getAll}, or {findDepot} to find the depot first.";
-        }
-
-        // A lone number may be a depot
-        var withApp = SuggestCommand(command, null, [app.Value.ToString(CultureInfo.InvariantCulture)], patterns);
-        string allDepots;
-
-        if (command == "ls")
-        {
-            allDepots = $"{Help.ExeName} ls {app} all, or {Help.ExeName} ls {app} -- <pattern> to search them";
-        }
-        else
-        {
-            allDepots = SuggestCommand(command, app, [], patterns);
-        }
-
-        return $"{command} {app} needs targets after the app id, like: {allDepots}. If {app} is a depot, put its app first: {withApp}.";
+        return $"Downloading every file, since no patterns follow --. Patterns pick files, like: {getSome}, and {list} lists them.";
     }
 
     /// <summary>
-    /// A get or ls command line for the app, targets and patterns, with &lt;app&gt; when the app is unknown and a
-    /// placeholder for missing patterns of get. Without targets, get gets all and ls searches every depot.
+    /// A get or ls command line for the app, targets and patterns, with &lt;app&gt; when the app is unknown.
     /// </summary>
     internal static string SuggestCommand(string command, uint? app, List<string> targets, IReadOnlyCollection<string> patterns)
     {
@@ -221,27 +215,12 @@ internal static partial class DepotArgumentParser
             parts.Add(app?.ToString(CultureInfo.InvariantCulture) ?? "<app>");
         }
 
-        if (targets.Count == 0 && command == "get")
-        {
-            parts.Add("all");
-        }
-        else
-        {
-            parts.AddRange(targets);
-        }
+        parts.AddRange(targets);
 
-        if (patterns.Count > 0 || command == "get" || targets.Count == 0)
+        if (patterns.Count > 0)
         {
             parts.Add("--");
-
-            if (patterns.Count > 0)
-            {
-                parts.AddRange(patterns.Select(Help.QuoteArgument));
-            }
-            else
-            {
-                parts.Add("<pattern>");
-            }
+            parts.AddRange(patterns.Select(Help.QuoteArgument));
         }
 
         return string.Join(' ', parts);
@@ -276,29 +255,16 @@ internal static partial class DepotArgumentParser
             return null;
         }
 
-        uint? depotID = null;
         ulong? manifestID = null;
-        var depot = match.Groups["depot"].Value;
         var manifest = match.Groups["manifest"].Value;
 
-        if (!depot.Equals("all", StringComparison.OrdinalIgnoreCase))
+        if (!uint.TryParse(match.Groups["depot"].ValueSpan, NumberStyles.None, CultureInfo.InvariantCulture, out var depotID) || depotID == 0)
         {
-            if (!uint.TryParse(depot, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedDepot) || parsedDepot == 0)
-            {
-                return Invalid();
-            }
-
-            depotID = parsedDepot;
+            return Invalid();
         }
 
         if (manifest.Length > 0 && !manifest.Equals("latest", StringComparison.OrdinalIgnoreCase))
         {
-            // A manifest id only makes sense for one depot
-            if (depotID == null)
-            {
-                return Invalid();
-            }
-
             if (!ulong.TryParse(manifest, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedManifest) || parsedManifest == 0)
             {
                 return Invalid();
@@ -323,7 +289,7 @@ internal static partial class DepotArgumentParser
     /// </summary>
     internal static string DescribeInvalidTarget(string arg)
     {
-        const string Syntax = "expected [<app>/]<depot>[:<manifest>|:latest][@<branch>] or all, like 2347771:8344780363095656278 or 570/373303@beta";
+        const string Syntax = "expected [<app>/]<depot>[:<manifest>|:latest][@<branch>], like 2347771:8344780363095656278 or 570/373303@beta";
         var match = TargetRegex().Match(arg);
 
         if (match.Success)
@@ -331,11 +297,6 @@ internal static partial class DepotArgumentParser
             var app = match.Groups["app"];
             var depot = match.Groups["depot"].Value;
             var manifest = match.Groups["manifest"].Value;
-
-            if (depot.Equals("all", StringComparison.OrdinalIgnoreCase))
-            {
-                return "all is the latest manifest of every depot, so it takes no manifest";
-            }
 
             // Like depot/manifest, which reads as app/depot with a depot id too large to be one
             if (app.Success && manifest.Length == 0 && !uint.TryParse(depot, NumberStyles.None, CultureInfo.InvariantCulture, out _))

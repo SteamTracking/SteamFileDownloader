@@ -162,10 +162,6 @@ internal static class DepotDownloaderArguments
             return Fail("-pubfile and -ugc each name a workshop item, give one of them.");
         }
 
-        // Without a file list DepotDownloader downloads every file
-        var allFiles = !manifestOnly && patterns.Count == 0;
-        options = options with { AllFiles = allFiles };
-
         // The item's files go to the workshop folder, like with workshop get, and its app doesn't matter
         if (pubfile != null)
         {
@@ -183,21 +179,15 @@ internal static class DepotDownloaderArguments
         }
 
         // A UGC id is a manifest of the depot with the app's id. Without -depot, DepotDownloader takes every depot of
-        // the app, and -depot and -manifest pair up in order
-        List<string> targets;
+        // the app, as no targets do, and -depot and -manifest pair up in order
+        var targets = new List<string>();
 
         if (ugc != null)
         {
-            targets = [$"{options.App}:{ugc}"];
-        }
-        else if (depots.Count == 0)
-        {
-            targets = ["all"];
+            targets.Add($"{options.App}:{ugc}");
         }
         else
         {
-            targets = [];
-
             for (var index = 0; index < depots.Count; index++)
             {
                 targets.Add(index < manifests.Count ? $"{depots[index]}:{manifests[index]}" : depots[index]);
