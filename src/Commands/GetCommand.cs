@@ -655,12 +655,16 @@ internal static class GetCommand
 
         Log.Info($"Done: {rows} from {manifests}{notesText}.{outputNote}");
 
-        // Another saved login only helps targets that failed for lack of access
+        // Another login only helps targets that failed for lack of access
         if (run.FailedForAccess)
         {
             var usernames = AccountStore.GetUsernames();
 
-            if (usernames.Count > 1)
+            if (run.Session.IsAnonymous)
+            {
+                Log.Info($"Anonymous logins only have some free apps. Run \"{Help.ExeName} login\" to use an account that owns this content.");
+            }
+            else if (usernames.Count > 1)
             {
                 Log.Info($"If another saved login owns this content, pick it with --username ({string.Join(", ", usernames)}).");
             }

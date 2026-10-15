@@ -86,7 +86,7 @@ internal static class Help
 
     private static string LoginOptions => """
           --username <name>   saved login to use instead of the last one
-          --anonymous         log in anonymously, enough for some free apps
+          --anonymous         log in anonymously, enough for some free apps, and the default without saved logins
         """;
 
     private static string Options => $"""

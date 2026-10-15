@@ -78,6 +78,8 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     /// </summary>
     public int FailureExitCode { get; private set; } = ExitCodes.Failed;
 
+    public bool IsAnonymous => Credentials?.IsAnonymous == true;
+
     public SteamSession(CancellationToken cancellationToken)
     {
         CancellationToken = cancellationToken;
@@ -319,11 +321,12 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     }
 
     /// <summary>
-    /// Logs on with --anonymous, or a saved login picked by --username, which may be anonymous.
+    /// Logs on with --anonymous, or a saved login picked by --username, which may be anonymous, or anonymously when no
+    /// login is saved.
     /// </summary>
     public static Task<(SteamSession? Session, int ExitCode)> CreateLoggedOnAsync(DepotOptions options, bool takesTargets, CancellationToken cancellationToken)
     {
-        var credentials = options.Anonymous ? LogOnCredentials.Anonymous : AccountStore.LoadCredentials(options.Username);
+        var credentials = options.Anonymous ? LogOnCredentials.Anonymous : AccountStore.LoadCredentialsOrAnonymous(options.Username);
 
         return CreateLoggedOnAsync(credentials, cacheDepotKeys: true, takesTargets, cancellationToken);
     }

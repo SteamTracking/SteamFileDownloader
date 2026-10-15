@@ -46,8 +46,33 @@ internal static partial class AccountStore
             return LogOnCredentials.Anonymous;
         }
 
+        return LoadSavedCredentials(username, Read(path));
+    }
+
+    /// <summary>
+    /// Like <see cref="LoadCredentials"/>, but anonymous credentials when no username is given and no
+    /// login is saved, so a person can try free apps before logging in.
+    /// </summary>
+    public static LogOnCredentials? LoadCredentialsOrAnonymous(string? username, string? path = null)
+    {
+        if (LogOnCredentials.IsAnonymousName(username))
+        {
+            return LogOnCredentials.Anonymous;
+        }
+
         var stored = Read(path);
 
+        if (username == null && stored.Accounts.Count == 0)
+        {
+            Log.Info($"No saved login, so logging in anonymously, which only has some free apps. Run \"{Help.ExeName} login\" to use your account.");
+            return LogOnCredentials.Anonymous;
+        }
+
+        return LoadSavedCredentials(username, stored);
+    }
+
+    private static LogOnCredentials? LoadSavedCredentials(string? username, StoredAccounts stored)
+    {
         var wanted = username ?? stored.LastUsername;
 
         if (wanted == null || !stored.Accounts.TryGetValue(wanted, out var refreshToken))

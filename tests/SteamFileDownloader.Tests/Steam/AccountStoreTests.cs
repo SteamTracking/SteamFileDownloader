@@ -111,6 +111,25 @@ public class AccountStoreTests
     }
 
     [Test]
+    public async Task WithoutSavedLoginsTheDefaultIsAnonymous()
+    {
+        using var temp = new TempDirectory();
+        var path = Path.Combine(temp.Path, "account.json");
+
+        await Assert.That(AccountStore.LoadCredentialsOrAnonymous(null, path)?.IsAnonymous).IsTrue();
+        await Assert.That(AccountStore.LoadCredentialsOrAnonymous("me", path)).IsNull();
+    }
+
+    [Test]
+    public async Task WithSavedLoginsTheDefaultIsTheLastSaved()
+    {
+        using var temp = new TempDirectory();
+        var path = SaveAll(temp, "a", "b");
+
+        await Assert.That(AccountStore.LoadCredentialsOrAnonymous(null, path)?.Username).IsEqualTo("b");
+    }
+
+    [Test]
     public async Task RenewingKeepsTheDefaultAndCasing()
     {
         using var temp = new TempDirectory();

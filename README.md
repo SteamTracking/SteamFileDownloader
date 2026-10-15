@@ -97,7 +97,7 @@ SteamFileDownloader workshop get 3070715607 3070715607:5179645662803098587 -- "*
 
 ## Logins and rate limits
 
-Run `login` once per account to save several. The last one is the default, `--username <name>` picks another for content only that account owns, and `--anonymous` is enough for some free apps. `login` needs a person to scan the QR code or type the password, so agents ask the user to run it.
+Run `login` once per account to save several. The last one is the default, `--username <name>` picks another for content only that account owns, and `--anonymous` is enough for some free apps. Without a saved login, runs log in anonymously. `login` needs a person to scan the QR code or type the password, so agents ask the user to run it.
 
 Logging in again with the QR code replaces the account's token and revokes the old one; `login --username` only makes a saved login that still works the default. Tokens last about 200 days, and runs in their last 30 days ask Steam to renew them. `login list` prints each saved login, whether it is the default, and when its token expires. `login remove <name>...` revokes the tokens with Steam, so copies of them stop working too, and forgets them. Removing the default makes the last saved of the remaining logins the default.
 
