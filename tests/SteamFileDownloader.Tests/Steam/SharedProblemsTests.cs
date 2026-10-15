@@ -26,9 +26,14 @@ public class SharedProblemsTests
 
         var lines = TestContext.Current!.GetErrorOutput().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
 
+        // Log writes problems as workflow commands when CI is set
+        var isCI = Environment.GetEnvironmentVariable("CI") != null;
+        var error = isCI ? "::error::" : "[ERROR] ";
+        var warning = isCI ? "::warning::" : "[WARN] ";
+
         await Assert.That(lines).IsEquivalentTo([
-            $"[ERROR] Depot 1 (2 manifests): {NoKey}",
-            "[WARN] [2:21] Failed to get the depot key: timed out",
+            $"{error}Depot 1 (2 manifests): {NoKey}",
+            $"{warning}[2:21] Failed to get the depot key: timed out",
         ]);
     }
 }
