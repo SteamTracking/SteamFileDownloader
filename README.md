@@ -1,135 +1,160 @@
 # SteamFileDownloader
 
-A simpler [DepotDownloader](https://github.com/SteamRE/DepotDownloader) for downloading **specific files from Steam depots**, including **old game builds** and **files inside VPK archives**, without downloading whole depots. It is built for **AI agents and scripts** like Claude Code, Codex and CI jobs: one command takes many manifests over a single Steam login, results are tab-separated lines on stdout, errors say what to do next, and the built-in help documents everything.
+SteamFileDownloader is a simpler version of [DepotDownloader](https://github.com/SteamRE/DepotDownloader). It downloads **specific files from Steam depots**, and it does not download the full depot. It can also download **files from old game builds** and **files in Valve Pak (VPK) archives**.
 
-Typical uses are datamining and reverse engineering Source 2 games like Counter-Strike 2, Dota 2 and Deadlock: fetching a DLL from dozens of past builds, finding the build where a file changed by comparing SteamPipe manifest hashes, or extracting one file from a `pak01_dir.vpk` by downloading only the chunks it is in.
+SteamFileDownloader is made for **AI agents and scripts**, for example Claude Code, Codex and continuous integration (CI) jobs:
+
+- One command can use many manifests with one Steam login.
+- The results go to stdout as rows, with a tab between the columns.
+- Each error message tells you what to do next.
+- The help text describes all of the commands and options.
+
+SteamFileDownloader helps with datamining and reverse engineering of Source 2 games, for example Counter-Strike 2, Dota 2 and Deadlock. Usual tasks are:
+
+- Download a DLL from many earlier builds.
+- Find the build in which a file changed. To do this, compare the file hashes in the SteamPipe manifests.
+- Extract one file from a `pak01_dir.vpk`. SteamFileDownloader downloads only the chunks that contain the file.
 
 ## Features
 
-- **Any manifest**, current or old, with files matched by path, name or regex.
-- **Many targets per run**: builds, depots and apps over one Steam login, which avoids Steam's login rate limit.
-- **Listing without downloading**: names, sizes and SHA-1 hashes, to compare builds.
-- **Partial VPK downloads**: list a VPK's entries, or extract them by downloading only the chunks they span.
-- **No repeat downloads**: files already downloaded are checked and kept, and ones identical in another build are copied, so running a failed command again retries only what failed.
-- **Workshop items**: details, version history and search, and listing or downloading an item's files from any version, collections included.
-- **Saved logins**: log in once with a QR code from the Steam mobile app. Tokens are encrypted for the Windows user.
-- **DepotDownloader compatible**: `dd` runs an existing DepotDownloader command line.
-- **Agent friendly**: running it without arguments prints the full usage, a command without its arguments prints its usage and examples, mistyped commands and options get a suggestion, exit codes say what went wrong, and parallel runs on one account don't disconnect each other.
+- **Any manifest**, current or old. You can select files by path, by name or by regular expression (regex).
+- **Many targets in one run**: one run can use builds, depots and apps with one Steam login. This helps you to stay below the rate limit of Steam for logins.
+- **File lists**: SteamFileDownloader can list the names, sizes and SHA-1 hashes of files. It does not download the files. Use these lists to compare builds.
+- **Parts of VPK archives**: list the entries of a VPK. You can also extract entries, and SteamFileDownloader downloads only the chunks that contain them.
+- **No second download of a file**: SteamFileDownloader does a check of each file that is already on the disk, and keeps the correct files. If a file is the same in another build, SteamFileDownloader copies it. If a command fails and you run it again, it downloads only the files that failed.
+- **Workshop items**: show the details and the version history of items, and search for items. List or download the files of an item from any version. This also applies to collections.
+- **Saved logins**: log in one time with a QR code from the Steam mobile app. SteamFileDownloader encrypts the tokens for the Windows user.
+- **Compatible with DepotDownloader**: `dd` runs your current DepotDownloader command lines.
+- **Easy for agents to use**:
+  - If you run SteamFileDownloader without arguments, it shows the full usage.
+  - If you run a command without its arguments, it shows the usage and examples of that command.
+  - If you type a command or an option incorrectly, it shows a possible correct name.
+  - Each exit code shows the type of failure.
+  - Parallel runs on one account do not disconnect each other.
 
 ## Quick start
 
 ```bash
-# Save a login by scanning a QR code in the Steam mobile app (or: login --username <name>)
+# Save a login. Scan the QR code with the Steam mobile app, or use: login --username <name>
 SteamFileDownloader login
 
-# List an app's depots and branches: <app>/<depot>:<manifest> (a target for ls and get), max size, notes
+# List the depots and branches of an app. The columns are <app>/<depot>:<manifest>, the maximum size and notes.
+# The first column is a target for ls and get.
 SteamFileDownloader depots 730
 
-# List files of several builds without downloading: depot, manifest, sha1, size, path
+# List the files of more than one build, and do not download them. The columns are depot, manifest, sha1, size and path.
 SteamFileDownloader ls 730 2347779:4784444484596788209 2347779:2356538687884552308 -- source1import.exe
 
-# Download into <output>/<depot>/<manifest>/, printing: depot, manifest, path
+# Download files into <output>/<depot>/<manifest>/. The columns are depot, manifest and path.
 SteamFileDownloader get 730 2347771:8344780363095656278 2347771:latest -- game/csgo/bin/win64/server.dll "regex:engine2\.dll$"
 
-# Builds, depots and apps in one run over one login. Every pattern is tried against every target;
-# only a pattern that matches nothing in any target fails the run.
+# Download from builds, depots and apps in one run with one login. SteamFileDownloader tries each pattern on each target.
+# The run fails only if a pattern matches no file in any target.
 SteamFileDownloader get 730 2347771:8344780363095656278 2347771:latest 2347770 570/373303:latest -- \
     game/csgo/bin/win64/server.dll engine2.dll steam.inf resourcecompiler.dll \
     "game/core/pak01_dir.vpk:scripts/scenes.vdata_c"
 
-# List or extract VPK entries, downloading only the archive chunks they are in
+# List or extract VPK entries. SteamFileDownloader downloads only the archive chunks that contain them.
 SteamFileDownloader ls 730 2347770 -- "game/core/pak01_dir.vpk:regex:^scripts/"
 SteamFileDownloader get 730 2347770 -- "game/core/pak01_dir.vpk:scripts/scenes.vdata_c"
 
-# Without patterns, every file: a whole depot, or without targets every depot the account can access
-# (can be tens of gigabytes)
+# If you give no patterns, SteamFileDownloader downloads all files of the depot.
+# If you also give no targets, it downloads all depots that the account can access. This can be tens of gigabytes.
 SteamFileDownloader get 730 2347771:8344780363095656278
 
-# Find which depot has a file: without targets, ls searches every depot of the app
+# Find the depot that has a file. If you give no targets, ls searches all depots of the app.
 SteamFileDownloader ls 570 -- hammer.dll
 
-# A manifest that is only on a beta branch
+# Download from a manifest that is only on a beta branch.
 SteamFileDownloader get 730 2347779:2591545799285498410@animgraph_2_beta -- resourcecompiler.dll
 ```
 
-Run `SteamFileDownloader` without arguments, or `SteamFileDownloader <command> --help`, for the full usage. Options take their value after a space or an equals sign, like `--output D:/SteamDepots` or `--output=D:/SteamDepots`. `SteamFileDownloader --version` (or `-V`, or `version`) prints the version and commit.
+To see the full usage, run `SteamFileDownloader` without arguments, or run `SteamFileDownloader <command> --help`. Put the value of an option after a space or after an equals sign. For example: `--output D:/SteamDepots` or `--output=D:/SteamDepots`. To show the version and the commit, run `SteamFileDownloader --version`. You can also use `-V` or `version`.
 
 ## Targets and patterns
 
-Targets are `[<app>/]<depot>[:<manifest>|:latest][@<branch>]`, and `<app>/<depot>/<manifest>` works too. Without targets, `ls` and `get` take every depot of the app except shared ones, skipping ones the account can't access. The app id before the targets can be left out when every target names its app, like `get 730/2347771 570/373303 -- resourcecompiler.dll`. `depots <app>` shows the latest manifests, and old manifest ids are in the history of a GameTracking `manifests/` folder.
+A target has the format `[<app>/]<depot>[:<manifest>|:latest][@<branch>]`. The format `<app>/<depot>/<manifest>` is also correct. If each target contains its app id, you do not need the app id before the targets. For example: `get 730/2347771 570/373303 -- resourcecompiler.dll`.
 
-Patterns go after `--` and ignore case. Without them, `ls` lists every file and `get` downloads every file:
+If you give no targets, `ls` and `get` use all depots of the app. They do not use shared depots, or depots that the account cannot access. `depots <app>` shows the latest manifests. To find old manifest ids, look at the history of a GameTracking `manifests/` folder.
 
-- A path with a slash matches exactly; a bare name matches that file in any folder.
-- Globs: `*` and `?` match within a folder and `**` across folders, like `*.vpk` or `game/**/bin/**`.
-- `regex:` matches anywhere in the path, like DepotDownloader's file lists.
-- `<path>_dir.vpk:<entry pattern>` selects entries inside that VPK, with the same rules for both parts. Entries are extracted to a folder named after the directory file, like `game/core/pak01_dir/`.
+Put the patterns after `--`. In patterns, uppercase and lowercase letters are the same. If you give no patterns, `ls` lists all files and `get` downloads all files. A pattern can be one of these:
 
-Files go to `<output>/<depot>/<manifest>/`, by default under `depots` in the current folder. Reuse the same output folder, since files already in it, or identical in another manifest of the depot, aren't downloaded again. Files and folders are dated to when their manifest was created, so builds sort by date.
+- A path that contains a slash matches only that path. A name without a slash matches that file in any folder.
+- A glob. `*` and `?` match in one folder, and `**` matches across folders. For example: `*.vpk` or `game/**/bin/**`.
+- `regex:` and then a regex. The regex can match any part of the path, the same as in the file lists of DepotDownloader.
+- `<path>_dir.vpk:<entry pattern>` selects entries in that VPK. The same rules apply to the two parts. SteamFileDownloader extracts the entries to a folder with the name of the `_dir.vpk` file, for example `game/core/pak01_dir/`.
 
-To use one output folder from anywhere, save it with `config output <dir>`; `config output` prints the saved folder, and `config output --reset` forgets it. `--output` (or `-dir` for `dd`) overrides the saved folder for `get`, `ls`, `workshop get` and `ls`, and `dd`, while `track` always needs its own `--output`. The folder is saved as an absolute path in `settings.json`, next to the saved logins.
+SteamFileDownloader puts the files in `<output>/<depot>/<manifest>/`. The default `<output>` is the `depots` folder in the current folder. Use the same output folder each time. SteamFileDownloader does not download a file again if the file is already in that folder. It also does not download a file again if the file is the same in another manifest of the depot. The date of each file and folder is the date when its manifest was made, and this lets you sort the builds by date.
 
-Manifests are saved to `<output>/manifests/<depot>_<manifest>.manifest` and read from there instead of downloading them again. That is the naming of Steam's `depotcache` folder, whose files can be copied in too.
+To use one output folder from all locations, save it with `config output <dir>`. `config output` shows the saved folder. `config output --reset` removes the saved folder. SteamFileDownloader saves the folder as an absolute path in `settings.json`, in the same folder as the saved logins.
 
-stdout has only results, as tab-separated rows, and everything else goes to stderr. A run that fails still prints the rows of what succeeded.
+For `get`, `ls`, `workshop get`, `workshop ls` and `dd`, `--output` has priority over the saved folder. For `dd`, use `-dir` in place of `--output`. `track` always needs its own `--output`.
+
+SteamFileDownloader saves each manifest to `<output>/manifests/<depot>_<manifest>.manifest`. When it needs that manifest again, it reads this file and does not download the manifest again. The `depotcache` folder of Steam uses the same file names, and you can copy its files into this folder too.
+
+stdout gets only the results, as rows with a tab between the columns. All other text goes to stderr. If a run fails, it still shows the rows for all of the parts that did not fail.
 
 ## Workshop items
 
-A workshop item's files are a manifest in the workshop depot of the app it's for. `workshop` takes item ids or their page URLs, and a collection stands for its items:
+The files of a workshop item are a manifest in the workshop depot of its app. `workshop` accepts item ids or the URLs of their pages. A collection selects all of the items in that collection:
 
 ```bash
-# Item details: item, app, depot, manifest, updated, size, title
+# Show the details of an item. The columns are item, app, depot, manifest, updated, size and title.
 SteamFileDownloader workshop info 3070715607
 
-# Its versions, newest first, as <item>:<manifest> rows for ls and get
+# Show the versions of the item, with the newest version first. Each row is an <item>:<manifest> target for ls and get.
 SteamFileDownloader workshop info 3070715607 --history
 
-# Find items by text: the same columns plus subscribers
+# Search for items by text. The columns are the same, with one more column for subscribers.
 SteamFileDownloader workshop search 730 dust2
 
-# List or download files of the current and an older version, into <output>/workshop/<item>/<manifest>/.
-# Rows start with the item instead of the depot: item, manifest, sha1, size, path for ls, and item, manifest, path for get
+# List or download the files of the current version and an older version. The files go into <output>/workshop/<item>/<manifest>/.
+# The first column is the item, not the depot. The ls columns are item, manifest, sha1, size and path. The get columns are item, manifest and path.
 SteamFileDownloader workshop ls 3070715607
 SteamFileDownloader workshop get 3070715607 3070715607:5179645662803098587 -- "*.vpk"
 ```
 
-`ls` and `get` take the patterns and `--output` of the root commands. Items of the legacy workshop, from before it kept files in depots, are not supported.
+`workshop ls` and `workshop get` use the same patterns and the same `--output` as the main `ls` and `get` commands. SteamFileDownloader cannot download items from the legacy workshop. The legacy workshop did not keep files in depots.
 
 ## Logins and rate limits
 
-Run `login` once per account to save several. The last one is the default, `--username <name>` picks another for content only that account owns, and `--anonymous` is enough for some free apps. Without a saved login, runs log in anonymously. `login` needs a person to scan the QR code or type the password, so agents ask the user to run it.
+To save more than one login, run `login` one time for each account. The last saved login is the default. For content that only one account owns, use `--username <name>` to select that account. For some apps that you do not have to buy, `--anonymous` is enough. If there is no saved login, SteamFileDownloader logs in with the anonymous account. `login` needs a person to scan the QR code or type the password, and an agent must ask the user to run it.
 
-Logging in again with the QR code replaces the account's token and revokes the old one; `login --username` only makes a saved login that still works the default. Tokens last about 200 days, and runs in their last 30 days ask Steam to renew them. `login list` prints each saved login, whether it is the default, and when its token expires. `login remove <name>...` revokes the tokens with Steam, so copies of them stop working too, and forgets them. Removing the default makes the last saved of the remaining logins the default.
+If you log in again with the QR code, SteamFileDownloader replaces the token of the account and revokes the old token. With `login --username`, if the saved login of that account still works, SteamFileDownloader only makes it the default. A token expires after about 200 days. In the last 30 days before this, each run asks Steam to renew the token.
 
-Each login uses a random login id, so parallel runs on one account don't disconnect each other. Steam rate limits logins, so put many targets in one run.
+`login list` shows each saved login, if it is the default, and the date when its token expires. `login remove <name>...` revokes the tokens with Steam and removes the saved logins. Steam then does not accept copies of these tokens. If you remove the default login, the last saved login of the other logins becomes the default.
+
+Each login uses a random login id. Because of this, parallel runs on one account do not disconnect each other. Steam limits the rate of logins, so put many targets in one run.
 
 ## DepotDownloader commands
 
-`dd` runs a DepotDownloader command line as `get`, or as `ls` with `-manifest-only`:
+`dd` runs a DepotDownloader command line as `get`. With `-manifest-only`, it runs the command line as `ls`:
 
 ```bash
 SteamFileDownloader dd -app 730 -depot 2347771 -manifest 8344780363095656278 -filelist files.txt
 ```
 
-It uses `-app`, `-depot`, `-manifest`, `-filelist`, `-dir`, `-branch`, `-username` (a saved login) and `-manifest-only`, and skips other flags like `-remember-password` or `-loginid`. `-os` and `-language` don't filter depots, so pick them with `-depot`. Password protected branches (`-branchpassword`) are not supported. `-filelist` lines are exact paths from the depot root, without globs, or `regex:` patterns, like in DepotDownloader. Files keep the `<output>/<depot>/<manifest>/` layout. `-pubfile <item>` runs as `workshop get` (files go to `<output>/workshop/<item>/<manifest>/`), and `-ugc <manifest>` as `get <app>/<app>:<manifest>`.
+`dd` uses these flags: `-app`, `-depot`, `-manifest`, `-filelist`, `-dir`, `-branch`, `-username` and `-manifest-only`. `-username` selects a saved login. `dd` ignores all other flags, for example `-remember-password` and `-loginid`. `-os` and `-language` do not filter the depots. Use `-depot` to select the depots. `dd` cannot use a branch that has a password, and `-branchpassword` does not work.
+
+Each line in a `-filelist` file is a full path from the root of the depot, or a `regex:` pattern. Globs do not work. This is the same as in DepotDownloader. The files go into `<output>/<depot>/<manifest>/`, the same as with `get`. `-pubfile <item>` runs as `workshop get`, and the files go into `<output>/workshop/<item>/<manifest>/`. `-ugc <manifest>` runs as `get <app>/<app>:<manifest>`.
 
 ## Exit codes
 
-| Code | Meaning |
+| Code | Description |
 |---|---|
-| `0` | Success |
-| `1` | Something failed, like a manifest or a download |
-| `2` | Usage error: an unknown option, or a missing or invalid argument. Fix the command line. `track` exits with `1` for these instead |
-| `3` | No saved login, or Steam rejected the login: a person has to run `login`, or for `track` with `--password`, check the credentials |
-| `4` | Steam is rate limiting logins: wait about 15 minutes |
-| `5` | Only access failed: Steam gave no depot key or manifest request code for some targets. Another account may own them (`--username`), or the manifest is on another branch or in another app |
-| `6` | A pattern matched nothing in any target, and nothing failed |
+| `0` | No failure |
+| `1` | A manifest, a file or another part of the run failed |
+| `2` | Usage error: an unknown option, or an argument that is not there or not correct. Correct the command line. For these errors, `track` exits with `1` |
+| `3` | There is no saved login, or Steam did not accept the login. A person must run `login`. For `track` with `--password`, do a check of the credentials |
+| `4` | Steam limits the rate of logins. Wait about 15 minutes |
+| `5` | All of the failures were access failures. For some targets, Steam gave no depot key or manifest request code. It is possible that another account owns them: use `--username`. It is also possible that the manifest is on another branch or in another app |
+| `6` | A pattern matched no file in any target, and no other part of the run failed |
 
-Report bugs at https://github.com/SteamTracking/SteamFileDownloader/issues.
+To report a problem, go to https://github.com/SteamTracking/SteamFileDownloader/issues.
 
 ## GameTracking
 
-[GameTracking](https://github.com/SteamTracking/GameTracking) runs the `track` command with a `files.json` to download the tracked files of the latest build:
+[GameTracking](https://github.com/SteamTracking/GameTracking) uses the `track` command and a `files.json` file to download the tracked files of the latest build:
 
 ```bash
 SteamFileDownloader track 730 --output csgo --save-all-manifests
@@ -137,21 +162,21 @@ SteamFileDownloader track 730 --output csgo --save-all-manifests
 
 | Option | Description | Default |
 |---|---|---|
-| `<app>` or `--appid` | Steam app id | Required |
-| `--output` | Output directory | Required |
-| `--username` | Steam username, or `anonymous` | Last saved login |
+| `<app>` or `--appid` | The Steam app id | Necessary |
+| `--output` | The output folder | Necessary |
+| `--username` | The Steam username, or `anonymous` | The last saved login |
 | `--anonymous` | The same as `--username anonymous` | |
-| `--password` | Steam password; without it a saved login is used | Saved login |
-| `--branch` | Branch to download | `public` |
-| `--manifests` | Folder of `manifest_<depot>.txt` files from an older run, to download that build | Latest manifests |
-| `--save-manifest` | Save manifests of the depots in `files.json` as text to `<output>/manifests/` | `false` |
-| `--save-all-manifests` | Save manifests of every depot as text to `<output>/manifests/` | `false` |
+| `--password` | The Steam password. Without it, `track` uses a saved login | A saved login |
+| `--branch` | The branch to download from | `public` |
+| `--manifests` | A folder with `manifest_<depot>.txt` files from an earlier run. `track` downloads that build | The latest manifests |
+| `--save-manifest` | Save the manifests of the depots in `files.json` as text in `<output>/manifests/` | `false` |
+| `--save-all-manifests` | Save the manifests of all depots as text in `<output>/manifests/` | `false` |
 
-To download an older build with the same file patterns, pass `--manifests` with the `manifests/` folder of an older run, like from an old commit of a GameTracking repository. Each depot uses the manifest id in its `manifest_<depot>.txt`, depots without one are skipped, and `steam_buildid.txt` isn't written. VPK entries also need the manifests of the depots their archives are in, which `--save-all-manifests` saves.
+To download an older build with the same file patterns, give `--manifests` the `manifests/` folder of an earlier run. For example, use this folder from an old commit of a GameTracking repository. Each depot uses the manifest id in its `manifest_<depot>.txt` file. `track` does not download depots that have no such file. `track` does not write `steam_buildid.txt`. VPK entries also need the manifests of the depots that contain their archives, and `--save-all-manifests` saves these manifests.
 
 ### Configuration
 
-`files.json` in the current directory maps depot ids to file patterns:
+`files.json` in the current folder gives the file patterns for each depot id:
 
 ```json
 {
@@ -167,33 +192,33 @@ To download an older build with the same file patterns, pass `--manifests` with 
 }
 ```
 
-Each entry is one of:
-- **A file path**, matched exactly.
-- **A glob** for the whole path, where `*` and `?` match within a folder and `**` across folders, like `game/**/bin/win64/*.dll`.
-- **`regex:`** followed by a regex for the whole path.
-- **`<path>_dir.vpk:<entry pattern>`**, entries inside that VPK, with the same rules as the patterns of `get`. A bare `pak01_dir.vpk` matches it in any folder.
+Each entry is one of these:
+- **A file path**. It matches only that path.
+- **A glob** for the full path. `*` and `?` match in one folder, and `**` matches across folders. For example: `game/**/bin/win64/*.dll`.
+- **`regex:`** and then a regex for the full path.
+- **`<path>_dir.vpk:<entry pattern>`** for entries in that VPK. The rules are the same as for the patterns of `get`. A `pak01_dir.vpk` without a slash matches that file in any folder.
 
-Paths, globs and regexes are case-sensitive, while VPK entry patterns ignore case like the patterns of `get` and `ls`. A pattern that matches nothing is a warning, not an error.
+In paths, globs and regexes, uppercase and lowercase letters are different. In VPK entry patterns, uppercase and lowercase letters are the same, as in the patterns of `get` and `ls`. If a pattern matches nothing, `track` shows a warning, not an error.
 
-For VPK entries, the `_dir.vpk` is downloaded whole, and only the chunks of its `_NNN.vpk` archives that hold the entries are written into them, at their offsets. [VRF](https://github.com/ValveResourceFormat/ValveResourceFormat) then extracts those entries from the `_dir.vpk` as if the archives were complete:
+For VPK entries, `track` downloads the full `_dir.vpk` file. From the `_NNN.vpk` archives, it downloads only the chunks that contain the entries. It writes these chunks into the archives at their offsets. Then [ValveResourceFormat (VRF)](https://github.com/ValveResourceFormat/ValveResourceFormat) can extract the entries from the `_dir.vpk` file as if the archives were complete:
 
 ```bash
 Source2Viewer-CLI --input game/dota/pak01_dir.vpk --output game/dota/pak01_dir/ --vpk_decompile \
     --vpk_filepath "scripts/npc/,scripts/heroes.herolist_c"
 ```
 
-The rest of each archive is empty, and sparse, so it takes no disk space. VRF's filters must match only entries that `files.json` matches, since others fail their CRC check. Archives are looked up in every depot of the app, as Dota 2 keeps most of them in other depots than its `pak01_dir.vpk`.
+The other parts of each archive are empty and sparse, and they use no disk space. The VRF filters must match only the entries that `files.json` matches. Other entries fail the cyclic redundancy check (CRC). `track` looks for archives in all depots of the app. Dota 2 keeps most of its archives in depots other than the depot of its `pak01_dir.vpk`.
 
 ### How it works
 
-This command is meant for fresh checkouts. It doesn't diff against earlier downloads or delete files removed from the manifest, but skips files already on disk with the right hash.
+Use this command in new checkouts. It does not compare the files with the files from earlier runs. It does not delete files that are not in the manifest now. It does not download a file again if the file is on the disk with the correct hash.
 
-- **Startup**: `files.json` is loaded before connecting, so a broken one fails fast.
-- **Login**: anonymous, with the username and password, or with a saved login. Steam Guard prompts don't work headless.
-- **CDN servers**: `SteamCache` and `CDN` servers for the cell id, without proxies, China-only or app-restricted ones. Requests take turns over the best 8, and a server that fails 3 requests with no success in between, refusals included, sits out for 30 seconds.
-- **Depots**: from the app's PICS info, the depots in `files.json`, or all of them with `--save-all-manifests` or VPK entries. Shared depots (`depotfromapp`) are skipped. A depot without a manifest on the branch uses `public`, but a branch the app doesn't have, or a password protected one, fails the run.
-- **Manifests**: downloaded with the depot key and a manifest request code, with retries. A 401, 403 or 404 is retried once on another server with a new request code. Failures of depots not in `files.json` are only logged.
-- **Download**: after disconnecting from Steam, files download from the CDN, 64 chunks at a time. Identical files are downloaded once and copied. Each chunk is checked against its SHA-1 and written into a file in the system temp folder, which is moved into place once complete. Failed chunks are retried on other servers for about two minutes, or until two servers refuse them, and their errors are summed up in one line.
-- **Output**: messages go to stdout, and warnings and errors to stderr, as `::warning::` and `::error::` lines when `CI` is set. Without a terminal, a `Progress:` line comes every 30 seconds.
-- **VPKs**: for VPK entries, the `_dir.vpk` is downloaded and read first, then only the chunks of its archives that hold the entries. Chunks already in the archives with the right SHA-1 are kept.
-- **Completion**: when everything succeeded, `steam_buildid.txt` gets the branch's build id and the exit code is 0, otherwise 1 (or 3 or 4 when logging in again after a lost connection failed).
+- **Start**: `track` loads `files.json` before it connects. If `files.json` has an error, the run fails quickly.
+- **Login**: `track` logs in with the anonymous account, with the username and password, or with a saved login. Steam Guard prompts do not work in a run without a user.
+- **Content delivery network (CDN) servers**: `track` uses `SteamCache` and `CDN` servers for the cell id. It does not use proxies, servers only for China, or servers only for specific apps. The requests go to the best 8 servers in turn. If a server fails 3 requests in sequence, `track` does not use that server for 30 seconds. A refused request also counts as a failure.
+- **Depots**: `track` gets the depots from the PICS info of the app. It uses the depots in `files.json`. With `--save-all-manifests` or with VPK entries, it uses all depots. It does not use shared depots, which have a `depotfromapp` value. If a depot has no manifest on the branch, `track` uses the manifest from `public`. If the app does not have the branch, or the branch has a password, the run fails.
+- **Manifests**: `track` downloads each manifest with the depot key and a manifest request code. If this fails, it tries again. After a 401, 403 or 404 error, it tries one more time on another server with a new request code. If a depot is not in `files.json` and its manifest fails, `track` only writes the failure to the log.
+- **Files**: `track` disconnects from Steam, and then downloads the files from the CDN, 64 chunks at a time. It downloads identical files one time and copies them. It does a check of each chunk against its SHA-1, and writes the chunk into a file in the temporary folder of the system. When that file is complete, `track` moves it to its location. `track` tries failed chunks again on other servers for about 2 minutes, or until 2 servers refuse them. One line shows a summary of their errors.
+- **Output**: messages go to stdout. Warnings and errors go to stderr. When the `CI` environment variable has a value, they are `::warning::` and `::error::` lines. Without a terminal, `track` shows a `Progress:` line each 30 seconds.
+- **VPKs**: for VPK entries, `track` first downloads and reads the `_dir.vpk` file. Then it downloads only the chunks of its archives that contain the entries. If a chunk is already in an archive with the correct SHA-1, `track` keeps it.
+- **End**: if all of the parts are successful, `track` writes the build id of the branch to `steam_buildid.txt`, and the exit code is 0. If not, the exit code is 1. If `track` loses the connection and cannot log in again, the exit code is 3 or 4.
