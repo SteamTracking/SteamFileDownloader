@@ -267,7 +267,7 @@ internal static class Help
         Examples:
           {ExeName} get 730 2347771 2347773 -- server.dll "regex:lib(tier0|engine2)\.so$"
           {ExeName} get 730 2347771:8344780363095656278 2347771:latest -- game/csgo/bin/win64/server.dll
-          {ExeName} get 730/2347771 570/373303 -- game/bin/win64/resourcecompiler.dll
+          {ExeName} get 730 2347770 2347771 --install-dir D:/Games/CS2
 
         {Targets}
 
@@ -282,6 +282,13 @@ internal static class Help
           they are in are downloaded, plus the _dir.vpk, which gets no row.
           Files already on disk with the right hash are kept, and ones with the same hash in another target
           or downloaded manifest of the depot are copied. Rows include files that already were on disk.
+
+        Install folder:
+          --install-dir <dir> puts the files of every manifest in <dir>/<path>, like a Steam install. Where two
+          have different files at one path, the later target's or depot's file is kept, with a warning. Without
+          targets, that is every depot, of every platform and language, so name the depots to install.
+          Files that are no longer in the manifests stay, and manifests are still saved in <output>/manifests.
+          <dir.vpk>:<pattern> patterns can't be used with it.
 
         {Streams}
 

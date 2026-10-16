@@ -14,14 +14,16 @@ internal sealed record DepotOptions(
     string? Output = null,
     string Branch = "public",
     bool Anonymous = false,
-    string? Username = null)
+    string? Username = null,
+    string? InstallDir = null)
 {
     public static DepotOptions From(ParsedArguments parsed, uint? app) => new(
         app,
         parsed.Options.GetValueOrDefault("output"),
         parsed.Options.GetValueOrDefault("branch") ?? "public",
         parsed.Options.ContainsKey("anonymous"),
-        parsed.Options.GetValueOrDefault("username"));
+        parsed.Options.GetValueOrDefault("username"),
+        parsed.Options.GetValueOrDefault("install-dir"));
 }
 
 /// <summary>

@@ -177,6 +177,10 @@ public class DepotArgumentsTests
         var anonymous = DepotArgumentParser.ParseArguments("get", ["730", "1", "--anonymous"]);
 
         await Assert.That(anonymous!.Options.Anonymous).IsTrue();
+
+        var install = DepotArgumentParser.ParseArguments("get", ["730", "1", "--install-dir", "D:/Games/CS2"]);
+
+        await Assert.That(install!.Options.InstallDir).IsEqualTo("D:/Games/CS2");
     }
 
     [Test]

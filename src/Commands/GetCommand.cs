@@ -28,6 +28,10 @@ internal static class GetCommand
         public required FileFilter Filter;
         public required SteamSession Session;
         public required string OutputRoot;
+
+        // The folder of --install-dir, which every manifest's files go to directly instead of a folder per manifest
+        public string? InstallFolder;
+
         public List<ManifestJob> Jobs = [];
         public Dictionary<ManifestJob, List<MatchedFile>> Matches = [];
         public Dictionary<string, int> MatchCounts = [];
@@ -66,7 +70,8 @@ internal static class GetCommand
         private readonly Dictionary<(uint DepotID, ulong ManifestID), ManifestJob> JobsByManifest = [];
 
         /// <summary>
-        /// Adds the job of a manifest, or returns the one already added for it. Its files go to &lt;parentFolder&gt;/&lt;manifest&gt;.
+        /// Adds the job of a manifest, or returns the one already added for it. Its files go to &lt;parentFolder&gt;/&lt;manifest&gt;,
+        /// or to the install folder when there is one.
         /// </summary>
         public ManifestJob AddJob(uint appID, uint depotID, ulong manifestID, string branch, bool optional, string parentFolder)
         {
@@ -77,7 +82,17 @@ internal static class GetCommand
                 return existing;
             }
 
-            var job = ManifestJob.Create(appID, depotID, manifestID, branch, parentFolder);
+            ManifestJob job;
+
+            if (InstallFolder != null)
+            {
+                job = ManifestJob.CreateIn(appID, depotID, manifestID, branch, InstallFolder);
+            }
+            else
+            {
+                job = ManifestJob.Create(appID, depotID, manifestID, branch, parentFolder);
+            }
+
             job.Optional = optional;
             job.ManifestFile = ManifestCache.GetPath(Path.Combine(OutputRoot, "manifests"), depotID, manifestID);
 
@@ -153,6 +168,13 @@ internal static class GetCommand
             return ExitCodes.ForUsageError(command);
         }
 
+        // VPK entries are extracted into a folder next to their VPK, which would put them among the installed files
+        if (options.InstallDir != null && filter.VpkPatterns.Count > 0)
+        {
+            Log.Error("--install-dir can't be combined with <dir.vpk>:<pattern> patterns, whose entries are extracted next to the VPK. Use --output for those.");
+            return ExitCodes.ForUsageError(command);
+        }
+
         // Before logging in, since a settings file that can't be read fails the run
         var outputRoot = Settings.GetOutputRoot(options.Output);
 
@@ -176,6 +198,7 @@ internal static class GetCommand
             Filter = filter,
             Session = session,
             OutputRoot = outputRoot,
+            InstallFolder = options.InstallDir != null ? Path.GetFullPath(options.InstallDir) : null,
             HideRows = downloads && patterns.Count == 0,
         };
 
@@ -208,6 +231,11 @@ internal static class GetCommand
         var fileJobs = run.Matches
             .SelectMany(static m => m.Value.Select(f => new FileJob(m.Key, f.File)))
             .ToList();
+
+        if (run.InstallFolder != null)
+        {
+            fileJobs = KeepLastAtEachPath(fileJobs);
+        }
 
         var (success, files) = await downloader.DownloadAllFiles(fileJobs);
 
@@ -281,9 +309,68 @@ internal static class GetCommand
             }
         }
 
-        OutputFiles.SetFolderTimes(paths);
+        // Folders of an install hold files of every depot, so they keep their own dates
+        if (run.InstallFolder == null)
+        {
+            OutputFiles.SetFolderTimes(paths);
+        }
 
         return Finish(run, downloads: true);
+    }
+
+    /// <summary>
+    /// Keeps one file per path when every manifest writes into the install folder: the one of the manifest that comes
+    /// last, like a later target. Warns about the files it overwrites that differ, once per pair of manifests. Takes the
+    /// files in the order of their manifests.
+    /// </summary>
+    internal static List<FileJob> KeepLastAtEachPath(List<FileJob> fileJobs)
+    {
+        // Linux file systems tell paths apart by case, the others don't
+        var comparer = OperatingSystem.IsLinux() ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
+        var paths = new List<string>(fileJobs.Count);
+        var lastIndexes = new Dictionary<string, int>(comparer);
+        var overwritten = new Dictionary<(ManifestJob Earlier, ManifestJob Later), List<string>>();
+
+        for (var i = 0; i < fileJobs.Count; i++)
+        {
+            var fileJob = fileJobs[i];
+            var path = FileFilter.NormalizePath(fileJob.File.FileName);
+
+            paths.Add(path);
+
+            if (lastIndexes.TryGetValue(path, out var earlierIndex) && FileDownloader.GetHashKey(fileJobs[earlierIndex].File) != FileDownloader.GetHashKey(fileJob.File))
+            {
+                var earlier = fileJobs[earlierIndex];
+                var pair = (earlier.Job, fileJob.Job);
+
+                if (!overwritten.TryGetValue(pair, out var pairPaths))
+                {
+                    pairPaths = [];
+                    overwritten[pair] = pairPaths;
+                }
+
+                pairPaths.Add(path);
+            }
+
+            lastIndexes[path] = i;
+        }
+
+        foreach (var (pair, pairPaths) in overwritten)
+        {
+            Log.Warn($"{pair.Later} overwrites {Log.Plural(pairPaths.Count, "different file")} of {pair.Earlier}, which comes before it: {Log.JoinFirst(pairPaths)}.");
+        }
+
+        var kept = new List<FileJob>(lastIndexes.Count);
+
+        for (var i = 0; i < fileJobs.Count; i++)
+        {
+            if (lastIndexes[paths[i]] == i)
+            {
+                kept.Add(fileJobs[i]);
+            }
+        }
+
+        return kept;
     }
 
     private static async Task<int> ListFilesAsync(Run run, CancellationToken cancellationToken)
@@ -651,7 +738,8 @@ internal static class GetCommand
         }
 
         var notesText = notes.Count > 0 ? $" ({string.Join("; ", notes)})" : "";
-        var outputNote = downloads ? $" Files are in {run.OutputRoot}" : "";
+        var filesFolder = run.InstallFolder ?? run.OutputRoot;
+        var outputNote = downloads ? $" Files are in {filesFolder}" : "";
 
         Log.Info($"Done: {rows} from {manifests}{notesText}.{outputNote}");
 

@@ -49,6 +49,8 @@ public class ArgumentParserTests
     [Test]
     [Arguments("get", "--bogus")]
     [Arguments("ls", "--all-files")]
+    [Arguments("ls", "--install-dir")]
+    [Arguments("workshop get", "--install-dir")]
     [Arguments("depots", "--output")]
     [Arguments("login", "--anonymous")]
     [Arguments("track", "--json")]

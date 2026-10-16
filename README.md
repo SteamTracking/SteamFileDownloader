@@ -62,6 +62,9 @@ SteamFileDownloader get 730 2347770 -- "game/core/pak01_dir.vpk:scripts/scenes.v
 # If you also give no targets, it downloads all depots that the account can access. This can be tens of gigabytes.
 SteamFileDownloader get 730 2347771:8344780363095656278
 
+# Download depots into one folder, the same as a Steam install.
+SteamFileDownloader get 730 2347770 2347771 --install-dir D:/Games/CS2
+
 # Find the depot that has a file. If you give no targets, ls searches all depots of the app.
 SteamFileDownloader ls 570 -- hammer.dll
 
@@ -89,6 +92,8 @@ SteamFileDownloader puts the files in `<output>/<depot>/<manifest>/`. The defaul
 To use one output folder from all locations, save it with `config output <dir>`. `config output` shows the saved folder. `config output --reset` removes the saved folder. SteamFileDownloader saves the folder as an absolute path in `settings.json`, in the same folder as the saved logins.
 
 For `get`, `ls`, `workshop get`, `workshop ls` and `dd`, `--output` has priority over the saved folder. For `dd`, use `-dir` in place of `--output`. `track` always needs its own `--output`.
+
+With `get --install-dir <dir>`, SteamFileDownloader puts the files of all manifests in `<dir>/<path>`, the same as a Steam install. If two manifests have different files at the same path, the file of the later target or depot replaces the other, and a warning shows the files. If you give no targets, `get` uses all depots, for all platforms and languages, so give the depots to install. SteamFileDownloader does not delete files that are no longer in the manifests. It still saves the manifests in `<output>/manifests/`. You cannot use `<path>_dir.vpk:` patterns with `--install-dir`.
 
 SteamFileDownloader saves each manifest to `<output>/manifests/<depot>_<manifest>.manifest`. When it needs that manifest again, it reads this file and does not download the manifest again. The `depotcache` folder of Steam uses the same file names, and you can copy its files into this folder too.
 

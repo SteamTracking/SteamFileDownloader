@@ -56,6 +56,35 @@ public class GetCommandTests
         await Assert.That(TestContext.Current!.GetErrorOutput()).Contains(error);
     }
 
+    [Test]
+    public async Task InstallDirWithVpkPatternsIsAUsageErrorBeforeLoggingIn()
+    {
+        var options = new DepotOptions(730, Anonymous: true, InstallDir: "D:/Games/CS2");
+        var arguments = new DepotArguments("get", options, ["2347770"], ["pak01_dir.vpk:scripts/a.txt"]);
+
+        await Assert.That(await GetCommand.RunAsync(arguments, new CancellationToken(canceled: true))).IsEqualTo(ExitCodes.UsageError);
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("--install-dir can't be combined with <dir.vpk>:<pattern> patterns");
+    }
+
+    [Test]
+    public async Task InstallKeepsTheLaterFileAtAPathAndWarnsWhenItDiffers()
+    {
+        var first = TestManifests.Job("install", 1, TestManifests.File("bin/a.dll", new byte[] { 1 }), TestManifests.File("same.txt", new byte[] { 5 }), TestManifests.File("only1.txt", new byte[] { 7 }));
+        var second = TestManifests.Job("install", 2, TestManifests.File("bin/a.dll", new byte[] { 2 }), TestManifests.File("same.txt", new byte[] { 5 }));
+        var fileJobs = new List<FileJob>();
+
+        foreach (var job in new[] { first, second })
+        {
+            fileJobs.AddRange(job.Manifest!.Files!.Select(f => new FileJob(job, f)));
+        }
+
+        var kept = GetCommand.KeepLastAtEachPath(fileJobs);
+        var keptNames = string.Join(",", kept.Select(static f => $"{f.Job.DepotID}:{FileFilter.NormalizePath(f.File.FileName)}"));
+
+        await Assert.That(keptNames).IsEqualTo("1:only1.txt,2:bin/a.dll,2:same.txt");
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("2:20 overwrites 1 different file of 1:10, which comes before it: bin/a.dll.").And.DoesNotContain("same.txt");
+    }
+
     private static Target Target(uint appID, uint? depotID, ulong? manifestID = null, string branch = "public") => new("t", appID, depotID, manifestID, branch);
 
     private static string? SearchAllHint(params Target[] targets) => GetCommand.GetSearchAllHint(targets)?.Replace(Help.ExeName, "SFD", StringComparison.Ordinal);

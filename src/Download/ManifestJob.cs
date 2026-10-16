@@ -65,16 +65,23 @@ internal sealed class ManifestJob
                 .Select(static d => d.FullName)];
         }
 
-        return new ManifestJob
-        {
-            AppID = appID,
-            DepotID = depotID,
-            ManifestID = manifestID,
-            Branch = branch,
-            OutputFolder = outputFolder,
-            ReuseFolders = reuseFolders,
-        };
+        var job = CreateIn(appID, depotID, manifestID, branch, outputFolder);
+        job.ReuseFolders = reuseFolders;
+
+        return job;
     }
+
+    /// <summary>
+    /// A job whose files go to the output folder itself, without other folders to copy identical files from.
+    /// </summary>
+    public static ManifestJob CreateIn(uint appID, uint depotID, ulong manifestID, string branch, string outputFolder) => new()
+    {
+        AppID = appID,
+        DepotID = depotID,
+        ManifestID = manifestID,
+        Branch = branch,
+        OutputFolder = outputFolder,
+    };
 
     /// <summary>
     /// The manifest's files with their normalized paths, without its directories.

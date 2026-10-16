@@ -80,7 +80,7 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
     /// <summary>
     /// Identifies identical file contents across depots and manifests.
     /// </summary>
-    private static string GetHashKey(DepotManifest.FileData file) => $"{Convert.ToHexString(file.FileHash)}:{file.TotalSize}";
+    internal static string GetHashKey(DepotManifest.FileData file) => $"{Convert.ToHexString(file.FileHash)}:{file.TotalSize}";
 
     /// <summary>
     /// Downloads files concurrently. Returns the files that are on disk and whether all of them succeeded.

@@ -19,7 +19,7 @@ internal static class ArgumentParser
     // Options of each command: ones followed by a value, and flags
     internal static readonly Dictionary<string, (string[] Values, string[] Flags)> CommandOptions = new()
     {
-        ["get"] = (["output", "branch", "username"], ["anonymous"]),
+        ["get"] = (["output", "install-dir", "branch", "username"], ["anonymous"]),
         ["ls"] = (["output", "branch", "username"], ["anonymous"]),
         ["depots"] = (["branch", "username"], ["anonymous"]),
         ["login"] = (["username"], []),
@@ -160,6 +160,11 @@ internal static class ArgumentParser
         }
 
         if (options.TryGetValue("output", out var output) && !CheckOutputPath(output, "--output"))
+        {
+            return null;
+        }
+
+        if (options.TryGetValue("install-dir", out var installDir) && !CheckOutputPath(installDir, "--install-dir"))
         {
             return null;
         }
