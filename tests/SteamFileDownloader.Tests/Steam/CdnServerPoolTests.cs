@@ -37,11 +37,95 @@ public class CdnServerPoolTests
         }
     }
 
+    // Leases that are never released, so each server taken stays busy
     private static List<Server> Take(CdnServerPool pool, int count, Server? avoid = null) =>
-        [.. Enumerable.Range(0, count).Select(_ => pool.Get(avoid))];
+        [.. Enumerable.Range(0, count).Select(_ => pool.Rent(avoid).Server)];
+
+    // Leases released right away, so every server stays idle
+    private static List<Server> TakeAndRelease(CdnServerPool pool, int count)
+    {
+        var taken = new List<Server>();
+
+        for (var i = 0; i < count; i++)
+        {
+            using var lease = pool.Rent(null);
+            taken.Add(lease.Server);
+        }
+
+        return taken;
+    }
 
     [Test]
-    public async Task RoundRobinsOverTheFirstEightServersOnly()
+    public async Task LeastBusyServerIsPicked()
+    {
+        var (pool, _, _) = Create(3);
+
+        var first = pool.Rent(null);
+        pool.Rent(null);
+        pool.Rent(null);
+        first.Dispose();
+
+        await Assert.That(pool.Rent(null).Server).IsSameReferenceAs(first.Server);
+    }
+
+    [Test]
+    public async Task SlowServerGetsNoNewRequestsUntilItCatchesUp()
+    {
+        var (pool, _, _) = Create(2);
+
+        var slow = pool.Rent(null);
+        var taken = TakeAndRelease(pool, 4);
+
+        await Assert.That(taken.Contains(slow.Server)).IsFalse();
+
+        slow.Dispose();
+
+        await Assert.That(TakeAndRelease(pool, 4).Contains(slow.Server)).IsTrue();
+    }
+
+    [Test]
+    public async Task EquallyBusyServersTakeTurns()
+    {
+        var (pool, _, _) = Create(3);
+
+        var taken = TakeAndRelease(pool, 6);
+
+        await Assert.That(taken.Take(3).Distinct().Count()).IsEqualTo(3);
+        await Assert.That(taken.Skip(3).Distinct().Count()).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task LeaseOfAReplacedServerIsIgnored()
+    {
+        var (pool, _, _) = Create(2);
+
+        var lease = pool.Rent(null);
+        pool.SetServers(MakeServers(2));
+        lease.Dispose();
+
+        await Assert.That(TakeAndRelease(pool, 2).Distinct().Count()).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task LeastBusyIsPickedWhenAllAreBenched()
+    {
+        var (pool, _, servers) = Create(3);
+
+        foreach (var server in servers)
+        {
+            Fail(pool, server, 3);
+        }
+
+        var first = pool.Rent(null);
+        var second = pool.Rent(null);
+
+        var third = pool.Rent(null).Server;
+
+        await Assert.That(third != first.Server && third != second.Server).IsTrue();
+    }
+
+    [Test]
+    public async Task SpreadsOverTheFirstEightServersOnly()
     {
         var (pool, _, servers) = Create(12);
 
@@ -53,7 +137,7 @@ public class CdnServerPoolTests
     }
 
     [Test]
-    public async Task RoundRobinsOverAllServersWhenThereAreFewer()
+    public async Task SpreadsOverAllServersWhenThereAreFewer()
     {
         var (pool, _, servers) = Create(3);
 
@@ -225,11 +309,11 @@ public class CdnServerPoolTests
     {
         var (pool, _, servers) = Create(1);
 
-        await Assert.That(pool.Get(servers[0])).IsSameReferenceAs(servers[0]);
+        await Assert.That(pool.Rent(servers[0]).Server).IsSameReferenceAs(servers[0]);
 
         Fail(pool, servers[0], 3);
 
-        await Assert.That(pool.Get(servers[0])).IsSameReferenceAs(servers[0]);
+        await Assert.That(pool.Rent(servers[0]).Server).IsSameReferenceAs(servers[0]);
     }
 
     [Test]

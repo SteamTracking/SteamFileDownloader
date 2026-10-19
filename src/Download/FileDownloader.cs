@@ -697,12 +697,16 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
             }
 
             buffer = ArrayPool<byte>.Shared.Rent((int)chunk.UncompressedLength);
-            var server = session.CdnServers.Get(avoid);
+            var lease = session.CdnServers.Rent(avoid);
+            var server = lease.Server;
             int written;
 
             try
             {
-                written = await session.DownloadChunkAsync(job, chunk, server, buffer);
+                using (lease)
+                {
+                    written = await session.DownloadChunkAsync(job, chunk, server, buffer);
+                }
 
                 // SteamKit only checks an Adler-32 checksum. The chunk id is the SHA-1 of the data, and a file
                 // of chunks that match it needs no hashing after

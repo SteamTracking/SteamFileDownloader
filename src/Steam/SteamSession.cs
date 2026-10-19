@@ -772,13 +772,18 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
         for (var attempt = 0; attempt <= MaxCdnRetries; attempt++)
         {
             // Each attempt goes to another server than the last
-            var server = CdnServers.Get(lastServer);
+            var lease = CdnServers.Rent(lastServer);
+            var server = lease.Server;
             lastServer = server;
 
             try
             {
-                // Without the key the file names stay encrypted, so the saved manifest keeps them as served
-                job.Manifest = await CdnClient.DownloadManifestAsync(job.DepotID, job.ManifestID, manifestRequestCode, server);
+                // Busy only while downloading, not while waiting to retry
+                using (lease)
+                {
+                    // Without the key the file names stay encrypted, so the saved manifest keeps them as served
+                    job.Manifest = await CdnClient.DownloadManifestAsync(job.DepotID, job.ManifestID, manifestRequestCode, server);
+                }
             }
             catch (Exception e) when (IsError(e))
             {
