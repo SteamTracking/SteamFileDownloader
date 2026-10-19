@@ -67,8 +67,9 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
 
     private readonly SemaphoreSlim SemaphorePerDownloadChunk = new(Connections, Connections);
 
-    // Chunk bytes downloaded from the CDN, for the progress line
-    private long DownloadedBytes;
+    // Chunk bytes as they came from the CDN, compressed, and as they were written to disk, for the progress line
+    private long NetworkBytes;
+    private long DiskBytes;
 
     // Failed chunk requests by reason and by server, summed up after each download instead of a line each
     private readonly ConcurrentDictionary<string, int> ChunkErrorReasons = new();
@@ -103,7 +104,7 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         var failedFiles = new ConcurrentBag<FileJob>();
         var totalBytes = fileJobs.Sum(static f => (long)f.File.TotalSize);
         var skippedBytes = 0L;
-        var startBytes = Interlocked.Read(ref DownloadedBytes);
+        var startBytes = ReadBytes();
         var startTime = TimeProvider.GetTimestamp();
 
         // Returns the file's path, or null when it failed
@@ -140,12 +141,18 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
             return finalPath;
         }
 
-        (double, string) RenderProgress() => DownloadProgress.FormatProgress(
-            BytesSince(startBytes),
-            Interlocked.Read(ref skippedBytes),
-            totalBytes,
-            TimeProvider.GetElapsedTime(startTime),
-            $"{resultCounts.Sum()} / {fileJobs.Count} files{FormatChunkErrorCount()}");
+        (double, string) RenderProgress()
+        {
+            var (network, disk) = BytesSince(startBytes);
+
+            return DownloadProgress.FormatProgress(
+                network,
+                disk,
+                Interlocked.Read(ref skippedBytes),
+                totalBytes,
+                TimeProvider.GetElapsedTime(startTime),
+                $"{resultCounts.Sum()} / {fileJobs.Count} files{FormatChunkErrorCount()}");
+        }
 
         var groups = fileJobs.GroupBy(static f => GetHashKey(f.File)).ToList();
         var uniqueBytes = groups.Sum(static g => (long)g.First().File.TotalSize);
@@ -178,7 +185,8 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
 
         if (downloaded > 0)
         {
-            var transfer = DownloadProgress.FormatTransfer(BytesSince(startBytes), TimeProvider.GetElapsedTime(startTime));
+            var (network, disk) = BytesSince(startBytes);
+            var transfer = DownloadProgress.FormatTransfer(network, disk, TimeProvider.GetElapsedTime(startTime));
 
             counts.Add($"{downloaded} downloaded ({transfer})");
         }
@@ -217,15 +225,15 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         }
 
         var done = 0;
-        var startBytes = Interlocked.Read(ref DownloadedBytes);
+        var startBytes = ReadBytes();
         var startTime = TimeProvider.GetTimestamp();
 
         (double, string) RenderProgress()
         {
-            var bytes = BytesSince(startBytes);
+            var (network, disk) = BytesSince(startBytes);
             var finished = Volatile.Read(ref done);
-            var speed = (long)DownloadProgress.Speed(bytes, TimeProvider.GetElapsedTime(startTime));
-            var text = $"{DownloadProgress.FormatSize(bytes)} at {DownloadProgress.FormatSize(speed)}/s{DownloadProgress.Separator}{finished} / {items.Count} {what}{FormatChunkErrorCount()}";
+            var rates = DownloadProgress.FormatRates(network, disk, TimeProvider.GetElapsedTime(startTime));
+            var text = $"{DownloadProgress.FormatSize(disk)}{DownloadProgress.Separator}{finished} / {items.Count} {what}{FormatChunkErrorCount()}{DownloadProgress.Separator}{rates}";
 
             return ((double)finished / items.Count, text);
         }
@@ -241,7 +249,14 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         }
     }
 
-    private long BytesSince(long startBytes) => Interlocked.Read(ref DownloadedBytes) - startBytes;
+    private (long Network, long Disk) ReadBytes() => (Interlocked.Read(ref NetworkBytes), Interlocked.Read(ref DiskBytes));
+
+    private (long Network, long Disk) BytesSince((long Network, long Disk) start)
+    {
+        var (network, disk) = ReadBytes();
+
+        return (network - start.Network, disk - start.Disk);
+    }
 
     private string FormatChunkErrorCount()
     {
@@ -453,15 +468,21 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         var skippedBytes = 0L;
         var doneFiles = 0;
         var failedFiles = new ConcurrentBag<string>();
-        var startBytes = Interlocked.Read(ref DownloadedBytes);
+        var startBytes = ReadBytes();
         var startTime = TimeProvider.GetTimestamp();
 
-        (double, string) RenderProgress() => DownloadProgress.FormatProgress(
-            BytesSince(startBytes),
-            Interlocked.Read(ref skippedBytes),
-            totalBytes,
-            TimeProvider.GetElapsedTime(startTime),
-            $"{Volatile.Read(ref doneFiles)} / {partialFiles.Count} archives{FormatChunkErrorCount()}");
+        (double, string) RenderProgress()
+        {
+            var (network, disk) = BytesSince(startBytes);
+
+            return DownloadProgress.FormatProgress(
+                network,
+                disk,
+                Interlocked.Read(ref skippedBytes),
+                totalBytes,
+                TimeProvider.GetElapsedTime(startTime),
+                $"{Volatile.Read(ref doneFiles)} / {partialFiles.Count} archives{FormatChunkErrorCount()}");
+        }
 
         async ValueTask DownloadPartialFileLocal(PartialFile partialFile)
         {
@@ -493,9 +514,10 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
             await Parallel.ForEachAsync(partialFiles, FileWorkers, (partialFile, _) => DownloadPartialFileLocal(partialFile));
         }
 
-        var transfer = DownloadProgress.FormatTransfer(BytesSince(startBytes), TimeProvider.GetElapsedTime(startTime));
+        var (network, disk) = BytesSince(startBytes);
+        var transfer = DownloadProgress.FormatTransfer(network, disk, TimeProvider.GetElapsedTime(startTime));
 
-        Log.Info($"VPK archives: {transfer} downloaded, {DownloadProgress.FormatSize(skippedBytes)} already present.");
+        Log.Info($"VPK archives: downloaded {transfer}; {DownloadProgress.FormatSize(skippedBytes)} already present.");
         LogChunkErrors();
 
         LogFailures("VPK archives", failedFiles, "Running the same command again retries only their missing chunks.");
@@ -727,7 +749,8 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
 
             // Disk errors are not the server's fault, so they fail the file
             await RandomAccess.WriteAsync(handle, buffer.AsMemory(0, written), placement.Position, cancellationToken);
-            Interlocked.Add(ref DownloadedBytes, written);
+            Interlocked.Add(ref NetworkBytes, chunk.CompressedLength);
+            Interlocked.Add(ref DiskBytes, written);
 
             return (null, server);
         }
