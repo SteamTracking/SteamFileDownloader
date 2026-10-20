@@ -85,7 +85,7 @@ internal static class Help
     }
 
     private static string LoginOptions => """
-          --username <name>   saved login to use instead of the last one
+          --username <name>   saved login to use instead of the last one, or with --password <pw> the account to log in as
           --anonymous         log in anonymously, enough for some free apps, and the default without saved logins
         """;
 
@@ -130,8 +130,8 @@ internal static class Help
         Exit codes:
           0  success
           1  something failed, including the command line or files.json, see stderr
-          3  no saved login, or Steam rejected the login: a person has to run "login", or with
-             --password, check --username and --password
+          3  no saved login for --username, or Steam rejected the login: a person has to run "login",
+             or with --password, check --username and --password
           4  Steam is rate limiting logins: wait about 15 minutes
         """;
 
@@ -185,7 +185,7 @@ internal static class Help
           <app>, --appid <app>   Steam app id
           --output <dir>         output folder
           --username <name>      Steam username, or anonymous; without --password a saved login
-                                 (default: the last saved login)
+                                 (default: the last saved login, else anonymous)
           --anonymous            the same as --username anonymous
           --password <password>  Steam password, needs --username
           --branch <name>        branch to download (default: public), also for --manifests from a beta
@@ -304,7 +304,8 @@ internal static class Help
 
         Usage:
           {ExeName} depots <app>... [--branch <name>]
-        stdout has a tab-separated row per depot: target  max size  notes
+        stdout has a tab-separated row per branch: app  branch  build id  updated
+        then a row per depot: target  max size  notes
 
         Examples:
           {ExeName} depots 570
@@ -315,11 +316,12 @@ internal static class Help
         {LoginOptions}
 
         Output:
+          Each app's branches come before its depots, all of them whatever --branch is. updated is a unix
+          time, or -. A depot row's target always has a slash and a branch row's app never does.
           target is <app>/<depot>:<manifest>, ready to pass to ls or get. The manifest is the latest on the
           branch, or public's when the branch has none ("manifest from public" in notes), and a depot with
           neither is just <app>/<depot>. max size is in bytes, or -. notes lists the name, os, arch, language,
           dlc and "shared from app <app>"; a shared depot's target names the app it is shared from.
-          Branches, with build ids and dates, are on stderr.
 
         {DepotsExitCodesText}
         """;
@@ -329,9 +331,11 @@ internal static class Help
 
         Usage:
           {ExeName} dd -app <app> [-depot <depot> [-manifest <manifest>]]... [-filelist <file>] [-dir <dir>]
-            [-branch <name>] [-username <name>] [-manifest-only]
-          {ExeName} dd -pubfile <item> [-filelist <file>] [-dir <dir>] [-username <name>] [-manifest-only]
-          {ExeName} dd -app <app> -ugc <manifest> [-filelist <file>] [-dir <dir>] [-username <name>] [-manifest-only]
+            [-branch <name>] [-username <name> [-password <pw>]] [-manifest-only]
+          {ExeName} dd -pubfile <item> [-filelist <file>] [-dir <dir>] [-username <name> [-password <pw>]]
+            [-manifest-only]
+          {ExeName} dd -app <app> -ugc <manifest> [-filelist <file>] [-dir <dir>] [-username <name> [-password <pw>]]
+            [-manifest-only]
 
         Example:
           {ExeName} dd -app 730 -depot 2347771 -manifest 8344780363095656278 -filelist files.txt
@@ -341,7 +345,8 @@ internal static class Help
         and a list without entries is an error. Without -filelist every file is downloaded, like get without
         patterns, so stdout has no rows. -dir sets the root output folder; files still go to <dir>/<depot>/<manifest>/<path>.
         Without -dir, it is the folder saved with config output, else depots in the current folder.
-        Other flags, like -remember-password or -loginid, are skipped: a random login id is used.
+        -password logs in with it on every run, without saving a login. Other flags, like -remember-password
+        or -loginid, are skipped: a random login id is used.
         -os and -language don't filter depots, so pick them with -depot.
         Password protected branches (-branchpassword) are not supported.
         For new command lines, use get or ls, which also take several apps, branches and VPK entries.
@@ -541,6 +546,7 @@ internal static class Help
         Usage:
           {ExeName} login                      show a QR code to scan in the Steam mobile app
           {ExeName} login --username <name>    use a password and Steam Guard code instead
+            [--password <pw>]                  the password, instead of typing it
           {ExeName} login list                 list saved logins (see login list --help)
           {ExeName} login remove <name>...     revoke saved logins and forget them (see login remove --help)
 

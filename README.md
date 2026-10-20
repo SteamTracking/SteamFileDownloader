@@ -38,8 +38,8 @@ SteamFileDownloader helps with datamining and reverse engineering of Source 2 ga
 # Save a login. Scan the QR code with the Steam mobile app, or use: login --username <name>
 SteamFileDownloader login
 
-# List the depots and branches of an app. The columns are <app>/<depot>:<manifest>, the maximum size and notes.
-# The first column is a target for ls and get.
+# List the branches and depots of an app. Branch rows have the app, branch, build id and update time.
+# Depot rows have <app>/<depot>:<manifest>, the maximum size and notes. Their first column is a target for ls and get.
 SteamFileDownloader depots 730
 
 # List the files of more than one build, and do not download them. The columns are depot, manifest, sha1, size and path.
@@ -125,6 +125,8 @@ SteamFileDownloader workshop get 3070715607 3070715607:5179645662803098587 -- "*
 
 To save more than one login, run `login` one time for each account. The last saved login is the default. For content that only one account owns, use `--username <name>` to select that account. For some apps that you do not have to buy, `--anonymous` is enough. If there is no saved login, SteamFileDownloader logs in with the anonymous account. `login` needs a person to scan the QR code or type the password, and an agent must ask the user to run it.
 
+All commands that log in also accept `--username <name> --password <password>`, for example in CI. They then log in with the password on each run and do not save a login. Steam Guard prompts do not work in a run without a user. `login --username <name> --password <password>` saves a login without a typed password.
+
 If you log in again with the QR code, SteamFileDownloader replaces the token of the account and revokes the old token. With `login --username`, if the saved login of that account still works, SteamFileDownloader only makes it the default. A token expires after about 200 days. In the last 30 days before this, each run asks Steam to renew the token.
 
 `login list` shows each saved login, if it is the default, and the date when its token expires. `login remove <name>...` revokes the tokens with Steam and removes the saved logins. Steam then does not accept copies of these tokens. If you remove the default login, the last saved login of the other logins becomes the default.
@@ -139,7 +141,7 @@ Each login uses a random login id. Because of this, parallel runs on one account
 SteamFileDownloader dd -app 730 -depot 2347771 -manifest 8344780363095656278 -filelist files.txt
 ```
 
-`dd` uses these flags: `-app`, `-depot`, `-manifest`, `-filelist`, `-dir`, `-branch`, `-username` and `-manifest-only`. `-username` selects a saved login. `dd` ignores all other flags, for example `-remember-password` and `-loginid`. `-os` and `-language` do not filter the depots. Use `-depot` to select the depots. `dd` cannot use a branch that has a password, and `-branchpassword` does not work.
+`dd` uses these flags: `-app`, `-depot`, `-manifest`, `-filelist`, `-dir`, `-branch`, `-username`, `-password` and `-manifest-only`. `-username` selects a saved login. With `-password`, `dd` logs in with the password and does not save a login. `dd` ignores all other flags, for example `-remember-password` and `-loginid`. `-os` and `-language` do not filter the depots. Use `-depot` to select the depots. `dd` cannot use a branch that has a password, and `-branchpassword` does not work.
 
 Each line in a `-filelist` file is a full path from the root of the depot, or a `regex:` pattern. Globs do not work. This is the same as in DepotDownloader. The files go into `<output>/<depot>/<manifest>/`, the same as with `get`. `-pubfile <item>` runs as `workshop get`, and the files go into `<output>/workshop/<item>/<manifest>/`. `-ugc <manifest>` runs as `get <app>/<app>:<manifest>`.
 
@@ -150,7 +152,7 @@ Each line in a `-filelist` file is a full path from the root of the depot, or a 
 | `0` | No failure |
 | `1` | A manifest, a file or another part of the run failed |
 | `2` | Usage error: an unknown option, or an argument that is not there or not correct. Correct the command line. For these errors, `track` exits with `1` |
-| `3` | There is no saved login, or Steam did not accept the login. A person must run `login`. For `track` with `--password`, do a check of the credentials |
+| `3` | There is no saved login for `--username`, or Steam did not accept the login. A person must run `login`. With `--password`, do a check of the credentials |
 | `4` | Steam limits the rate of logins. Wait about 15 minutes |
 | `5` | All of the failures were access failures. For some targets, Steam gave no depot key or manifest request code. It is possible that another account owns them: use `--username`. It is also possible that the manifest is on another branch or in another app |
 | `6` | A pattern matched no file in any target, and no other part of the run failed |
@@ -169,7 +171,7 @@ SteamFileDownloader track 730 --output csgo --save-all-manifests
 |---|---|---|
 | `<app>` or `--appid` | The Steam app id | Necessary |
 | `--output` | The output folder | Necessary |
-| `--username` | The Steam username, or `anonymous` | The last saved login |
+| `--username` | The Steam username, or `anonymous` | The last saved login, or `anonymous` if there is no saved login |
 | `--anonymous` | The same as `--username anonymous` | |
 | `--password` | The Steam password. Without it, `track` uses a saved login | A saved login |
 | `--branch` | The branch to download from | `public` |
@@ -219,8 +221,8 @@ The other parts of each archive are empty and sparse, and they use no disk space
 Use this command in new checkouts. It does not compare the files with the files from earlier runs. It does not delete files that are not in the manifest now. It does not download a file again if the file is on the disk with the correct hash.
 
 - **Start**: `track` loads `files.json` before it connects. If `files.json` has an error, the run fails quickly.
-- **Login**: `track` logs in with the anonymous account, with the username and password, or with a saved login. Steam Guard prompts do not work in a run without a user.
-- **Content delivery network (CDN) servers**: `track` uses `SteamCache` and `CDN` servers for the cell id. It does not use proxies, servers only for China, or servers only for specific apps. The requests go to the best 8 servers in turn. If a server fails 3 requests in sequence, `track` does not use that server for 30 seconds. A refused request also counts as a failure.
+- **Login**: `track` logs in with the anonymous account, with the username and password, or with a saved login. If there is no saved login and no `--username`, it logs in with the anonymous account. Steam Guard prompts do not work in a run without a user.
+- **Content delivery network (CDN) servers**: `track` uses `SteamCache` and `CDN` servers for the cell id. It does not use proxies, servers only for China, or servers only for specific apps. Each request goes to the least busy of the best 8 servers. If a server fails 3 requests in sequence, `track` does not use that server for 30 seconds. A refused request also counts as a failure.
 - **Depots**: `track` gets the depots from the PICS info of the app. It uses the depots in `files.json`. With `--save-all-manifests` or with VPK entries, it uses all depots. It does not use shared depots, which have a `depotfromapp` value. If a depot has no manifest on the branch, `track` uses the manifest from `public`. If the app does not have the branch, or the branch has a password, the run fails.
 - **Manifests**: `track` downloads each manifest with the depot key and a manifest request code. If this fails, it tries again. After a 401, 403 or 404 error, it tries one more time on another server with a new request code. If a depot is not in `files.json` and its manifest fails, `track` only writes the failure to the log.
 - **Files**: `track` disconnects from Steam, and then downloads the files from the CDN, 64 chunks at a time. It downloads identical files one time and copies them. It does a check of each chunk against its SHA-1, and writes the chunk into a file in the temporary folder of the system. When that file is complete, `track` moves it to its location. `track` tries failed chunks again on other servers for about 2 minutes, or until 2 servers refuse them. One line shows a summary of their errors.

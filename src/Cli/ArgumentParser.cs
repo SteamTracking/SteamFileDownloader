@@ -19,17 +19,17 @@ internal static class ArgumentParser
     // Options of each command: ones followed by a value, and flags
     internal static readonly Dictionary<string, (string[] Values, string[] Flags)> CommandOptions = new()
     {
-        ["get"] = (["output", "install-dir", "branch", "username"], ["anonymous"]),
-        ["ls"] = (["output", "branch", "username"], ["anonymous"]),
-        ["depots"] = (["branch", "username"], ["anonymous"]),
-        ["login"] = (["username"], []),
+        ["get"] = (["output", "install-dir", "branch", "username", "password"], ["anonymous"]),
+        ["ls"] = (["output", "branch", "username", "password"], ["anonymous"]),
+        ["depots"] = (["branch", "username", "password"], ["anonymous"]),
+        ["login"] = (["username", "password"], []),
         ["login list"] = ([], []),
         ["login remove"] = ([], []),
         ["track"] = (["appid", "output", "username", "password", "branch", "manifests"], ["anonymous", "save-manifest", "save-all-manifests"]),
-        ["workshop info"] = (["limit", "username"], ["history", "anonymous"]),
-        ["workshop search"] = (["limit", "username"], ["anonymous"]),
-        ["workshop ls"] = (["output", "username"], ["anonymous"]),
-        ["workshop get"] = (["output", "username"], ["anonymous"]),
+        ["workshop info"] = (["limit", "username", "password"], ["history", "anonymous"]),
+        ["workshop search"] = (["limit", "username", "password"], ["anonymous"]),
+        ["workshop ls"] = (["output", "username", "password"], ["anonymous"]),
+        ["workshop get"] = (["output", "username", "password"], ["anonymous"]),
         ["config output"] = ([], ["reset"]),
     };
 
@@ -153,9 +153,11 @@ internal static class ArgumentParser
             }
         }
 
-        if (options.ContainsKey("anonymous") && options.ContainsKey("username"))
+        var loginError = LoginOptions.From(options).Validate("--");
+
+        if (loginError != null)
         {
-            Log.Error($"--anonymous and --username can't be combined. {usage}");
+            Log.Error($"{loginError} {usage}");
             return null;
         }
 

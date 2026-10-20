@@ -6,7 +6,7 @@ public class LoginArgumentsTests
     {
         var arguments = LoginCommand.ParseArguments(commandLine.Length == 0 ? [] : commandLine.Split(' '));
 
-        return arguments == null ? null : $"{arguments.Command}|{arguments.Username}|{string.Join(",", arguments.Usernames)}";
+        return arguments == null ? null : $"{arguments.Command}|{arguments.Login.Username}|{string.Join(",", arguments.Usernames)}";
     }
 
     [Test]

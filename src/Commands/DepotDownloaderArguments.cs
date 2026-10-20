@@ -50,7 +50,7 @@ internal static class DepotDownloaderArguments
                     manifestOnly = true;
                     continue;
                 case "-app" or "-depot" or "-manifest" or "-pubfile" or "-ugc" or "-filelist"
-                    or "-dir" or "-branch" or "-beta" or "-username" or "-user" when value == null:
+                    or "-dir" or "-branch" or "-beta" or "-username" or "-user" or "-password" when value == null:
                     return Fail($"{args[i]} needs a value.");
                 case "-app":
                     if (!uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var appID))
@@ -110,7 +110,10 @@ internal static class DepotDownloaderArguments
                 case "-branchpassword" or "-betapassword":
                     return Fail("Password protected branches are not supported.");
                 case "-username" or "-user":
-                    options = options with { Username = value };
+                    options = options with { Login = options.Login with { Username = value } };
+                    break;
+                case "-password":
+                    options = options with { Login = options.Login with { Password = value } };
                     break;
                 case "-os" or "-osarch" or "-language" or "-all-platforms" or "-all-archs" or "-all-languages" or "-lowviolence":
                     // Without -depot, DepotDownloader picks depots by these, but here every depot of the app is used
@@ -145,6 +148,13 @@ internal static class DepotDownloaderArguments
         if (depotFilters.Count > 0)
         {
             Log.Warn($"Ignoring {string.Join(", ", depotFilters)}: depots aren't filtered by platform or language, so pick them with -depot.");
+        }
+
+        var loginError = options.Login.Validate("-");
+
+        if (loginError != null)
+        {
+            return Fail(loginError);
         }
 
         var hasItem = pubfile != null || ugc != null;

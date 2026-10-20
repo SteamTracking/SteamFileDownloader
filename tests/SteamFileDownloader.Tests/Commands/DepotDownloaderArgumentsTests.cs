@@ -138,19 +138,27 @@ public class DepotDownloaderArgumentsTests
     [Test]
     public async Task UsernameIsKept()
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-username", "me"])!.Options.Username).IsEqualTo("me");
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-user", "me"])!.Options.Username).IsEqualTo("me");
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-username", "me"])!.Options.Login.Username).IsEqualTo("me");
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-user", "me"])!.Options.Login.Username).IsEqualTo("me");
+    }
+
+    [Test]
+    public async Task PasswordIsKeptWithAUsername()
+    {
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-username", "me", "-password", "x"])!.Options.Login).IsEqualTo(new LoginOptions("me", "x"));
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-password", "x"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("-password needs -username.");
     }
 
     [Test]
     public async Task SkippedOptionsAreIgnoredWithAndWithoutValues()
     {
-        var result = DepotDownloaderArguments.Parse(["-remember-password", "-app", "730", "-loginid", "5", "-password", "x", "-os", "windows", "-all-platforms", "-depot", "1", "-max-downloads", "8"]);
+        var result = DepotDownloaderArguments.Parse(["-remember-password", "-app", "730", "-loginid", "5", "-os", "windows", "-all-platforms", "-depot", "1", "-max-downloads", "8"]);
 
         await Assert.That(result).IsNotNull();
         await Assert.That(result!.Options.App).IsEqualTo(730u);
         await Assert.That(string.Join(",", result.Targets)).IsEqualTo("1");
-        await Assert.That(result.Options.Username).IsNull();
+        await Assert.That(result.Options.Login.Username).IsNull();
     }
 
     [Test]

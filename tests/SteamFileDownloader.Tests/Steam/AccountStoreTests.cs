@@ -116,8 +116,8 @@ public class AccountStoreTests
         using var temp = new TempDirectory();
         var path = Path.Combine(temp.Path, "account.json");
 
-        await Assert.That(AccountStore.LoadCredentialsOrAnonymous(null, path)?.IsAnonymous).IsTrue();
-        await Assert.That(AccountStore.LoadCredentialsOrAnonymous("me", path)).IsNull();
+        await Assert.That(AccountStore.LoadCredentials(null, path)?.IsAnonymous).IsTrue();
+        await Assert.That(AccountStore.LoadCredentials("me", path)).IsNull();
     }
 
     [Test]
@@ -126,7 +126,7 @@ public class AccountStoreTests
         using var temp = new TempDirectory();
         var path = SaveAll(temp, "a", "b");
 
-        await Assert.That(AccountStore.LoadCredentialsOrAnonymous(null, path)?.Username).IsEqualTo("b");
+        await Assert.That(AccountStore.LoadCredentials(null, path)?.Username).IsEqualTo("b");
     }
 
     [Test]

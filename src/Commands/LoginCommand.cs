@@ -16,7 +16,7 @@ namespace SteamFileDownloader;
 /// <summary>
 /// A parsed login command line: login with an optional username, login list, or login remove with usernames.
 /// </summary>
-internal sealed record LoginArguments(string Command, string? Username, List<string> Usernames);
+internal sealed record LoginArguments(string Command, LoginOptions Login, List<string> Usernames);
 
 internal static class LoginCommand
 {
@@ -41,7 +41,7 @@ internal static class LoginCommand
                 return null;
             }
 
-            return new LoginArguments(command, null, parsed.Positionals);
+            return new LoginArguments(command, new LoginOptions(), parsed.Positionals);
         }
 
         var subcommands = ArgumentParser.GetSubcommands("login");
@@ -68,16 +68,16 @@ internal static class LoginCommand
             return null;
         }
 
-        return new LoginArguments(command, parsed.Options.GetValueOrDefault("username"), []);
+        return new LoginArguments(command, LoginOptions.From(parsed.Options), []);
     }
 
     /// <summary>
-    /// Logs in with a QR code when no username is given, otherwise with a password, and saves the refresh token.
-    /// A replaced token is revoked. A username whose saved login still works is only made the default.
+    /// Logs in with a QR code when no username is given, otherwise with the given password or one typed in, and saves
+    /// the refresh token. A replaced token is revoked. A username whose saved login still works is only made the default.
     /// </summary>
-    public static async Task<int> RunAsync(string? username, CancellationToken cancellationToken)
+    public static async Task<int> RunAsync(LoginOptions login, CancellationToken cancellationToken)
     {
-        string? password = null;
+        var (username, password, _) = login;
 
         // Agents run commands with captured output, where nobody would see the QR code and it would wait forever
         if (username == null && (Console.IsOutputRedirected || Console.IsInputRedirected))
@@ -130,7 +130,7 @@ internal static class LoginCommand
             }
         }
 
-        if (username != null)
+        if (username != null && password == null)
         {
             password = ReadPassword();
 

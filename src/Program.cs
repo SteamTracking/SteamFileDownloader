@@ -144,7 +144,7 @@ internal static class Program
         {
             "login list" => LoginCommand.List(),
             "login remove" => await LoginCommand.RemoveAsync(arguments.Usernames, cancellationToken),
-            _ => await LoginCommand.RunAsync(arguments.Username, cancellationToken),
+            _ => await LoginCommand.RunAsync(arguments.Login, cancellationToken),
         };
     }
 

@@ -49,7 +49,7 @@ public class GetCommandTests
     [Arguments("2347771", "regex:(", "Invalid regex pattern")]
     public async Task InvalidTargetOrPatternIsAUsageErrorBeforeLoggingIn(string target, string pattern, string error)
     {
-        var arguments = new DepotArguments("get", new DepotOptions(730, Anonymous: true), [target], [pattern]);
+        var arguments = new DepotArguments("get", new DepotOptions(730) { Login = new LoginOptions(Anonymous: true) }, [target], [pattern]);
 
         // Logging in would throw on the cancelled token
         await Assert.That(await GetCommand.RunAsync(arguments, new CancellationToken(canceled: true))).IsEqualTo(ExitCodes.UsageError);
@@ -59,7 +59,7 @@ public class GetCommandTests
     [Test]
     public async Task InstallDirWithVpkPatternsIsAUsageErrorBeforeLoggingIn()
     {
-        var options = new DepotOptions(730, Anonymous: true, InstallDir: "D:/Games/CS2");
+        var options = new DepotOptions(730, InstallDir: "D:/Games/CS2") { Login = new LoginOptions(Anonymous: true) };
         var arguments = new DepotArguments("get", options, ["2347770"], ["pak01_dir.vpk:scripts/a.txt"]);
 
         await Assert.That(await GetCommand.RunAsync(arguments, new CancellationToken(canceled: true))).IsEqualTo(ExitCodes.UsageError);

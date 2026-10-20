@@ -13,17 +13,18 @@ internal sealed record DepotOptions(
     uint? App,
     string? Output = null,
     string Branch = "public",
-    bool Anonymous = false,
-    string? Username = null,
     string? InstallDir = null)
 {
+    public LoginOptions Login { get; init; } = new();
+
     public static DepotOptions From(ParsedArguments parsed, uint? app) => new(
         app,
         parsed.Options.GetValueOrDefault("output"),
         parsed.Options.GetValueOrDefault("branch") ?? "public",
-        parsed.Options.ContainsKey("anonymous"),
-        parsed.Options.GetValueOrDefault("username"),
-        parsed.Options.GetValueOrDefault("install-dir"));
+        parsed.Options.GetValueOrDefault("install-dir"))
+    {
+        Login = LoginOptions.From(parsed.Options),
+    };
 }
 
 /// <summary>

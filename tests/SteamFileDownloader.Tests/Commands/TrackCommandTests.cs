@@ -30,7 +30,7 @@ public class TrackCommandTests
     {
         await Assert.That(TrackCommand.ParseArguments(["--appid", "1", "--output", "out", "--username", "anonymous", "--password", "x"])).IsNull();
         await Assert.That(TrackCommand.ParseArguments(["--appid", "1", "--output", "out", "--username", "Anonymous", "--password", "x"])).IsNull();
-        await Assert.That(TrackCommand.ParseArguments(["--appid", "1", "--output", "out", "--username", "anonymous"])?.Username).IsEqualTo("anonymous");
+        await Assert.That(TrackCommand.ParseArguments(["--appid", "1", "--output", "out", "--username", "anonymous"])?.Login.Username).IsEqualTo("anonymous");
     }
 
     [Test]
@@ -170,7 +170,7 @@ public class TrackCommandTests
     [Test]
     public async Task AnonymousIsTheSameAsUsernameAnonymous()
     {
-        await Assert.That(TrackCommand.ParseArguments(["730", "--output", ".", "--anonymous"])?.Username).IsEqualTo("anonymous");
+        await Assert.That(TrackCommand.ParseArguments(["730", "--output", ".", "--anonymous"])?.Login.GetCredentials()?.IsAnonymous).IsTrue();
         await Assert.That(TrackCommand.ParseArguments(["730", "--output", ".", "--anonymous", "--username", "me"])).IsNull();
         await Assert.That(TrackCommand.ParseArguments(["730", "--output", ".", "--anonymous", "--password", "x"])).IsNull();
         await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("--password can't be combined with --anonymous.");

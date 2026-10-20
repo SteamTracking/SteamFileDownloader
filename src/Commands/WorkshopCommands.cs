@@ -56,7 +56,7 @@ internal static class WorkshopCommands
         Func<SteamSession, Outcome, Task> write,
         CancellationToken cancellationToken)
     {
-        var (loggedOn, logOnExitCode) = await SteamSession.CreateLoggedOnAsync(options, takesTargets, cancellationToken);
+        var (loggedOn, logOnExitCode) = await SteamSession.CreateLoggedOnAsync(options.Login, takesTargets, cancellationToken);
 
         if (loggedOn == null)
         {

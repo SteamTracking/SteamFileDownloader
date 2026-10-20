@@ -37,23 +37,10 @@ internal static partial class AccountStore
 
     /// <summary>
     /// Credentials of the given saved login, or the default one when no username is given, or anonymous ones for the
-    /// username anonymous. Returns null with an error explaining how to log in.
+    /// username anonymous, or when no username is given and no login is saved, so a person can try free apps before
+    /// logging in. Returns null with an error explaining how to log in.
     /// </summary>
     public static LogOnCredentials? LoadCredentials(string? username, string? path = null)
-    {
-        if (LogOnCredentials.IsAnonymousName(username))
-        {
-            return LogOnCredentials.Anonymous;
-        }
-
-        return LoadSavedCredentials(username, Read(path));
-    }
-
-    /// <summary>
-    /// Like <see cref="LoadCredentials"/>, but anonymous credentials when no username is given and no
-    /// login is saved, so a person can try free apps before logging in.
-    /// </summary>
-    public static LogOnCredentials? LoadCredentialsOrAnonymous(string? username, string? path = null)
     {
         if (LogOnCredentials.IsAnonymousName(username))
         {

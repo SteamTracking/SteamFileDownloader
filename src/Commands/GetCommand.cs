@@ -183,7 +183,7 @@ internal static class GetCommand
             return ExitCodes.Failed;
         }
 
-        var (loggedOn, logOnExitCode) = await SteamSession.CreateLoggedOnAsync(options, takesTargets: true, cancellationToken);
+        var (loggedOn, logOnExitCode) = await SteamSession.CreateLoggedOnAsync(options.Login, takesTargets: true, cancellationToken);
 
         if (loggedOn == null)
         {

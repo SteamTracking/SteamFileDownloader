@@ -66,9 +66,6 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
 
     public CdnServerPool CdnServers { get; } = new(TimeProvider.System);
 
-    // The get, ls and depots commands keep depot keys between runs
-    public bool CacheDepotKeys { get; init; }
-
     // The get and ls commands take any number of targets, so a run per target only adds logins
     public bool TakesTargets { get; init; }
 
@@ -298,14 +295,16 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     /// Creates a session and logs on. Returns no session with the exit code after explaining why; missing credentials
     /// were explained when they were looked up.
     /// </summary>
-    public static async Task<(SteamSession? Session, int ExitCode)> CreateLoggedOnAsync(LogOnCredentials? credentials, bool cacheDepotKeys, bool takesTargets, CancellationToken cancellationToken)
+    public static async Task<(SteamSession? Session, int ExitCode)> CreateLoggedOnAsync(LoginOptions login, bool takesTargets, CancellationToken cancellationToken)
     {
+        var credentials = login.GetCredentials();
+
         if (credentials == null)
         {
             return (null, ExitCodes.NoAccess);
         }
 
-        var session = new SteamSession(cancellationToken) { CacheDepotKeys = cacheDepotKeys, TakesTargets = takesTargets };
+        var session = new SteamSession(cancellationToken) { TakesTargets = takesTargets };
         var exitCode = await session.LogOnAsync(credentials);
 
         if (exitCode != ExitCodes.Ok)
@@ -318,17 +317,6 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
         await session.RenewSavedLoginAsync();
 
         return (session, ExitCodes.Ok);
-    }
-
-    /// <summary>
-    /// Logs on with --anonymous, or a saved login picked by --username, which may be anonymous, or anonymously when no
-    /// login is saved.
-    /// </summary>
-    public static Task<(SteamSession? Session, int ExitCode)> CreateLoggedOnAsync(DepotOptions options, bool takesTargets, CancellationToken cancellationToken)
-    {
-        var credentials = options.Anonymous ? LogOnCredentials.Anonymous : AccountStore.LoadCredentialsOrAnonymous(options.Username);
-
-        return CreateLoggedOnAsync(credentials, cacheDepotKeys: true, takesTargets, cancellationToken);
     }
 
     private async Task<EResult> LogOnWithRetriesAsync(LogOnCredentials credentials)
@@ -920,7 +908,7 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
 
     private async Task<(byte[]? Key, bool NoAccess, string? Problem)> RequestDepotKeyAsync(ManifestJob job)
     {
-        var depotKey = CacheDepotKeys ? DepotCache.LoadDepotKey(job.DepotID) : null;
+        var depotKey = DepotCache.LoadDepotKey(job.DepotID);
 
         if (depotKey != null)
         {
@@ -960,10 +948,7 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
             return (null, false, $"Failed to get the depot key: Steam answered {keyResult.Result}.");
         }
 
-        if (CacheDepotKeys)
-        {
-            DepotCache.SaveDepotKey(job.DepotID, keyResult.DepotKey);
-        }
+        DepotCache.SaveDepotKey(job.DepotID, keyResult.DepotKey);
 
         return (keyResult.DepotKey, false, null);
     }

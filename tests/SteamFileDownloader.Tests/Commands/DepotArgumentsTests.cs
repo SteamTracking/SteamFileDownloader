@@ -172,11 +172,11 @@ public class DepotArgumentsTests
         var all = DepotArgumentParser.ParseArguments("get", ["730", "1", "--output", "out", "--branch", "beta", "--username", "me"]);
 
         await Assert.That(all).IsNotNull();
-        await Assert.That(all!.Options).IsEqualTo(new DepotOptions(730, "out", "beta", false, "me"));
+        await Assert.That(all!.Options).IsEqualTo(new DepotOptions(730, "out", "beta") { Login = new LoginOptions("me") });
 
         var anonymous = DepotArgumentParser.ParseArguments("get", ["730", "1", "--anonymous"]);
 
-        await Assert.That(anonymous!.Options.Anonymous).IsTrue();
+        await Assert.That(anonymous!.Options.Login.Anonymous).IsTrue();
 
         var install = DepotArgumentParser.ParseArguments("get", ["730", "1", "--install-dir", "D:/Games/CS2"]);
 

@@ -77,6 +77,19 @@ public class DepotsCommandTests
     }
 
     [Test]
+    public async Task EveryBranchGetsARowWithItsBuildBeforeTheDepots()
+    {
+        DepotsCommand.ListAppDepots(AppID, Parse(Depots), "beta");
+
+        var lines = TestContext.Current!.GetStandardOutput().Split(Environment.NewLine);
+
+        await Assert.That(lines[0]).IsEqualTo("4242\tpublic\t10\t1700000000");
+        await Assert.That(lines[1]).IsEqualTo("4242\tbeta\t11\t-");
+        await Assert.That(lines[2]).StartsWith("4242/");
+        await Assert.That(TestContext.Current!.GetErrorOutput()).DoesNotContain("branches");
+    }
+
+    [Test]
     public async Task TargetsParseAsTargets()
     {
         var (_, rows) = List(Depots, "public");

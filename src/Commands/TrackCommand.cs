@@ -17,8 +17,7 @@ namespace SteamFileDownloader;
 internal sealed record TrackArguments(
     uint AppID,
     string Output,
-    string? Username,
-    string? Password,
+    LoginOptions Login,
     string Branch,
     string? ManifestsFolder,
     bool SaveManifest,
@@ -79,31 +78,10 @@ internal static class TrackCommand
             return null;
         }
 
-        // --anonymous is the same as --username anonymous, which the parser already keeps apart from --username
-        if (options.ContainsKey("anonymous"))
-        {
-            options["username"] = "anonymous";
-        }
-
-        if (options.ContainsKey("password") && !options.ContainsKey("username"))
-        {
-            Log.Error($"--password needs --username. Without both, the last saved login is used. {Help.UsageHint("track")}");
-            return null;
-        }
-
-        if (options.ContainsKey("password") && LogOnCredentials.IsAnonymousName(options["username"]))
-        {
-            var anonymousOption = options.ContainsKey("anonymous") ? "--anonymous" : "--username anonymous";
-
-            Log.Error($"--password can't be combined with {anonymousOption}. {Help.UsageHint("track")}");
-            return null;
-        }
-
         return new TrackArguments(
             appID,
             output,
-            options.GetValueOrDefault("username"),
-            options.GetValueOrDefault("password"),
+            LoginOptions.From(options),
             options.GetValueOrDefault("branch") ?? "public",
             options.GetValueOrDefault("manifests"),
             options.ContainsKey("save-manifest"),
@@ -112,7 +90,7 @@ internal static class TrackCommand
 
     public static async Task<int> RunAsync(TrackArguments arguments, CancellationToken cancellationToken)
     {
-        var (appID, output, username, password, branch, manifestsFolder, saveManifest, saveAllManifests) = arguments;
+        var (appID, output, login, branch, manifestsFolder, saveManifest, saveAllManifests) = arguments;
         saveManifest |= saveAllManifests;
 
         var outputPath = Path.GetFullPath(output);
@@ -146,8 +124,7 @@ internal static class TrackCommand
             }
         }
 
-        var credentials = GetCredentials(username, password);
-        var (loggedOn, logOnExitCode) = await SteamSession.CreateLoggedOnAsync(credentials, cacheDepotKeys: false, takesTargets: false, cancellationToken);
+        var (loggedOn, logOnExitCode) = await SteamSession.CreateLoggedOnAsync(login, takesTargets: false, cancellationToken);
 
         if (loggedOn == null)
         {
@@ -483,16 +460,5 @@ internal static class TrackCommand
         }
 
         return await fileDownloader.DownloadPartialFiles(archives) && success;
-    }
-
-    // GameTracking passes a username and password, locally a saved login is enough
-    private static LogOnCredentials? GetCredentials(string? username, string? password)
-    {
-        if (username != null && password != null)
-        {
-            return new LogOnCredentials(username, password);
-        }
-
-        return AccountStore.LoadCredentials(username);
     }
 }

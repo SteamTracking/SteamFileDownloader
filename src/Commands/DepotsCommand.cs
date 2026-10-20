@@ -14,7 +14,7 @@ namespace SteamFileDownloader;
 internal static class DepotsCommand
 {
     /// <summary>
-    /// Lists the depots of apps with their manifest on a branch, and the apps' branches on stderr.
+    /// Lists the branches of apps with their build ids, and their depots with their manifest on a branch.
     /// </summary>
     public static async Task<int> ListDepotsAsync(DepotArguments arguments, CancellationToken cancellationToken)
     {
@@ -36,7 +36,7 @@ internal static class DepotsCommand
             }
         }
 
-        var (loggedOn, logOnExitCode) = await SteamSession.CreateLoggedOnAsync(options, takesTargets: false, cancellationToken);
+        var (loggedOn, logOnExitCode) = await SteamSession.CreateLoggedOnAsync(options.Login, takesTargets: false, cancellationToken);
 
         if (loggedOn == null)
         {
@@ -73,18 +73,13 @@ internal static class DepotsCommand
             return false;
         }
 
-        var branches = new List<string>();
-
         foreach (var branch in depots["branches"].Children)
         {
-            var password = branch["pwdrequired"].AsBoolean() ? ", password" : "";
-            var updated = FormatTime(branch["timeupdated"].AsLong());
+            var updated = branch["timeupdated"].AsLong();
+            var updatedText = updated > 0 ? updated.ToString(CultureInfo.InvariantCulture) : "-";
 
-            branches.Add($"{branch.Name} (build {branch["buildid"].Value}{password}{updated})");
+            Log.Result($"{appID}\t{branch.Name}\t{branch["buildid"].Value}\t{updatedText}");
         }
-
-        Log.Info("");
-        Log.Info($"App {appID} branches: {string.Join(", ", branches)}");
 
         if (!AppInfo.GetDepots(depots).Any())
         {
@@ -127,7 +122,5 @@ internal static class DepotsCommand
         }
 
         return true;
-
-        static string FormatTime(long unixTime) => unixTime > 0 ? $", {AccountStore.FormatDate(DateTimeOffset.FromUnixTimeSeconds(unixTime))}" : "";
     }
 }

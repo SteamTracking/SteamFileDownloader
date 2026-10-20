@@ -225,4 +225,31 @@ public class ArgumentParserTests
         await Assert.That(ArgumentParser.Parse("get", ["--anonymous", "--username", "me"])).IsNull();
         await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("--anonymous and --username can't be combined.");
     }
+
+    [Test]
+    [Arguments("get")]
+    [Arguments("ls")]
+    [Arguments("depots")]
+    [Arguments("login")]
+    [Arguments("track")]
+    [Arguments("workshop info")]
+    [Arguments("workshop search")]
+    [Arguments("workshop ls")]
+    [Arguments("workshop get")]
+    public async Task EveryLoginCommandTakesAPasswordWithAUsername(string command)
+    {
+        var parsed = ArgumentParser.Parse(command, ["--username", "me", "--password", "x"]);
+
+        await Assert.That(LoginOptions.From(parsed!.Options)).IsEqualTo(new LoginOptions("me", "x"));
+    }
+
+    [Test]
+    [Arguments(new[] { "--password", "x" }, "--password needs --username.")]
+    [Arguments(new[] { "--anonymous", "--password", "x" }, "--password can't be combined with --anonymous.")]
+    [Arguments(new[] { "--username", "Anonymous", "--password", "x" }, "--password can't be combined with --username anonymous.")]
+    public async Task PasswordNeedsAUsernameThatIsNotAnonymous(string[] args, string error)
+    {
+        await Assert.That(ArgumentParser.Parse("depots", args)).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains(error);
+    }
 }
