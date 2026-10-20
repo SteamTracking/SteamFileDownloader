@@ -42,6 +42,8 @@ internal static class ManifestCache
                 return null;
             }
 
+            SetTime(job, path, manifest.CreationTime);
+
             return manifest;
         }
         catch (Exception e) when (e is not OperationCanceledException)
@@ -49,6 +51,22 @@ internal static class ManifestCache
             // A broken file of any kind is replaced by a download
             Log.Warn($"[{job}] Failed to read {path}, so it is downloaded again: {e.Message}");
             return null;
+        }
+    }
+
+    // Dates a saved manifest to when it was created, like downloaded files, also when copied from Steam's depotcache
+    private static void SetTime(ManifestJob job, string path, DateTime creationTime)
+    {
+        try
+        {
+            if (File.GetLastWriteTimeUtc(path) != creationTime)
+            {
+                File.SetLastWriteTimeUtc(path, creationTime);
+            }
+        }
+        catch (Exception e) when (OutputFiles.IsFileError(e))
+        {
+            Log.Warn($"[{job}] Failed to set the date of {path}: {e.Message}");
         }
     }
 
@@ -63,8 +81,12 @@ internal static class ManifestCache
 
         try
         {
-            // Written whole before it replaces anything, since other runs may read it meanwhile
-            Secrets.WriteFileAtomic(path, temp => job.Manifest!.SaveToFile(temp));
+            // Written whole and dated before it replaces anything, since other runs may read it meanwhile
+            Secrets.WriteFileAtomic(path, temp =>
+            {
+                job.Manifest!.SaveToFile(temp);
+                File.SetLastWriteTimeUtc(temp, job.CreationTime);
+            });
         }
         catch (Exception e) when (OutputFiles.IsFileError(e))
         {
