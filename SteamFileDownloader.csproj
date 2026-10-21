@@ -27,9 +27,9 @@
     <InternalsVisibleTo Include="SteamFileDownloader.Tests" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="QRCoder" Version="1.8.0" />
-    <PackageReference Include="SteamKit2" Version="3.4.0" />
-    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />
-    <PackageReference Include="ValvePak" Version="6.0.0.182" />
+    <PackageReference Include="QRCoder" Version="1.8.1" />
+    <PackageReference Include="SteamKit2" Version="3.5.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.13" />
+    <PackageReference Include="ValvePak" Version="7.1.0.211" />
   </ItemGroup>
 </Project>

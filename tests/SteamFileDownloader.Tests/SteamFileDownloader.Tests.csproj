@@ -10,7 +10,7 @@
     <ProjectReference Include="../../SteamFileDownloader.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="TUnit" Version="1.74.0" />
+    <PackageReference Include="TUnit" Version="1.76.0" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Files/**" CopyToOutputDirectory="PreserveNewest" />
