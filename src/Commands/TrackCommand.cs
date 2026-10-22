@@ -19,6 +19,7 @@ internal sealed record TrackArguments(
     string Output,
     LoginOptions Login,
     string Branch,
+    string? BranchPassword,
     string? ManifestsFolder,
     bool SaveManifest,
     bool SaveAllManifests);
@@ -83,6 +84,7 @@ internal static class TrackCommand
             output,
             LoginOptions.From(options),
             options.GetValueOrDefault("branch") ?? "public",
+            options.GetValueOrDefault("branch-password"),
             options.GetValueOrDefault("manifests"),
             options.ContainsKey("save-manifest"),
             options.ContainsKey("save-all-manifests"));
@@ -90,7 +92,7 @@ internal static class TrackCommand
 
     public static async Task<int> RunAsync(TrackArguments arguments, CancellationToken cancellationToken)
     {
-        var (appID, output, login, branch, manifestsFolder, saveManifest, saveAllManifests) = arguments;
+        var (appID, output, login, branch, branchPassword, manifestsFolder, saveManifest, saveAllManifests) = arguments;
         saveManifest |= saveAllManifests;
 
         var outputPath = Path.GetFullPath(output);
@@ -143,6 +145,20 @@ internal static class TrackCommand
             return ExitCodes.Failed;
         }
 
+        List<string>? unlockedBranches = null;
+
+        if (branchPassword != null)
+        {
+            var (unlocked, unlockExitCode) = await session.UnlockBranchesAsync("track", appID, appInfo, branchPassword);
+
+            if (unlocked == null)
+            {
+                return unlockExitCode;
+            }
+
+            unlockedBranches = unlocked;
+        }
+
         var depots = appInfo["depots"];
 
         if (!AppInfo.GetDepots(depots).Any())
@@ -152,7 +168,7 @@ internal static class TrackCommand
         }
 
         // Falling back to public would save public files under this branch's build id
-        if (!AppInfo.CheckBranch(depots, appID, branch))
+        if (!AppInfo.CheckBranch(depots, appID, branch, unlockedBranches))
         {
             return ExitCodes.Failed;
         }

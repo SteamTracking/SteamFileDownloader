@@ -50,10 +50,48 @@ internal static class AppInfo
     }
 
     /// <summary>
-    /// Whether the app has the branch and its manifests are visible, since otherwise every depot would silently
-    /// fall back to public. Logs an error when not.
+    /// Merges the depot section that Steam gives for password protected branches into the app's info, adding the
+    /// branches and their manifests to the public ones.
     /// </summary>
-    public static bool CheckBranch(KeyValue depots, uint appID, string branch)
+    public static void MergePrivateDepots(KeyValue appInfo, KeyValue privateDepots)
+    {
+        var depots = appInfo["depots"];
+
+        if (depots == KeyValue.Invalid)
+        {
+            depots = new KeyValue("depots");
+            appInfo.Children.Add(depots);
+        }
+
+        MergeInto(depots, privateDepots);
+    }
+
+    private static void MergeInto(KeyValue target, KeyValue source)
+    {
+        foreach (var child in source.Children)
+        {
+            var existing = target[child.Name!];
+
+            if (existing == KeyValue.Invalid)
+            {
+                target.Children.Add(child);
+            }
+            else if (child.Children.Count == 0)
+            {
+                existing.Value = child.Value;
+            }
+            else
+            {
+                MergeInto(existing, child);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether the app has the branch and its manifests are visible, since otherwise every depot would silently
+    /// fall back to public. Logs an error when not. With a branch password, unlockedBranches are the branches it unlocked.
+    /// </summary>
+    public static bool CheckBranch(KeyValue depots, uint appID, string branch, IReadOnlyCollection<string>? unlockedBranches = null)
     {
         if (string.Equals(branch, "public", StringComparison.OrdinalIgnoreCase))
         {
@@ -62,10 +100,11 @@ internal static class AppInfo
 
         var branches = depots["branches"];
         var branchInfo = branches[branch];
+        var unlockedNote = unlockedBranches != null ? $" {DescribeUnlockedBranches(unlockedBranches)}" : "";
 
         if (branchInfo == KeyValue.Invalid)
         {
-            Log.Error($"App {appID} has no branch \"{branch}\". Its branches are: {string.Join(", ", branches.Children.Select(static b => b.Name))}.");
+            Log.Error($"App {appID} has no branch \"{branch}\". Its branches are: {string.Join(", ", branches.Children.Select(static b => b.Name))}.{unlockedNote}");
             return false;
         }
 
@@ -74,14 +113,33 @@ internal static class AppInfo
         {
             var hasVisibleManifest = GetDepots(depots).Any(d => d.Depot["manifests"][branch] != KeyValue.Invalid);
 
+            if (!hasVisibleManifest && unlockedBranches == null)
+            {
+                Log.Error($"Branch \"{branch}\" of app {appID} is password protected. Give its password with --branch-password.");
+                return false;
+            }
+
             if (!hasVisibleManifest)
             {
-                Log.Error($"Branch \"{branch}\" of app {appID} is password protected, which is not supported.");
+                Log.Error($"Branch \"{branch}\" of app {appID} is password protected, and the branch password does not unlock it.{unlockedNote}");
                 return false;
             }
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Says which branches a branch password unlocked.
+    /// </summary>
+    public static string DescribeUnlockedBranches(IReadOnlyCollection<string> unlockedBranches)
+    {
+        if (unlockedBranches.Count == 0)
+        {
+            return "The branch password unlocks no branch.";
+        }
+
+        return $"The branch password unlocks: {string.Join(", ", unlockedBranches)}.";
     }
 
     /// <summary>

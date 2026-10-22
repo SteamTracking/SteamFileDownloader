@@ -92,7 +92,7 @@ internal static class Help
     private static string Options => $"""
         Options (anywhere before --):
           --output <dir>      root output folder (default: as saved with config output, else depots in the current folder)
-          --branch <name>     branch for targets without @<branch> (default: public)
+          --branch <name>, --branch-password <pw>  branch for targets without @<branch> (default: public), and its password
         {LoginOptions}
         """;
 
@@ -109,7 +109,8 @@ internal static class Help
           4  Steam is rate limiting logins: wait about 15 minutes
           5  only access failed: Steam gave no depot key or manifest request code for some targets.
              Another account may own them (--username), or the manifest is on another branch
-             (@<branch>) or in another app (<app>/<depot>)
+             (@<branch>) or in another app (<app>/<depot>). Also given when the account can't see an
+             app's password protected branches (--branch-password)
           6  a pattern matched nothing in any target, and nothing failed
         """;
 
@@ -173,7 +174,7 @@ internal static class Help
 
         Usage:
           {ExeName} track <app> --output <dir> [--username <name> [--password <password>] | --anonymous]
-            [--branch <name>] [--manifests <folder>] [--save-manifest] [--save-all-manifests]
+            [--branch <name> [--branch-password <password>]] [--manifests <folder>] [--save-manifest] [--save-all-manifests]
 
         Examples:
           {ExeName} track 570 --output . --save-all-manifests
@@ -189,6 +190,8 @@ internal static class Help
           --anonymous            the same as --username anonymous
           --password <password>  Steam password, needs --username
           --branch <name>        branch to download (default: public), also for --manifests from a beta
+          --branch-password <password>
+                                 unlocks a password protected branch, if it is the password of this app
           --manifests <folder>   manifest ids from the manifest_<depot>.txt files of an older run
           --save-manifest        save the manifests of the depots in files.json as text to <dir>/manifests/
           --save-all-manifests   save the manifests of every depot as text to <dir>/manifests/
@@ -303,7 +306,7 @@ internal static class Help
         Lists apps' depots, to find which one holds what. Needs a Steam login.
 
         Usage:
-          {ExeName} depots <app>... [--branch <name>]
+          {ExeName} depots <app>... [--branch <name> [--branch-password <password>]]
         stdout has a tab-separated row per branch: app  branch  build id  updated
         then a row per depot: target  max size  notes
 
@@ -313,6 +316,7 @@ internal static class Help
 
         Options:
           --branch <name>     branch whose manifests are listed (default: public)
+          --branch-password <pw>  password of password protected branches, which are then listed too
         {LoginOptions}
 
         Output:
@@ -331,7 +335,7 @@ internal static class Help
 
         Usage:
           {ExeName} dd -app <app> [-depot <depot> [-manifest <manifest>]]... [-filelist <file>] [-dir <dir>]
-            [-branch <name>] [-username <name> [-password <pw>]] [-manifest-only]
+            [-branch <name> [-branchpassword <pw>]] [-username <name> [-password <pw>]] [-manifest-only]
           {ExeName} dd -pubfile <item> [-filelist <file>] [-dir <dir>] [-username <name> [-password <pw>]]
             [-manifest-only]
           {ExeName} dd -app <app> -ugc <manifest> [-filelist <file>] [-dir <dir>] [-username <name> [-password <pw>]]
@@ -347,7 +351,7 @@ internal static class Help
         Without -dir, it is the folder saved with config output, else depots in the current folder.
         -password logs in with it on every run, without saving a login. Other DepotDownloader flags, like
         -remember-password or -os, are unsupported, so pick depots with -depot.
-        Password protected branches (-branchpassword) are not supported.
+        -branchpassword (or -betapassword) is the password of a password protected branch.
         For new command lines, use get or ls, which also take several apps, branches and VPK entries.
 
         -pubfile runs as workshop get (or ls), so files go to <dir>/workshop/<item>/<manifest>/<path>. -ugc is a

@@ -52,6 +52,7 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     private readonly CancellationTokenSource PumpCts;
     private readonly CancellationToken CancellationToken;
     private readonly Dictionary<(uint DepotID, uint KeyAppID), Task<(byte[]? Key, bool NoAccess, string? Problem)>> DepotKeys = [];
+    private readonly Dictionary<uint, Dictionary<string, byte[]>> BranchKeys = [];
     private readonly Lock LazyLock = new();
     private readonly Client CdnClient;
     private Task<bool>? CdnServersTask;
@@ -629,6 +630,95 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
         return appInfos;
     }
 
+    /// <summary>
+    /// Unlocks the password protected branches of an app that the password is for, by merging their depots into the
+    /// app's info. Returns the names of the unlocked branches, or null after logging why there are none, with the exit
+    /// code of the command for it.
+    /// </summary>
+    public async Task<(List<string>? Branches, int ExitCode)> UnlockBranchesAsync(string command, uint appID, KeyValue appInfo, string password)
+    {
+        SteamApps.CheckAppBetaPasswordCallback check;
+
+        try
+        {
+            check = await RequestFromSteamAsync("branch password check", async () => await Apps.CheckAppBetaPassword(appID, password));
+        }
+        catch (Exception e) when (IsError(e))
+        {
+            Log.Error($"Failed to check the branch password of app {appID}: {DescribeError(e)}");
+            return (null, ExitCodes.Failed);
+        }
+
+        // Steam fails the password of an app that the account can see, and denies the app's branches to an account that can't
+        if (check.Result == EResult.Fail)
+        {
+            Log.Error($"Steam did not accept the branch password for app {appID}. Check the password.");
+            return (null, ExitCodes.ForUsageError(command));
+        }
+
+        if (check.Result == EResult.AccessDenied)
+        {
+            Log.Error($"Steam gave no access to the password protected branches of app {appID} ({check.Result}): this account may need to own the app.");
+            return (null, ExitCodes.NoDepotAccess);
+        }
+
+        if (check.Result != EResult.OK)
+        {
+            Log.Error($"Failed to check the branch password of app {appID}: Steam answered {check.Result}.");
+            return (null, ExitCodes.Failed);
+        }
+
+        var unlocked = new List<string>();
+        var keys = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (branch, key) in check.BetaPasswords)
+        {
+            SteamApps.PrivateBetaCallback privateBeta;
+
+            try
+            {
+                privateBeta = await RequestFromSteamAsync("private branch request", async () =>
+                {
+                    var tokenResult = await Apps.PICSGetAccessTokens([appID], []);
+                    var accessToken = tokenResult.AppTokens.GetValueOrDefault(appID);
+
+                    return await Apps.PICSGetPrivateBeta(appID, accessToken, branch, key);
+                });
+            }
+            catch (Exception e) when (IsError(e))
+            {
+                Log.Error($"Failed to get the depots of branch \"{branch}\" of app {appID}: {DescribeError(e)}");
+                return (null, ExitCodes.Failed);
+            }
+
+            if (privateBeta.Result != EResult.OK)
+            {
+                Log.Error($"Failed to get the depots of branch \"{branch}\" of app {appID}: Steam answered {privateBeta.Result}.");
+                return (null, ExitCodes.Failed);
+            }
+
+            AppInfo.MergePrivateDepots(appInfo, privateBeta.DepotSection);
+            unlocked.Add(branch);
+            keys[branch] = key;
+        }
+
+        BranchKeys[appID] = keys;
+
+        return (unlocked, ExitCodes.Ok);
+    }
+
+    // Steam wants the hex of a branch's key as the password hash of its manifest request codes. Null for a branch
+    // without a password
+    private string? GetBranchPasswordHash(uint appID, string branch)
+    {
+        if (BranchKeys.TryGetValue(appID, out var keys) && keys.TryGetValue(branch, out var key))
+        {
+            return Convert.ToHexStringLower(key);
+        }
+
+        return null;
+    }
+
     public async Task<List<PublishedFileDetails>> GetPublishedFileDetailsAsync(IReadOnlyCollection<ulong> itemIDs)
     {
         var request = new CPublishedFile_GetDetails_Request
@@ -876,7 +966,9 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
 
         try
         {
-            code = await RequestFromSteamAsync("manifest request code", () => Content.GetManifestRequestCode(job.DepotID, job.KeyAppID, job.ManifestID, job.Branch));
+            var branchPasswordHash = GetBranchPasswordHash(job.AppID, job.Branch);
+
+            code = await RequestFromSteamAsync("manifest request code", () => Content.GetManifestRequestCode(job.DepotID, job.KeyAppID, job.ManifestID, job.Branch, branchPasswordHash));
         }
         catch (Exception e) when (IsError(e))
         {

@@ -19,13 +19,13 @@ internal static class ArgumentParser
     // Options of each command: ones followed by a value, and flags
     internal static readonly Dictionary<string, (string[] Values, string[] Flags)> CommandOptions = new()
     {
-        ["get"] = (["output", "install-dir", "branch", "username", "password"], ["anonymous"]),
-        ["ls"] = (["output", "branch", "username", "password"], ["anonymous"]),
-        ["depots"] = (["branch", "username", "password"], ["anonymous"]),
+        ["get"] = (["output", "install-dir", "branch", "branch-password", "username", "password"], ["anonymous"]),
+        ["ls"] = (["output", "branch", "branch-password", "username", "password"], ["anonymous"]),
+        ["depots"] = (["branch", "branch-password", "username", "password"], ["anonymous"]),
         ["login"] = (["username", "password"], []),
         ["login list"] = ([], []),
         ["login remove"] = ([], []),
-        ["track"] = (["appid", "output", "username", "password", "branch", "manifests"], ["anonymous", "save-manifest", "save-all-manifests"]),
+        ["track"] = (["appid", "output", "username", "password", "branch", "branch-password", "manifests"], ["anonymous", "save-manifest", "save-all-manifests"]),
         ["workshop info"] = (["limit", "username", "password"], ["history", "anonymous"]),
         ["workshop search"] = (["limit", "username", "password"], ["anonymous"]),
         ["workshop ls"] = (["output", "username", "password"], ["anonymous"]),

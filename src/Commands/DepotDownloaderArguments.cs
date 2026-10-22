@@ -25,6 +25,8 @@ internal static class DepotDownloaderArguments
         "dir",
         "branch",
         "beta",
+        "branchpassword",
+        "betapassword",
         "username",
         "user",
         "password",
@@ -66,7 +68,7 @@ internal static class DepotDownloaderArguments
                     manifestOnly = true;
                     continue;
                 case "-app" or "-depot" or "-manifest" or "-pubfile" or "-ugc" or "-filelist"
-                    or "-dir" or "-branch" or "-beta" or "-username" or "-user" or "-password" when value == null:
+                    or "-dir" or "-branch" or "-beta" or "-branchpassword" or "-betapassword" or "-username" or "-user" or "-password" when value == null:
                     return Fail($"{args[i]} needs a value.");
                 case "-app":
                     if (!uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var appID))
@@ -124,7 +126,8 @@ internal static class DepotDownloaderArguments
                     options = options with { Branch = value };
                     break;
                 case "-branchpassword" or "-betapassword":
-                    return Fail("Password protected branches are not supported.");
+                    options = options with { BranchPassword = value };
+                    break;
                 case "-username" or "-user":
                     options = options with { Login = options.Login with { Username = value } };
                     break;

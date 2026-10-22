@@ -13,7 +13,8 @@ internal sealed record DepotOptions(
     uint? App,
     string? Output = null,
     string Branch = "public",
-    string? InstallDir = null)
+    string? InstallDir = null,
+    string? BranchPassword = null)
 {
     public LoginOptions Login { get; init; } = new();
 
@@ -21,7 +22,8 @@ internal sealed record DepotOptions(
         app,
         parsed.Options.GetValueOrDefault("output"),
         parsed.Options.GetValueOrDefault("branch") ?? "public",
-        parsed.Options.GetValueOrDefault("install-dir"))
+        parsed.Options.GetValueOrDefault("install-dir"),
+        parsed.Options.GetValueOrDefault("branch-password"))
     {
         Login = LoginOptions.From(parsed.Options),
     };

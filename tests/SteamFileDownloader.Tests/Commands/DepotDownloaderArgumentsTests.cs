@@ -90,6 +90,8 @@ public class DepotDownloaderArgumentsTests
     [Arguments("-dir")]
     [Arguments("-branch")]
     [Arguments("-beta")]
+    [Arguments("-branchpassword")]
+    [Arguments("-betapassword")]
     public async Task OptionWithoutValueIsAnError(string option)
     {
         await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", option])).IsNull();
@@ -130,9 +132,12 @@ public class DepotDownloaderArgumentsTests
     [Test]
     [Arguments("-branchpassword")]
     [Arguments("-betapassword")]
-    public async Task BranchPasswordsAreRejected(string option)
+    public async Task BranchPasswordsAreKept(string option)
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", option, "secret"])).IsNull();
+        var result = DepotDownloaderArguments.Parse(["-app", "730", "-branch", "dev", option, "secret"]);
+
+        await Assert.That(result!.Options.BranchPassword).IsEqualTo("secret");
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730"])!.Options.BranchPassword).IsNull();
     }
 
     [Test]

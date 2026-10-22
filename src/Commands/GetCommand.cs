@@ -32,6 +32,16 @@ internal static class GetCommand
         // The folder of --install-dir, which every manifest's files go to directly instead of a folder per manifest
         public string? InstallFolder;
 
+        // The command's name, which decides the exit code of a usage error
+        public string Command = "get";
+
+        // The password of the password protected branches to unlock, and the branches it unlocked per app
+        public string? BranchPassword;
+        public Dictionary<uint, List<string>> UnlockedBranches = [];
+
+        // The exit code to end the run with right away, after an error that makes the rest pointless
+        public int? AbortExitCode;
+
         public List<ManifestJob> Jobs = [];
         public Dictionary<ManifestJob, List<MatchedFile>> Matches = [];
         public Dictionary<string, int> MatchCounts = [];
@@ -196,6 +206,8 @@ internal static class GetCommand
         var downloads = command is "get" or "workshop get";
         var run = new Run
         {
+            Command = command,
+            BranchPassword = options.BranchPassword,
             Filter = filter,
             Session = session,
             OutputRoot = outputRoot,
@@ -207,6 +219,11 @@ internal static class GetCommand
         _ = session.EnsureCdnServersAsync();
 
         await resolveJobs(run);
+
+        if (run.AbortExitCode != null)
+        {
+            return run.AbortExitCode.Value;
+        }
 
         await session.DownloadManifestsAsync(run.Jobs);
 
@@ -455,6 +472,22 @@ internal static class GetCommand
             appInfos[appID] = appInfo;
         }
 
+        if (run.BranchPassword != null)
+        {
+            foreach (var appID in appIDs.Where(appInfos.ContainsKey))
+            {
+                var (unlocked, exitCode) = await run.Session.UnlockBranchesAsync(run.Command, appID, appInfos[appID], run.BranchPassword);
+
+                if (unlocked == null)
+                {
+                    run.AbortExitCode = exitCode;
+                    return;
+                }
+
+                run.UnlockedBranches[appID] = unlocked;
+            }
+        }
+
         run.SearchAllHint = GetSearchAllHint(targets);
 
         // Depots without a manifest on the target's branch that use public's instead, said once per app and branch
@@ -494,7 +527,7 @@ internal static class GetCommand
                 continue;
             }
 
-            if (!AppInfo.CheckBranch(depots, target.AppID, target.Branch))
+            if (!AppInfo.CheckBranch(depots, target.AppID, target.Branch, run.UnlockedBranches.GetValueOrDefault(target.AppID)))
             {
                 run.Fail($"{target.Source} (branch {target.Branch})");
                 continue;

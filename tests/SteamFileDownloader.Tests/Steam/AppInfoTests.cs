@@ -156,6 +156,107 @@ public class AppInfoTests
         await Assert.That(AppInfo.CheckBranch(depots, 1, "secret")).IsTrue();
     }
 
+    private const string PrivateDepots = """
+        "privatedepots"
+        {
+            "228990"
+            {
+                "manifests"
+                {
+                    "locked"
+                    {
+                        "gid" "444"
+                    }
+                }
+            }
+            "228992"
+            {
+                "manifests"
+                {
+                    "locked"
+                    {
+                        "gid" "555"
+                    }
+                }
+            }
+            "branches"
+            {
+                "locked"
+                {
+                    "buildid" "30"
+                    "pwdrequired" "1"
+                }
+                "hidden"
+                {
+                    "buildid" "40"
+                    "pwdrequired" "1"
+                }
+            }
+        }
+        """;
+
+    private static KeyValue ParseAppInfo()
+    {
+        var appInfo = new KeyValue("appinfo");
+        appInfo.Children.Add(Parse(Depots));
+
+        return appInfo;
+    }
+
+    [Test]
+    public async Task MergePrivateDepotsAddsBranchesAndManifests()
+    {
+        var appInfo = ParseAppInfo();
+
+        AppInfo.MergePrivateDepots(appInfo, Parse(PrivateDepots));
+
+        var depots = appInfo["depots"];
+
+        await Assert.That(depots["branches"]["locked"]["buildid"].Value).IsEqualTo("30");
+        await Assert.That(depots["branches"]["hidden"]["buildid"].Value).IsEqualTo("40");
+        await Assert.That(depots["branches"]["beta"]["buildid"].Value).IsEqualTo("2");
+        await Assert.That(AppInfo.GetManifestIdForBranch(depots["228990"], "locked")).IsEqualTo((444ul, false));
+        await Assert.That(AppInfo.GetManifestIdForBranch(depots["228990"], "beta")).IsEqualTo((222ul, false));
+        await Assert.That(AppInfo.GetManifestIdForBranch(depots["228992"], "locked")).IsEqualTo((555ul, false));
+        await Assert.That(AppInfo.GetDepots(depots).Select(static d => d.ID)).IsEquivalentTo([228990u, 228991u, 228992u]);
+    }
+
+    [Test]
+    public async Task MergePrivateDepotsCreatesMissingDepotsSection()
+    {
+        var appInfo = new KeyValue("appinfo");
+
+        AppInfo.MergePrivateDepots(appInfo, Parse(PrivateDepots));
+
+        await Assert.That(AppInfo.GetDepots(appInfo["depots"]).Count()).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task CheckBranchAcceptsUnlockedPasswordProtectedBranch()
+    {
+        var appInfo = ParseAppInfo();
+
+        AppInfo.MergePrivateDepots(appInfo, Parse(PrivateDepots));
+
+        await Assert.That(AppInfo.CheckBranch(appInfo["depots"], 228980, "locked", ["locked", "hidden"])).IsTrue();
+    }
+
+    [Test]
+    public async Task CheckBranchRejectsPasswordProtectedBranchThePasswordDoesNotUnlock()
+    {
+        var depots = Parse(Depots);
+
+        await Assert.That(AppInfo.CheckBranch(depots, 228980, "locked", ["other"])).IsFalse();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("The branch password unlocks: other.");
+    }
+
+    [Test]
+    public async Task CheckBranchAsksForThePasswordOfAPasswordProtectedBranch()
+    {
+        await Assert.That(AppInfo.CheckBranch(Parse(Depots), 228980, "locked")).IsFalse();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("--branch-password");
+    }
+
     [Test]
     public async Task ManifestIdOfBranchIsReadFromGid()
     {

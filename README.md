@@ -74,6 +74,9 @@ SteamFileDownloader ls 570 -- hammer.dll
 
 # Download from a manifest that is only on a beta branch.
 SteamFileDownloader get 730 2347779:2591545799285498410@animgraph_2_beta -- resourcecompiler.dll
+
+# Use a branch that has a password. Steam does not list these branches until you give the password.
+SteamFileDownloader depots 896660 --branch public-test --branch-password yesimadebackups
 ```
 
 To see the full usage, run `SteamFileDownloader` without arguments, or run `SteamFileDownloader <command> --help`. Put the value of an option after a space or after an equals sign. For example: `--output D:/SteamDepots` or `--output=D:/SteamDepots`. To show the version and the commit, run `SteamFileDownloader --version`. You can also use `-V` or `version`.
@@ -98,6 +101,8 @@ To use one output folder from all locations, save it with `config output <dir>`.
 For `get`, `ls`, `workshop get`, `workshop ls` and `dd`, `--output` has priority over the saved folder. For `dd`, use `-dir` in place of `--output`. `track` always needs its own `--output`.
 
 With `get --install-dir <dir>`, SteamFileDownloader puts the files of all manifests in `<dir>/<path>`, the same as a Steam install. If two manifests have different files at the same path, the file of the later target or depot replaces the other, and a warning shows the files. If you give no targets, `get` uses all depots, for all platforms and languages, so give the depots to install. SteamFileDownloader does not delete files that are no longer in the manifests. It still saves the manifests in `<output>/manifests/`. You cannot use `<path>_dir.vpk:` patterns with `--install-dir`.
+
+`get`, `ls`, `depots` and `track` accept `--branch-password <password>` for branches that have a password. With the password, SteamFileDownloader asks Steam to unlock the password branches of each app that needs its app info, and adds them to the branches and depots of the app. Use `--branch` or `@<branch>` to select one of them. The password is for one app, so use it with one app. If Steam does not accept the password, the exit code is `2` (`1` for `track`). If the account cannot see the private branches of the app, for example because it does not own the app, the exit code is `5`. If the password is correct but does not unlock the branch, the error shows the branches that it unlocks.
 
 SteamFileDownloader saves each manifest to `<output>/manifests/<depot>_<manifest>.manifest`. When it needs that manifest again, it reads this file and does not download the manifest again. The `depotcache` folder of Steam uses the same file names, and you can copy its files into this folder too.
 
@@ -145,7 +150,7 @@ Each login uses a random login id. Because of this, parallel runs on one account
 SteamFileDownloader dd -app 730 -depot 2347771 -manifest 8344780363095656278 -filelist files.txt
 ```
 
-`dd` uses these flags: `-app`, `-depot`, `-manifest`, `-filelist`, `-dir`, `-branch`, `-username`, `-password` and `-manifest-only`. `-username` selects a saved login. With `-password`, `dd` logs in with the password and does not save a login. `dd` rejects all other flags, for example `-remember-password`, `-loginid`, `-os` and `-language`. Use `-depot` to select the depots. `dd` cannot use a branch that has a password, and `-branchpassword` does not work.
+`dd` uses these flags: `-app`, `-depot`, `-manifest`, `-filelist`, `-dir`, `-branch`, `-branchpassword`, `-username`, `-password` and `-manifest-only`. `-username` selects a saved login. With `-password`, `dd` logs in with the password and does not save a login. `dd` rejects all other flags, for example `-remember-password`, `-loginid`, `-os` and `-language`. Use `-depot` to select the depots. `-branchpassword`, or `-betapassword`, is the same as `--branch-password`.
 
 Each line in a `-filelist` file is a full path from the root of the depot, or a `regex:` pattern. Globs do not work. This is the same as in DepotDownloader. The files go into `<output>/<depot>/<manifest>/`, the same as with `get`. `-pubfile <item>` runs as `workshop get`, and the files go into `<output>/workshop/<item>/<manifest>/`. `-ugc <manifest>` runs as `get <app>/<app>:<manifest>`.
 
@@ -158,7 +163,7 @@ Each line in a `-filelist` file is a full path from the root of the depot, or a 
 | `2` | Usage error: an unknown option, or an argument that is not there or not correct. Correct the command line. For these errors, `track` exits with `1` |
 | `3` | There is no saved login for `--username`, or Steam did not accept the login. A person must run `login`. With `--password`, do a check of the credentials |
 | `4` | Steam limits the rate of logins. Wait about 15 minutes |
-| `5` | All of the failures were access failures. For some targets, Steam gave no depot key or manifest request code. It is possible that another account owns them: use `--username`. It is also possible that the manifest is on another branch or in another app |
+| `5` | All of the failures were access failures. For some targets, Steam gave no depot key or manifest request code. It is possible that another account owns them: use `--username`. It is also possible that the manifest is on another branch or in another app. The code is also `5` if the account cannot see the password branches of an app |
 | `6` | A pattern matched no file in any target, and no other part of the run failed |
 
 To report a problem, go to https://github.com/SteamTracking/SteamFileDownloader/issues.
@@ -179,6 +184,7 @@ SteamFileDownloader track 730 --output csgo --save-all-manifests
 | `--anonymous` | The same as `--username anonymous` | |
 | `--password` | The Steam password. Without it, `track` uses a saved login | A saved login |
 | `--branch` | The branch to download from | `public` |
+| `--branch-password` | The password of a branch that has a password. It unlocks the password branches of the app | No password |
 | `--manifests` | A folder with `manifest_<depot>.txt` files from an earlier run. `track` downloads that build | The latest manifests |
 | `--save-manifest` | Save the manifests of the depots in `files.json` as text in `<output>/manifests/` | `false` |
 | `--save-all-manifests` | Save the manifests of all depots as text in `<output>/manifests/` | `false` |
@@ -227,7 +233,7 @@ Use this command in new checkouts. It does not compare the files with the files 
 - **Start**: `track` loads `files.json` before it connects. If `files.json` has an error, the run fails quickly.
 - **Login**: `track` logs in with the anonymous account, with the username and password, or with a saved login. If there is no saved login and no `--username`, it logs in with the anonymous account. Steam Guard prompts do not work in a run without a user.
 - **Content delivery network (CDN) servers**: `track` uses `SteamCache` and `CDN` servers for the cell id. It does not use proxies, servers only for China, or servers only for specific apps. Each request goes to the least busy of the best 8 servers. If a server fails 3 requests in sequence, `track` does not use that server for 30 seconds. A refused request also counts as a failure.
-- **Depots**: `track` gets the depots from the PICS info of the app. It uses the depots in `files.json`. With `--save-all-manifests` or with VPK entries, it uses all depots. It does not use shared depots, which have a `depotfromapp` value. If a depot has no manifest on the branch, `track` uses the manifest from `public`. If the app does not have the branch, or the branch has a password, the run fails.
+- **Depots**: `track` gets the depots from the PICS info of the app. It uses the depots in `files.json`. With `--save-all-manifests` or with VPK entries, it uses all depots. It does not use shared depots, which have a `depotfromapp` value. If a depot has no manifest on the branch, `track` uses the manifest from `public`. If the app does not have the branch, or the branch has a password that `--branch-password` did not unlock, the run fails.
 - **Manifests**: `track` downloads each manifest with the depot key and a manifest request code. If this fails, it tries again. After a 401, 403 or 404 error, it tries one more time on another server with a new request code. If a depot is not in `files.json` and its manifest fails, `track` only writes the failure to the log.
 - **Files**: `track` disconnects from Steam, and then downloads the files from the CDN, 64 chunks at a time. It downloads identical files one time and copies them. It does a check of each chunk against its SHA-1, and writes the chunk into a file in the temporary folder of the system. When that file is complete, `track` moves it to its location. `track` tries failed chunks again on other servers until 2 servers refuse them, or until no chunk downloads for 15 minutes. One line shows a summary of their errors.
 - **Output**: messages go to stdout. Warnings and errors go to stderr. When the `CI` environment variable has a value, they are `::warning::` and `::error::` lines. Without a terminal, `track` shows a `Progress:` line each 30 seconds.

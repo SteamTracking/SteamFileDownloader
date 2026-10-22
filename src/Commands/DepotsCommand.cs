@@ -46,6 +46,23 @@ internal static class DepotsCommand
         using var session = loggedOn;
 
         var appInfos = await session.GetAppInfosAsync(appIDs);
+        var unlockedBranches = new Dictionary<uint, List<string>>();
+
+        if (options.BranchPassword != null)
+        {
+            foreach (var appID in appIDs.Where(appInfos.ContainsKey))
+            {
+                var (unlocked, exitCode) = await session.UnlockBranchesAsync("depots", appID, appInfos[appID], options.BranchPassword);
+
+                if (unlocked == null)
+                {
+                    return exitCode;
+                }
+
+                unlockedBranches[appID] = unlocked;
+            }
+        }
+
         session.Disconnect();
 
         var success = true;
@@ -59,16 +76,16 @@ internal static class DepotsCommand
                 continue;
             }
 
-            success &= ListAppDepots(appID, appInfo["depots"], options.Branch);
+            success &= ListAppDepots(appID, appInfo["depots"], options.Branch, unlockedBranches.GetValueOrDefault(appID));
         }
 
         return success ? ExitCodes.Ok : ExitCodes.Failed;
     }
 
     // Returns false after an error
-    internal static bool ListAppDepots(uint appID, KeyValue depots, string branchName)
+    internal static bool ListAppDepots(uint appID, KeyValue depots, string branchName, IReadOnlyCollection<string>? unlockedBranches = null)
     {
-        if (!AppInfo.CheckBranch(depots, appID, branchName))
+        if (!AppInfo.CheckBranch(depots, appID, branchName, unlockedBranches))
         {
             return false;
         }
@@ -76,6 +93,13 @@ internal static class DepotsCommand
         foreach (var branch in depots["branches"].Children)
         {
             var updated = branch["timeupdated"].AsLong();
+
+            // Password protected branches have their own name for it
+            if (updated == 0)
+            {
+                updated = branch["timebuildupdated"].AsLong();
+            }
+
             var updatedText = updated > 0 ? updated.ToString(CultureInfo.InvariantCulture) : "-";
 
             Log.Result($"{appID}\t{branch.Name}\t{branch["buildid"].Value}\t{updatedText}");
