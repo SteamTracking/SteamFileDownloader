@@ -338,4 +338,67 @@ public class AppInfoTests
             """);
         await Assert.That(AppInfo.GetManifestIdForBranch(depot, "beta")).IsEqualTo((555ul, true));
     }
+
+    [Test]
+    public async Task GetDlcAppIDsReadsListOfDlcWhenDepotsAreInDlc()
+    {
+        var appInfo = Parse("""
+            "appinfo"
+            {
+                "depots" { "hasdepotsindlc" "1" }
+                "extended" { "listofdlc" "4780, 4790,4780,x" }
+            }
+            """);
+
+        await Assert.That(AppInfo.GetDlcAppIDs(appInfo)).IsEquivalentTo([4780u, 4790u]);
+    }
+
+    [Test]
+    public async Task GetDlcAppIDsIsEmptyWithoutHasDepotsInDlc()
+    {
+        var appInfo = Parse("""
+            "appinfo"
+            {
+                "depots" { }
+                "extended" { "listofdlc" "4780" }
+            }
+            """);
+
+        await Assert.That(AppInfo.GetDlcAppIDs(appInfo)).IsEmpty();
+    }
+
+    [Test]
+    public async Task MergeDlcDepotsAddsOnlyNewDepotsWithDlcAppID()
+    {
+        var appInfo = Parse("""
+            "appinfo"
+            {
+                "depots"
+                {
+                    "hasdepotsindlc" "1"
+                    "4701" { "dlcappid" "4780" "name" "own" }
+                }
+            }
+            """);
+        var dlcInfo = Parse("""
+            "appinfo"
+            {
+                "depots"
+                {
+                    "4701" { "dlcappid" "4780" "name" "other" }
+                    "4781" { "dlcappid" "4780" }
+                    "4782" { "name" "no dlc app" }
+                    "branches" { "public" { "buildid" "9" } }
+                }
+            }
+            """);
+
+        AppInfo.MergeDlcDepots(appInfo, dlcInfo);
+
+        var depots = AppInfo.GetDepots(appInfo["depots"]).ToList();
+
+        await Assert.That(depots.Select(static d => d.ID)).IsEquivalentTo([4701u, 4781u]);
+        await Assert.That(appInfo["depots"]["4701"]["name"].Value).IsEqualTo("own");
+        await Assert.That(AppInfo.GetKeyAppID(appInfo["depots"]["4781"], 4700)).IsEqualTo(4780u);
+    }
 }

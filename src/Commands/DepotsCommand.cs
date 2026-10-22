@@ -46,6 +46,9 @@ internal static class DepotsCommand
         using var session = loggedOn;
 
         var appInfos = await session.GetAppInfosAsync(appIDs);
+
+        await session.AddDlcDepotsAsync(appInfos.Values);
+
         var unlockedBranches = new Dictionary<uint, List<string>>();
 
         if (options.BranchPassword != null)

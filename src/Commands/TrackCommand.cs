@@ -145,6 +145,8 @@ internal static class TrackCommand
             return ExitCodes.Failed;
         }
 
+        await session.AddDlcDepotsAsync([appInfo]);
+
         List<string>? unlockedBranches = null;
 
         if (branchPassword != null)

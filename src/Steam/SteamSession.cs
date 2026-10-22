@@ -631,6 +631,44 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     }
 
     /// <summary>
+    /// Adds the DLC depots to the info of apps that keep some in their DLC's own info, using one request for all the DLC.
+    /// A DLC that can't be seen is skipped without an error.
+    /// </summary>
+    public async Task AddDlcDepotsAsync(IReadOnlyCollection<KeyValue> appInfos)
+    {
+        var dlcAppIDs = new List<uint>();
+
+        foreach (var appInfo in appInfos)
+        {
+            foreach (var dlcAppID in AppInfo.GetDlcAppIDs(appInfo))
+            {
+                if (!dlcAppIDs.Contains(dlcAppID))
+                {
+                    dlcAppIDs.Add(dlcAppID);
+                }
+            }
+        }
+
+        if (dlcAppIDs.Count == 0)
+        {
+            return;
+        }
+
+        var dlcInfos = await GetAppInfosAsync(dlcAppIDs, logFailures: false);
+
+        foreach (var appInfo in appInfos)
+        {
+            foreach (var dlcAppID in AppInfo.GetDlcAppIDs(appInfo))
+            {
+                if (dlcInfos.TryGetValue(dlcAppID, out var dlcInfo))
+                {
+                    AppInfo.MergeDlcDepots(appInfo, dlcInfo);
+                }
+            }
+        }
+    }
+
+    /// <summary>
     /// Unlocks the password protected branches of an app that the password is for, by merging their depots into the
     /// app's info. Returns the names of the unlocked branches, or null after logging why there are none, with the exit
     /// code of the command for it.

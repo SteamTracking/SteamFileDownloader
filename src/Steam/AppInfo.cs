@@ -50,6 +50,58 @@ internal static class AppInfo
     }
 
     /// <summary>
+    /// The DLC apps of an app that keeps some of its depots in its DLC's own info, which is when its "hasdepotsindlc" is
+    /// set. Empty otherwise.
+    /// </summary>
+    public static List<uint> GetDlcAppIDs(KeyValue appInfo)
+    {
+        var dlcAppIDs = new List<uint>();
+
+        if (appInfo["depots"]["hasdepotsindlc"].AsInteger() == 0)
+        {
+            return dlcAppIDs;
+        }
+
+        var listOfDlc = appInfo["extended"]["listofdlc"].Value;
+
+        if (string.IsNullOrEmpty(listOfDlc))
+        {
+            return dlcAppIDs;
+        }
+
+        foreach (var part in listOfDlc.Split(','))
+        {
+            if (uint.TryParse(part.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var dlcAppID) && !dlcAppIDs.Contains(dlcAppID))
+            {
+                dlcAppIDs.Add(dlcAppID);
+            }
+        }
+
+        return dlcAppIDs;
+    }
+
+    /// <summary>
+    /// Adds the depots of a DLC's own info that name a "dlcappid" to the app's depots, unless the app has them already.
+    /// </summary>
+    public static void MergeDlcDepots(KeyValue appInfo, KeyValue dlcInfo)
+    {
+        var depots = appInfo["depots"];
+
+        if (depots == KeyValue.Invalid)
+        {
+            return;
+        }
+
+        foreach (var (_, depot) in GetDepots(dlcInfo["depots"]))
+        {
+            if (depot["dlcappid"].AsUnsignedInteger() != 0 && depots[depot.Name!] == KeyValue.Invalid)
+            {
+                depots.Children.Add(depot);
+            }
+        }
+    }
+
+    /// <summary>
     /// Merges the depot section that Steam gives for password protected branches into the app's info, adding the
     /// branches and their manifests to the public ones.
     /// </summary>

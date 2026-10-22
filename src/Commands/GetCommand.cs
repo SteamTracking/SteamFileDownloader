@@ -463,6 +463,8 @@ internal static class GetCommand
             .ToList();
         var appInfos = await run.Session.GetAppInfosAsync(appIDs);
 
+        await run.Session.AddDlcDepotsAsync(appInfos.Values);
+
         // Explicit targets only need their app to find the depot's DLC for its key, so an app that can't be found is no error
         var explicitAppIDs = targets.Select(static t => t.AppID).Distinct().Except(appIDs).ToList();
         var explicitAppInfos = await run.Session.GetAppInfosAsync(explicitAppIDs, logFailures: false);
