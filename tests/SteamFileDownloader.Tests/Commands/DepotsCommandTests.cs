@@ -11,7 +11,6 @@ public class DepotsCommandTests
         {
             "100"
             {
-                "name" "Content"
                 "maxsize" "500"
                 "config" { "oslist" "windows" }
                 "manifests"
@@ -53,20 +52,33 @@ public class DepotsCommandTests
         }
         """;
 
+    // The app that depot 104 is shared from
+    private const string SourceAppInfo = """
+        "appinfo"
+        {
+            "depots"
+            {
+                "104" { "manifests" { "public" { "gid" "1040" } } }
+            }
+        }
+        """;
+
     private static KeyValue Parse(string text) => KeyValue.LoadFromString(text)!;
 
-    private static bool ListAppDepots(KeyValue depots, string branch, IReadOnlyDictionary<string, string>? userConfig = null)
+    private static bool ListAppDepots(KeyValue depots, string branch, IReadOnlyDictionary<string, string>? userConfig = null, Dictionary<uint, KeyValue>? sourceInfos = null)
     {
         var install = new InstallOptions();
         var selection = DepotFilter.Select(depots, install, userConfig ?? DepotFilter.CreateUserConfig(install, isMusic: false));
 
-        return DepotsCommand.ListAppDepots(AppID, depots, branch, null, selection);
+        sourceInfos ??= new Dictionary<uint, KeyValue> { [228980] = Parse(SourceAppInfo) };
+
+        return DepotsCommand.ListAppDepots(AppID, depots, branch, null, selection, sourceInfos);
     }
 
     // The result rows by depot id, as their columns: target, max size, notes
-    private static (bool Result, Dictionary<string, string[]> Rows) List(string depots, string branch)
+    private static (bool Result, Dictionary<string, string[]> Rows) List(string depots, string branch, Dictionary<uint, KeyValue>? sourceInfos = null)
     {
-        var result = ListAppDepots(Parse(depots), branch);
+        var result = ListAppDepots(Parse(depots), branch, sourceInfos: sourceInfos);
 
         var rows = TestContext.Current!.GetStandardOutput()
             .Split(Environment.NewLine)
@@ -84,7 +96,8 @@ public class DepotsCommandTests
     [Arguments("beta", "101", "4242/101:1010")]
     [Arguments("public", "102", "4242/102")]
     [Arguments("public", "103", "4242/103:1030")]
-    [Arguments("public", "104", "228980/104")]
+    [Arguments("public", "104", "228980/104:1040")]
+    [Arguments("beta", "104", "228980/104:1040")]
     public async Task EveryDepotGetsARowWithATargetOfTheBranch(string branch, string depot, string target)
     {
         var (result, rows) = List(Depots, branch);
@@ -92,6 +105,15 @@ public class DepotsCommandTests
         await Assert.That(result).IsTrue();
         await Assert.That(rows.Keys).IsEquivalentTo(["100", "101", "102", "103", "104"]);
         await Assert.That(rows[depot][0]).IsEqualTo(target);
+    }
+
+    [Test]
+    public async Task SharedInstallWithoutTheInfoOfItsAppHasNoManifest()
+    {
+        var (result, rows) = List(Depots, "public", new Dictionary<uint, KeyValue>());
+
+        await Assert.That(result).IsTrue();
+        await Assert.That(rows["104"][0]).IsEqualTo("228980/104");
     }
 
     [Test]

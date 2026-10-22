@@ -67,6 +67,33 @@ internal static class AppInfo
     }
 
     /// <summary>
+    /// Adds the other apps that shared install depots come from to the list, each once.
+    /// </summary>
+    public static void AddSharedInstallSourceApps(List<uint> sourceAppIDs, uint appID, IEnumerable<(uint ID, KeyValue Depot)> depots)
+    {
+        foreach (var (_, depot) in depots)
+        {
+            var sourceAppID = GetSharedInstallSourceApp(depot, appID);
+
+            if (sourceAppID != null && !sourceAppIDs.Contains(sourceAppID.Value))
+            {
+                sourceAppIDs.Add(sourceAppID.Value);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A shared install depot in the info of the app it comes from, which has its manifests, or null when that info or
+    /// depot is missing.
+    /// </summary>
+    public static KeyValue? GetSourceDepot(IReadOnlyDictionary<uint, KeyValue> sourceInfos, uint sourceAppID, uint depotID)
+    {
+        var depot = sourceInfos.GetValueOrDefault(sourceAppID)?["depots"][depotID.ToString(CultureInfo.InvariantCulture)];
+
+        return depot == KeyValue.Invalid ? null : depot;
+    }
+
+    /// <summary>
     /// The app to request the depot's key with: the DLC that owns the depot when it has one, else the app being installed.
     /// </summary>
     public static uint GetKeyAppID(KeyValue? depot, uint appID)

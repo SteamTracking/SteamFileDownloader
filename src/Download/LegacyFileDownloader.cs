@@ -204,7 +204,7 @@ internal sealed class LegacyFileDownloader(HttpClient client, CancellationToken 
             }
             catch (Exception e) when (OutputFiles.IsFileError(e))
             {
-                Log.Error($"[{item}] Failed to write {item.FileName}: {e.Message}");
+                Log.Error($"[{item}] Failed to write {item.FileName}: {OutputFiles.DescribeError(e)}");
                 failed.Add(item.ToString());
             }
             finally

@@ -151,9 +151,9 @@ internal static class DownloadCommand
             // A shared install has the manifests and key of the app it comes from, and goes in the same folder
             if (AppInfo.GetSharedInstallSourceApp(depot, appID) is { } sourceAppID)
             {
-                var sourceDepot = sourceInfos.GetValueOrDefault(sourceAppID)?["depots"][depotName];
+                var sourceDepot = AppInfo.GetSourceDepot(sourceInfos, sourceAppID, depotID);
 
-                if (sourceDepot == null || sourceDepot == KeyValue.Invalid)
+                if (sourceDepot == null)
                 {
                     skipped.Add(new SkippedDepot(depotID, $"app {sourceAppID} unavailable"));
                     continue;
@@ -231,15 +231,7 @@ internal static class DownloadCommand
     {
         var sourceAppIDs = new List<uint>();
 
-        foreach (var (_, depot) in selection.Depots)
-        {
-            var sourceAppID = AppInfo.GetSharedInstallSourceApp(depot, appID);
-
-            if (sourceAppID != null && !sourceAppIDs.Contains(sourceAppID.Value))
-            {
-                sourceAppIDs.Add(sourceAppID.Value);
-            }
-        }
+        AppInfo.AddSharedInstallSourceApps(sourceAppIDs, appID, selection.Depots);
 
         return await run.Session.GetAppInfosAsync(sourceAppIDs, logFailures: false);
     }

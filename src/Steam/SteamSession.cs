@@ -1078,7 +1078,7 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
             return (0, "Steam gave no manifest request code: this account may have no access to the item, or the manifest isn't one of the item's.");
         }
 
-        return (0, "Steam gave no manifest request code: the manifest may be on another branch (set it with --branch, or @<branch> in a target) or in another app, or this account has no access to it.");
+        return (0, "Steam gave no manifest request code: the manifest may be on another branch (set it with --branch, or @<branch> in a target) or in another app, or this account has no access to it. Steam also stops giving codes for many old manifests, so one that isn't the latest of its branch may not be downloadable.");
     }
 
     /// <summary>

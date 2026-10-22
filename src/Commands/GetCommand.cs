@@ -141,7 +141,7 @@ internal static class GetCommand
 
             if (!HideRows)
             {
-                Log.Result($"{first}\t{manifest}\t{string.Join('\t', columns)}");
+                Log.ResultRow(first, manifest, columns);
             }
         }
     }

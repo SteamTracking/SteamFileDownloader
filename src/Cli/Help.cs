@@ -145,7 +145,8 @@ internal static class Help
              (@<branch>) or in another app (<app>/<depot>). Also given when the account can't see an
              app's password protected branches (--branch-password). Free apps and free weekends need
              a license on the account first: add them in the Steam client, since this tool doesn't
-             request free licenses
+             request free licenses. Steam also stops giving codes for many old manifests, so one that
+             isn't the latest of its branch may not be downloadable
           6  a pattern matched nothing in any target, and nothing failed
         """;
 
@@ -422,10 +423,10 @@ internal static class Help
           time, or -. A depot row's target always has a slash and a branch row's app never does.
           target is <app>/<depot>:<manifest>, ready to pass to ls or get. The manifest is the latest on the
           branch, or public's when the branch has none ("manifest from public" in notes), and a depot with
-          neither is just <app>/<depot>. max size is in bytes, or -. notes lists the name, os, arch, language,
-          dlc and "shared from app <app>", and "skipped: <key> <value>" for a depot that download skips on this
+          neither is just <app>/<depot>. max size is in bytes, or -. notes lists the os, arch, language, dlc
+          and "shared from app <app>", and "skipped: <key> <value>" for a depot that download skips on this
           machine, like "skipped: mod czero", which download can add. A shared depot's target names the app it is
-          shared from.
+          shared from, with that app's manifest.
 
         {DepotsExitCodesText}
         """;

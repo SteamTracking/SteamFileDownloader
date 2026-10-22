@@ -52,6 +52,8 @@ internal static class DepotsCommand
             return exitCode;
         }
 
+        var sourceInfos = await session.GetAppInfosAsync(GetSharedInstallSourceApps(appInfos), logFailures: false);
+
         session.Disconnect();
 
         var success = true;
@@ -67,15 +69,29 @@ internal static class DepotsCommand
 
             var selection = DepotFilter.SelectForApp(appInfo, new InstallOptions());
 
-            success &= ListAppDepots(appID, appInfo["depots"], options.Branch, unlockedBranches.GetValueOrDefault(appID), selection);
+            success &= ListAppDepots(appID, appInfo["depots"], options.Branch, unlockedBranches.GetValueOrDefault(appID), selection, sourceInfos);
         }
 
         return success ? ExitCodes.Ok : ExitCodes.Failed;
     }
 
+    // The other apps that depots of the apps are shared from, which have the manifests of those depots
+    private static List<uint> GetSharedInstallSourceApps(Dictionary<uint, KeyValue> appInfos)
+    {
+        var sourceAppIDs = new List<uint>();
+
+        foreach (var (appID, appInfo) in appInfos)
+        {
+            AppInfo.AddSharedInstallSourceApps(sourceAppIDs, appID, AppInfo.GetDepots(appInfo["depots"]));
+        }
+
+        return sourceAppIDs;
+    }
+
     // Returns false after an error. The depots that the selection skips, which is what download skips by default, get a
-    // note with the reason
-    internal static bool ListAppDepots(uint appID, KeyValue depots, string branchName, IReadOnlyCollection<string>? unlockedBranches, DepotSelection selection)
+    // note with the reason. Shared installs show the manifest of the app they come from, when its info is in sourceInfos
+    internal static bool ListAppDepots(uint appID, KeyValue depots, string branchName, IReadOnlyCollection<string>? unlockedBranches, DepotSelection selection,
+        IReadOnlyDictionary<uint, KeyValue> sourceInfos)
     {
         if (!AppInfo.CheckBranch(depots, appID, branchName, unlockedBranches))
         {
@@ -107,12 +123,18 @@ internal static class DepotsCommand
 
         foreach (var (depotID, depot) in AppInfo.GetDepots(depots))
         {
-            var (manifestID, fromPublic) = AppInfo.GetManifestIdForBranch(depot, branchName);
+            var manifestDepot = depot;
+
+            if (AppInfo.GetSharedInstallSourceApp(depot, appID) is { } sourceAppID)
+            {
+                manifestDepot = AppInfo.GetSourceDepot(sourceInfos, sourceAppID, depotID) ?? KeyValue.Invalid;
+            }
+
+            var (manifestID, fromPublic) = AppInfo.GetManifestIdForBranch(manifestDepot, branchName);
             var config = depot["config"];
             var fromApp = AppInfo.GetSharedInstallApp(depot);
             var notes = new List<string>();
 
-            AddNote("name", depot["name"].Value);
             AddNote("os", config["oslist"].Value);
             AddNote("arch", config["osarch"].Value);
             AddNote("language", config["language"].Value);

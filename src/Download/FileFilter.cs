@@ -26,17 +26,38 @@ internal sealed partial class FileFilter
     // "<dir.vpk>:<entry>" entries, only the needed chunks of archives are downloaded
     public List<VpkPattern> VpkPatterns { get; } = [];
 
-    public List<FilePattern> GetMatchingPatterns(string path) => [.. Patterns.Where(p => p.Regex.IsMatch(path))];
+    // Called for every file of a manifest, so a file that matches nothing allocates nothing
+    public IReadOnlyList<FilePattern> GetMatchingPatterns(string path)
+    {
+        List<FilePattern>? matching = null;
+
+        foreach (var pattern in Patterns)
+        {
+            if (pattern.Regex.IsMatch(path))
+            {
+                matching ??= [];
+                matching.Add(pattern);
+            }
+        }
+
+        return matching ?? [];
+    }
 
     // The VPK patterns whose directory file this is
     public IReadOnlyList<VpkPattern> GetVpkPatterns(string path)
     {
-        if (VpkPatterns.Count == 0)
+        List<VpkPattern>? matching = null;
+
+        foreach (var pattern in VpkPatterns)
         {
-            return [];
+            if (pattern.Dir.IsMatch(path))
+            {
+                matching ??= [];
+                matching.Add(pattern);
+            }
         }
 
-        return [.. VpkPatterns.Where(p => p.Dir.IsMatch(path))];
+        return matching ?? [];
     }
 
     [JsonSourceGenerationOptions(AllowTrailingCommas = true, ReadCommentHandling = JsonCommentHandling.Skip)]

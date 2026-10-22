@@ -59,6 +59,29 @@ internal static partial class Log
     }
 
     /// <summary>
+    /// A result row on stdout with tab-separated columns, written column by column since there can be millions of rows.
+    /// </summary>
+    public static void ResultRow(string first, string second, string[] columns)
+    {
+        lock (WriteLock)
+        {
+            var output = Console.Out;
+
+            output.Write(first);
+            output.Write('\t');
+            output.Write(second);
+
+            foreach (var column in columns)
+            {
+                output.Write('\t');
+                output.Write(column);
+            }
+
+            output.WriteLine();
+        }
+    }
+
+    /// <summary>
     /// Writes out buffered results, before exiting.
     /// </summary>
     public static void Flush() => Console.Out.Flush();

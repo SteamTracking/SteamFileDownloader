@@ -144,7 +144,7 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
             }
             catch (Exception e) when (OutputFiles.IsFileError(e))
             {
-                Log.Error($"[{fileJob.Job}] Failed to write {fileJob.File.FileName}: {e.Message}");
+                Log.Error($"[{fileJob.Job}] Failed to read or write {fileJob.File.FileName}: {OutputFiles.DescribeError(e)}");
                 failedFiles.Add(fileJob);
                 return null;
             }
@@ -699,7 +699,7 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
             }
             catch (Exception e) when (OutputFiles.IsFileError(e))
             {
-                Log.Error($"[{partialFile.Job}] Failed to write {partialFile.File.FileName}: {e.Message}");
+                Log.Error($"[{partialFile.Job}] Failed to write {partialFile.File.FileName}: {OutputFiles.DescribeError(e)}");
                 failedFiles.Add(FileFilter.NormalizePath(partialFile.File.FileName));
             }
             finally

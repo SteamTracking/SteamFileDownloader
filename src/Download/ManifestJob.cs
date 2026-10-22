@@ -49,6 +49,16 @@ internal sealed class ManifestJob
     /// </summary>
     public Dictionary<string, DepotManifest.FileData> FilesByPath => field ??= IndexFiles();
 
+    /// <summary>
+    /// The output folder's full path, built once since every file's path is resolved in it.
+    /// </summary>
+    public string FullOutputFolder => field ??= Path.GetFullPath(OutputFolder);
+
+    /// <summary>
+    /// The full output folder ending with a separator, which the paths of its files start with.
+    /// </summary>
+    public string OutputFolderPrefix => field ??= OutputFiles.GetFolderPrefix(FullOutputFolder);
+
     // Files and folders written from the manifest are dated to this
     public DateTime CreationTime => Manifest!.CreationTime;
 

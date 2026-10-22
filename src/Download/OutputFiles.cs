@@ -34,9 +34,14 @@ internal static partial class OutputFiles
     public static bool IsFileError(Exception e) => e is IOException or UnauthorizedAccessException or InvalidDataException;
 
     /// <summary>
+    /// The message of a file error, with a hint for access denied, which doesn't say why.
+    /// </summary>
+    public static string DescribeError(Exception e) => e is UnauthorizedAccessException ? $"{e.Message} It may be read-only or open in another program." : e.Message;
+
+    /// <summary>
     /// Resolves a depot file name inside the job's output folder, refusing paths that escape it.
     /// </summary>
-    public static string GetFinalPath(ManifestJob job, string fileName) => GetFinalPath(job.OutputFolder, fileName);
+    public static string GetFinalPath(ManifestJob job, string fileName) => ResolveInFolder(job.FullOutputFolder, job.OutputFolderPrefix, fileName);
 
     /// <summary>
     /// Resolves a file name inside an output folder, refusing paths that escape it.
@@ -44,6 +49,13 @@ internal static partial class OutputFiles
     public static string GetFinalPath(string outputFolder, string fileName)
     {
         var root = Path.GetFullPath(outputFolder);
+
+        return ResolveInFolder(root, GetFolderPrefix(root), fileName);
+    }
+
+    // The root is the output folder's full path, and the prefix is the root ending with a separator
+    private static string ResolveInFolder(string root, string folderPrefix, string fileName)
+    {
         var normalized = FileFilter.NormalizePath(fileName);
 
         // NTFS would write "a:b" to the stream b of the file a
@@ -54,7 +66,7 @@ internal static partial class OutputFiles
 
         var path = Path.GetFullPath(Path.Combine(root, normalized));
 
-        if (!path.StartsWith(GetFolderPrefix(root), StringComparison.Ordinal))
+        if (!path.StartsWith(folderPrefix, StringComparison.Ordinal))
         {
             throw new InvalidDataException($"File path escapes the output folder: {fileName}");
         }
@@ -140,7 +152,7 @@ internal static partial class OutputFiles
         var platformTarget = target.Replace('\\', Path.DirectorySeparatorChar);
         var resolved = Path.GetFullPath(platformTarget, Path.GetDirectoryName(path)!);
 
-        if (!IsInFolder(Path.GetFullPath(job.OutputFolder), resolved))
+        if (!IsInFolder(job.FullOutputFolder, resolved))
         {
             return LinkResult.OutsideFolder;
         }
@@ -206,7 +218,7 @@ internal static partial class OutputFiles
     }
 
     // A drive root already ends with a separator
-    private static string GetFolderPrefix(string root) => Path.EndsInDirectorySeparator(root) ? root : root + Path.DirectorySeparatorChar;
+    public static string GetFolderPrefix(string root) => Path.EndsInDirectorySeparator(root) ? root : root + Path.DirectorySeparatorChar;
 
     /// <summary>
     /// Dates the folders of the files, up to their manifest's folder, to when the manifest was created, like the files, so builds sort by date.
