@@ -123,8 +123,8 @@ internal static class Help
         """;
 
     private static string Options => $"""
-        Options (anywhere before --):
-          --output <dir>      root output folder (default: as saved with config output, else depots in the current folder)
+        Options (anywhere before --, with the value after a space or =):
+          --output <dir>     root output folder (default: as saved with config output, else depots in the current folder)
           --branch <name>, --branch-password <pw>  branch for targets without @<branch> (default: public), and its password
         {LoginOptions}
         """;
@@ -245,7 +245,8 @@ internal static class Help
           A pattern that matches nothing is a warning, not an error.
 
         Files go to <dir>/<path>, without depot and manifest folders. Files already on disk with the
-        right hash are kept. When everything succeeded, <dir>/steam_buildid.txt gets the build id.
+        right hash are kept. Depots without a manifest on the branch use public's. When everything succeeded,
+        <dir>/steam_buildid.txt gets the build id.
         Messages go to stdout, and warnings and errors to stderr.
 
         To download an older build, pass --manifests with the manifests/ folder of an older run, like
@@ -320,6 +321,7 @@ internal static class Help
           they are in are downloaded, plus the _dir.vpk, which gets no row.
           Files already on disk with the right hash are kept, and ones with the same hash in another target
           or downloaded manifest of the depot are copied. Rows include files that already were on disk.
+          Without patterns, the depot's empty folders and symbolic links are created too.
           To install a game into one folder, use "{ExeName} download" instead.
 
         {Streams}
