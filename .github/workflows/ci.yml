@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  test:
     runs-on: windows-latest
 
     steps:
@@ -21,10 +21,53 @@ jobs:
       - name: Test
         run: dotnet test -c Release
 
+  publish:
+    needs: test
+
+    strategy:
+      matrix:
+        include:
+          - rid: win-x64
+            os: windows-latest
+          - rid: win-arm64
+            os: windows-11-arm
+          - rid: linux-x64
+            os: ubuntu-latest
+          - rid: linux-arm64
+            os: ubuntu-24.04-arm
+          - rid: osx-arm64
+            os: macos-latest
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
       - name: Publish
-        run: dotnet publish SteamFileDownloader.csproj -c Release -r win-x64 -o publish
+        run: dotnet publish SteamFileDownloader.csproj -c Release -r ${{ matrix.rid }} -o publish
+
+      # An unzipped artifact is named after its file
+      - name: Rename
+        if: runner.os == 'Windows'
+        run: Move-Item publish/SteamFileDownloader.exe SteamFileDownloader-${{ matrix.rid }}.exe
+
+      # Only a tarball keeps the executable bit
+      - name: Archive
+        if: runner.os != 'Windows'
+        run: tar -czf SteamFileDownloader-${{ matrix.rid }}.tar.gz -C publish SteamFileDownloader
 
       - uses: actions/upload-artifact@v7
+        if: runner.os == 'Windows'
         with:
-          name: SteamFileDownloader
-          path: publish/SteamFileDownloader.exe
+          path: SteamFileDownloader-${{ matrix.rid }}.exe
+          archive: false
+
+      - uses: actions/upload-artifact@v7
+        if: runner.os != 'Windows'
+        with:
+          path: SteamFileDownloader-${{ matrix.rid }}.tar.gz
+          archive: false
