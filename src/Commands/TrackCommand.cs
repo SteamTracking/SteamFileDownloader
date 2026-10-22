@@ -187,8 +187,8 @@ internal static class TrackCommand
                 continue;
             }
 
-            // Shared depots are tracked in the app that owns them
-            var fromApp = depot["depotfromapp"].Value;
+            // Shared installs are tracked in the app that owns them
+            var fromApp = AppInfo.GetSharedInstallApp(depot);
 
             if (fromApp != null)
             {
@@ -228,6 +228,7 @@ internal static class TrackCommand
             {
                 AppID = appID,
                 DepotID = depotID,
+                KeyAppID = AppInfo.GetKeyAppID(depot, appID),
                 ManifestID = manifestID,
                 Branch = manifestBranch,
                 OutputFolder = outputPath,

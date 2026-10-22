@@ -12,6 +12,24 @@ namespace SteamFileDownloader;
 /// </summary>
 internal static class DepotDownloaderArguments
 {
+    // Every option dd supports, without its dash, to suggest from for a mistyped one
+    private static readonly string[] SupportedOptions =
+    [
+        "app",
+        "depot",
+        "manifest",
+        "manifest-only",
+        "pubfile",
+        "ugc",
+        "filelist",
+        "dir",
+        "branch",
+        "beta",
+        "username",
+        "user",
+        "password",
+    ];
+
     /// <summary>
     /// Returns the arguments of the get or ls command it runs as, or null after printing an error.
     /// </summary>
@@ -20,8 +38,6 @@ internal static class DepotDownloaderArguments
         var depots = new List<string>();
         var manifests = new List<string>();
         var patterns = new List<string>();
-        var notNeeded = new List<string>();
-        var depotFilters = new List<string>();
         var options = new DepotOptions(null);
         var manifestOnly = false;
         string? pubfile = null;
@@ -115,39 +131,13 @@ internal static class DepotDownloaderArguments
                 case "-password":
                     options = options with { Login = options.Login with { Password = value } };
                     break;
-                case "-os" or "-osarch" or "-language" or "-all-platforms" or "-all-archs" or "-all-languages" or "-lowviolence":
-                    // Without -depot, DepotDownloader picks depots by these, but here every depot of the app is used
-                    depotFilters.Add(args[i]);
-
-                    if (value == null)
-                    {
-                        continue;
-                    }
-
-                    break;
                 default:
-                    // Login and download tuning options are handled by this tool on its own
-                    notNeeded.Add(args[i]);
+                    var suggestion = ArgumentParser.DidYouMean(name[1..], SupportedOptions, "-");
 
-                    if (value == null)
-                    {
-                        continue;
-                    }
-
-                    break;
+                    return Fail($"Unsupported option {args[i]}.{suggestion}");
             }
 
             i++;
-        }
-
-        if (notNeeded.Count > 0)
-        {
-            Log.Info($"Ignoring {string.Join(", ", notNeeded)}: not needed.");
-        }
-
-        if (depotFilters.Count > 0)
-        {
-            Log.Warn($"Ignoring {string.Join(", ", depotFilters)}: depots aren't filtered by platform or language, so pick them with -depot.");
         }
 
         var loginError = options.Login.Validate("-");

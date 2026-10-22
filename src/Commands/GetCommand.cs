@@ -73,7 +73,7 @@ internal static class GetCommand
         /// Adds the job of a manifest, or returns the one already added for it. Its files go to &lt;parentFolder&gt;/&lt;manifest&gt;,
         /// or to the install folder when there is one.
         /// </summary>
-        public ManifestJob AddJob(uint appID, uint depotID, ulong manifestID, string branch, bool optional, string parentFolder)
+        public ManifestJob AddJob(uint appID, KeyValue? depot, uint depotID, ulong manifestID, string branch, bool optional, string parentFolder)
         {
             if (JobsByManifest.TryGetValue((depotID, manifestID), out var existing))
             {
@@ -93,6 +93,7 @@ internal static class GetCommand
                 job = ManifestJob.Create(appID, depotID, manifestID, branch, parentFolder);
             }
 
+            job.KeyAppID = AppInfo.GetKeyAppID(depot, appID);
             job.Optional = optional;
             job.ManifestFile = ManifestCache.GetPath(Path.Combine(OutputRoot, "manifests"), depotID, manifestID);
 
@@ -427,24 +428,37 @@ internal static class GetCommand
             .ToList();
         var appInfos = await run.Session.GetAppInfosAsync(appIDs);
 
+        // Explicit targets only need their app to find the depot's DLC for its key, so an app that can't be found is no error
+        var explicitAppIDs = targets.Select(static t => t.AppID).Distinct().Except(appIDs).ToList();
+        var explicitAppInfos = await run.Session.GetAppInfosAsync(explicitAppIDs, logFailures: false);
+
+        foreach (var (appID, appInfo) in explicitAppInfos)
+        {
+            appInfos[appID] = appInfo;
+        }
+
         run.SearchAllHint = GetSearchAllHint(targets);
 
         // Depots without a manifest on the target's branch that use public's instead, said once per app and branch
         var publicFallbacks = new PublicFallbacks();
 
         // Earlier runs of other manifests of the depot may already have identical files
-        ManifestJob AddJob(Target target, uint depotID, ulong manifestID, string branch, bool optional)
+        ManifestJob AddJob(Target target, KeyValue? depot, uint depotID, ulong manifestID, string branch, bool optional)
         {
             var parentFolder = Path.Combine(run.OutputRoot, depotID.ToString(CultureInfo.InvariantCulture));
 
-            return run.AddJob(target.AppID, depotID, manifestID, branch, optional, parentFolder);
+            return run.AddJob(target.AppID, depot, depotID, manifestID, branch, optional, parentFolder);
         }
 
         foreach (var target in targets)
         {
             if (target.DepotID != null && target.ManifestID != null)
             {
-                AddJob(target, target.DepotID.Value, target.ManifestID.Value, target.Branch, optional: false);
+                // The depot may be missing from the app's info, like a removed one, which is fine for a known manifest
+                var depotName = target.DepotID.Value.ToString(CultureInfo.InvariantCulture);
+                var explicitDepot = appInfos.GetValueOrDefault(target.AppID)?["depots"][depotName];
+
+                AddJob(target, explicitDepot, target.DepotID.Value, target.ManifestID.Value, target.Branch, optional: false);
                 continue;
             }
 
@@ -472,14 +486,14 @@ internal static class GetCommand
             {
                 var allJobs = new List<ManifestJob>();
 
-                // Shared depots are listed under the app that owns them
-                foreach (var (depotID, depot) in AppInfo.GetDepots(depots).Where(static d => d.Depot["depotfromapp"].Value == null))
+                // Shared installs are listed under the app that owns them
+                foreach (var (depotID, depot) in AppInfo.GetDepots(depots).Where(static d => AppInfo.GetSharedInstallApp(d.Depot) == null))
                 {
                     var (manifestID, branch) = publicFallbacks.Resolve(target.AppID, depotID, depot, target.Branch);
 
                     if (manifestID != 0)
                     {
-                        allJobs.Add(AddJob(target, depotID, manifestID, branch, optional: true));
+                        allJobs.Add(AddJob(target, depot, depotID, manifestID, branch, optional: true));
                     }
                 }
 
@@ -517,7 +531,7 @@ internal static class GetCommand
 
             if (latestID == 0)
             {
-                var fromApp = depotInfo["depotfromapp"].Value;
+                var fromApp = AppInfo.GetSharedInstallApp(depotInfo);
 
                 if (fromApp != null)
                 {
@@ -532,7 +546,7 @@ internal static class GetCommand
                 continue;
             }
 
-            AddJob(target, target.DepotID.Value, latestID, manifestBranch, optional: false);
+            AddJob(target, depotInfo, target.DepotID.Value, latestID, manifestBranch, optional: false);
         }
 
         publicFallbacks.Log();

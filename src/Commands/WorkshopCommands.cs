@@ -416,7 +416,7 @@ internal static class WorkshopCommands
 
             var itemFolder = Path.Combine(run.OutputRoot, "workshop", candidate.ItemID.ToString(CultureInfo.InvariantCulture));
             var jobCount = run.Jobs.Count;
-            var job = run.AddJob(appID, depotID, manifestID, "public", candidate.FromCollection, itemFolder);
+            var job = run.AddJob(appID, null, depotID, manifestID, "public", candidate.FromCollection, itemFolder);
             job.ItemID = candidate.ItemID;
 
             if (run.Jobs.Count > jobCount)

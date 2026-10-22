@@ -51,7 +51,7 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     private readonly PublishedFile PublishedFiles;
     private readonly CancellationTokenSource PumpCts;
     private readonly CancellationToken CancellationToken;
-    private readonly Dictionary<(uint DepotID, uint AppID), Task<(byte[]? Key, bool NoAccess, string? Problem)>> DepotKeys = [];
+    private readonly Dictionary<(uint DepotID, uint KeyAppID), Task<(byte[]? Key, bool NoAccess, string? Problem)>> DepotKeys = [];
     private readonly Lock LazyLock = new();
     private readonly Client CdnClient;
     private Task<bool>? CdnServersTask;
@@ -60,6 +60,7 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     private int Relogons;
     private uint CellID;
     private volatile bool IsLoggedOn;
+    private volatile Exception? PumpError;
 
     private TaskCompletionSource<bool> ConnectedTcs = new();
     private TaskCompletionSource<SteamUser.LoggedOnCallback?> LoggedOnTcs = new();
@@ -122,7 +123,20 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
             {
                 // Expected
             }
+            catch (Exception e)
+            {
+                // A callback that throws ends the pump, after which no callback would arrive to finish a wait
+                Log.Error($"Stopped handling Steam callbacks: {e.Message}");
+                PumpError = e;
+                FailPendingWaits(e);
+            }
         }, CancellationToken.None);
+    }
+
+    private void FailPendingWaits(Exception e)
+    {
+        ConnectedTcs.TrySetException(e);
+        LoggedOnTcs.TrySetException(e);
     }
 
     public void Dispose()
@@ -188,6 +202,12 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
 
         ConnectedTcs = new TaskCompletionSource<bool>();
         LoggedOnTcs = new TaskCompletionSource<SteamUser.LoggedOnCallback?>();
+
+        // The pump is gone, so no callback would complete these
+        if (PumpError != null)
+        {
+            FailPendingWaits(PumpError);
+        }
 
         SteamClient.Connect();
 
@@ -553,9 +573,13 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     public async Task<KeyValue?> GetAppInfoAsync(uint appID) => (await GetAppInfosAsync([appID])).GetValueOrDefault(appID);
 
     /// <summary>
-    /// Gets the info of several apps in one request. Apps that failed are missing, after an error for each.
+    /// Gets the info of several apps in one request. Apps that failed are missing, after an error for each unless
+    /// logFailures is false.
     /// </summary>
-    public async Task<Dictionary<uint, KeyValue>> GetAppInfosAsync(IReadOnlyCollection<uint> appIDs)
+    public Task<Dictionary<uint, KeyValue>> GetAppInfosAsync(IReadOnlyCollection<uint> appIDs) => GetAppInfosAsync(appIDs, logFailures: true);
+
+    /// <inheritdoc cref="GetAppInfosAsync(IReadOnlyCollection{uint})"/>
+    public async Task<Dictionary<uint, KeyValue>> GetAppInfosAsync(IReadOnlyCollection<uint> appIDs, bool logFailures)
     {
         var appInfos = new Dictionary<uint, KeyValue>();
 
@@ -580,7 +604,16 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
         }
         catch (Exception e) when (IsError(e))
         {
-            Log.Error($"Failed to get app info for {string.Join(", ", appIDs)} ({DescribeError(e)}). Retry later.");
+            if (logFailures)
+            {
+                Log.Error($"Failed to get app info for {string.Join(", ", appIDs)} ({DescribeError(e)}). Retry later.");
+            }
+
+            return appInfos;
+        }
+
+        if (!logFailures)
+        {
             return appInfos;
         }
 
@@ -839,7 +872,7 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
 
         try
         {
-            code = await RequestFromSteamAsync("manifest request code", () => Content.GetManifestRequestCode(job.DepotID, job.AppID, job.ManifestID, job.Branch));
+            code = await RequestFromSteamAsync("manifest request code", () => Content.GetManifestRequestCode(job.DepotID, job.KeyAppID, job.ManifestID, job.Branch));
         }
         catch (Exception e) when (IsError(e))
         {
@@ -894,7 +927,7 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     {
         lock (DepotKeys)
         {
-            var key = (job.DepotID, job.AppID);
+            var key = (job.DepotID, job.KeyAppID);
 
             if (!DepotKeys.TryGetValue(key, out var keyTask))
             {
@@ -921,7 +954,7 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
         {
             keyResult = await RequestFromSteamAsync("depot key request", async () =>
             {
-                var keyTask = Apps.GetDepotDecryptionKey(job.DepotID, job.AppID);
+                var keyTask = Apps.GetDepotDecryptionKey(job.DepotID, job.KeyAppID);
                 keyTask.Timeout = TimeSpan.FromSeconds(30);
                 return await keyTask;
             });
@@ -931,16 +964,16 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
             return (null, false, $"Failed to get the depot key: {DescribeError(e)}");
         }
 
-        // Steam denies a depot the account doesn't own, and doesn't find one that isn't in the app. Other results,
-        // like a busy Steam, are failures that running again can fix
-        if (keyResult.Result is EResult.AccessDenied or EResult.FileNotFound)
+        // Steam denies a depot the account doesn't own or that is blocked, and doesn't find one that isn't in the app.
+        // Other results, like a busy Steam, are failures that running again can fix
+        if (keyResult.Result is EResult.AccessDenied or EResult.FileNotFound or EResult.Blocked)
         {
             if (job.ItemID != null)
             {
-                return (null, true, $"Steam gave no key for the workshop depot {job.DepotID} of app {job.AppID} ({keyResult.Result}): this account may need to own the app.");
+                return (null, true, $"Steam gave no key for the workshop depot {job.DepotID} of app {job.KeyAppID} ({keyResult.Result}): this account may need to own the app.");
             }
 
-            return (null, true, $"Steam gave no depot key in app {job.AppID} ({keyResult.Result}): this account may not own the depot, or it belongs to another app.");
+            return (null, true, $"Steam gave no depot key in app {job.KeyAppID} ({keyResult.Result}): this account may not own the depot, or it belongs to another app.");
         }
 
         if (keyResult.Result != EResult.OK)

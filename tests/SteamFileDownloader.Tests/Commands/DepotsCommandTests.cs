@@ -34,6 +34,15 @@ public class DepotsCommandTests
             "103"
             {
                 "depotfromapp" "228980"
+                "manifests"
+                {
+                    "public" { "gid" "1030" }
+                }
+            }
+            "104"
+            {
+                "depotfromapp" "228980"
+                "sharedinstall" "1"
             }
             "baselanguages" "english"
             "branches"
@@ -66,13 +75,14 @@ public class DepotsCommandTests
     [Arguments("beta", "100", "4242/100:1001")]
     [Arguments("beta", "101", "4242/101:1010")]
     [Arguments("public", "102", "4242/102")]
-    [Arguments("public", "103", "228980/103")]
+    [Arguments("public", "103", "4242/103:1030")]
+    [Arguments("public", "104", "228980/104")]
     public async Task EveryDepotGetsARowWithATargetOfTheBranch(string branch, string depot, string target)
     {
         var (result, rows) = List(Depots, branch);
 
         await Assert.That(result).IsTrue();
-        await Assert.That(rows.Keys).IsEquivalentTo(["100", "101", "102", "103"]);
+        await Assert.That(rows.Keys).IsEquivalentTo(["100", "101", "102", "103", "104"]);
         await Assert.That(rows[depot][0]).IsEqualTo(target);
     }
 

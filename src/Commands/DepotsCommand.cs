@@ -91,7 +91,7 @@ internal static class DepotsCommand
         {
             var (manifestID, fromPublic) = AppInfo.GetManifestIdForBranch(depot, branchName);
             var config = depot["config"];
-            var fromApp = depot["depotfromapp"].Value;
+            var fromApp = AppInfo.GetSharedInstallApp(depot);
             var notes = new List<string>();
 
             AddNote("name", depot["name"].Value);
@@ -106,9 +106,10 @@ internal static class DepotsCommand
                 notes.Add("manifest from public");
             }
 
-            // A target for ls and get. Shared depots are downloaded through the app that owns them
+            // A target for ls and get. Shared installs are downloaded through the app that owns them
             var manifest = manifestID == 0 ? "" : $":{manifestID}";
-            var target = $"{fromApp ?? appID.ToString(CultureInfo.InvariantCulture)}/{depotID}{manifest}";
+            var targetApp = AppInfo.GetSharedInstallApp(depot) ?? appID.ToString(CultureInfo.InvariantCulture);
+            var target = $"{targetApp}/{depotID}{manifest}";
 
             Log.Result($"{target}\t{depot["maxsize"].Value ?? "-"}\t{string.Join(", ", notes)}");
 

@@ -151,14 +151,36 @@ public class DepotDownloaderArgumentsTests
     }
 
     [Test]
-    public async Task SkippedOptionsAreIgnoredWithAndWithoutValues()
+    [Arguments("-remember-password")]
+    [Arguments("-loginid")]
+    [Arguments("-max-downloads")]
+    [Arguments("-os")]
+    [Arguments("-language")]
+    [Arguments("-all-platforms")]
+    public async Task OtherDepotDownloaderOptionsAreUnsupported(string option)
     {
-        var result = DepotDownloaderArguments.Parse(["-remember-password", "-app", "730", "-loginid", "5", "-os", "windows", "-all-platforms", "-depot", "1", "-max-downloads", "8"]);
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", option])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains($"Unsupported option {option}.");
+    }
 
-        await Assert.That(result).IsNotNull();
-        await Assert.That(result!.Options.App).IsEqualTo(730u);
-        await Assert.That(string.Join(",", result.Targets)).IsEqualTo("1");
-        await Assert.That(result.Options.Login.Username).IsNull();
+    [Test]
+    public async Task UnsupportedOptionWithAValueIsAnError()
+    {
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-max-downloads", "8"])).IsNull();
+    }
+
+    [Test]
+    public async Task MistypedOptionSuggestsASupportedOne()
+    {
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-mainfest", "5"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("Unsupported option -mainfest. Did you mean -manifest?");
+    }
+
+    [Test]
+    public async Task UnsupportedOptionWithoutACloseNameHasNoSuggestion()
+    {
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-zzzzzzzz"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("Unsupported option -zzzzzzzz.").And.DoesNotContain("Did you mean");
     }
 
     [Test]

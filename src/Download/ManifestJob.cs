@@ -11,6 +11,12 @@ internal sealed class ManifestJob
 {
     public uint AppID;
     public uint DepotID;
+
+    /// <summary>
+    /// The app to request the depot's key and manifest request code with, which is the depot's DLC when it has one.
+    /// </summary>
+    public uint KeyAppID;
+
     public ulong ManifestID;
     public required string Branch;
     public required string OutputFolder;
@@ -77,6 +83,7 @@ internal sealed class ManifestJob
     public static ManifestJob CreateIn(uint appID, uint depotID, ulong manifestID, string branch, string outputFolder) => new()
     {
         AppID = appID,
+        KeyAppID = appID,
         DepotID = depotID,
         ManifestID = manifestID,
         Branch = branch,

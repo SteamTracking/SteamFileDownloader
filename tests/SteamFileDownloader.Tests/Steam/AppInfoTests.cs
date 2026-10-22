@@ -66,6 +66,37 @@ public class AppInfoTests
     }
 
     [Test]
+    [Arguments("\"depotfromapp\" \"70\" \"sharedinstall\" \"1\"", "70")]
+    [Arguments("\"depotfromapp\" \"70\" \"sharedinstall\" \"2\"", "70")]
+    [Arguments("\"depotfromapp\" \"90\" \"sharedinstall\" \"0\"", null)]
+    [Arguments("\"depotfromapp\" \"90\"", null)]
+    [Arguments("\"name\" \"depot\"", null)]
+    public async Task GetSharedInstallAppNeedsANonZeroSharedInstall(string fields, string? expected)
+    {
+        var depot = Parse($"\"1004\" {{ {fields} }}");
+
+        await Assert.That(AppInfo.GetSharedInstallApp(depot)).IsEqualTo(expected);
+    }
+
+    [Test]
+    [Arguments("\"dlcappid\" \"4780\"", 4780u)]
+    [Arguments("\"dlcappid\" \"0\"", 4700u)]
+    [Arguments("\"dlcappid\" \"x\"", 4700u)]
+    [Arguments("\"name\" \"depot\"", 4700u)]
+    public async Task GetKeyAppIDPrefersTheDlc(string fields, uint expected)
+    {
+        var depot = Parse($"\"4784\" {{ {fields} }}");
+
+        await Assert.That(AppInfo.GetKeyAppID(depot, 4700)).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task GetKeyAppIDWithoutADepotIsTheApp()
+    {
+        await Assert.That(AppInfo.GetKeyAppID(null, 4700)).IsEqualTo(4700u);
+    }
+
+    [Test]
     public async Task GetDepotsOfEmptySectionIsEmpty()
     {
         await Assert.That(AppInfo.GetDepots(Parse("\"depots\" { }")).Any()).IsFalse();

@@ -1,5 +1,8 @@
 # SteamFileDownloader
 
+> [!NOTE]
+> SteamFileDownloader is a reimagination of [DepotDownloader](https://github.com/SteamRE/DepotDownloader). We try to make it as usable and as simple as possible. If something is not easy to use, [create an issue](https://github.com/SteamTracking/SteamFileDownloader/issues). Expect breaking changes.
+
 SteamFileDownloader is a simpler version of [DepotDownloader](https://github.com/SteamRE/DepotDownloader). It downloads **specific files from Steam depots**, and it does not download the full depot. It can also download **files from old game builds** and **files in Valve Pak (VPK) archives**.
 
 SteamFileDownloader is made for **AI agents and scripts**, for example Claude Code, Codex and continuous integration (CI) jobs:
@@ -141,7 +144,7 @@ Each login uses a random login id. Because of this, parallel runs on one account
 SteamFileDownloader dd -app 730 -depot 2347771 -manifest 8344780363095656278 -filelist files.txt
 ```
 
-`dd` uses these flags: `-app`, `-depot`, `-manifest`, `-filelist`, `-dir`, `-branch`, `-username`, `-password` and `-manifest-only`. `-username` selects a saved login. With `-password`, `dd` logs in with the password and does not save a login. `dd` ignores all other flags, for example `-remember-password` and `-loginid`. `-os` and `-language` do not filter the depots. Use `-depot` to select the depots. `dd` cannot use a branch that has a password, and `-branchpassword` does not work.
+`dd` uses these flags: `-app`, `-depot`, `-manifest`, `-filelist`, `-dir`, `-branch`, `-username`, `-password` and `-manifest-only`. `-username` selects a saved login. With `-password`, `dd` logs in with the password and does not save a login. `dd` rejects all other flags, for example `-remember-password`, `-loginid`, `-os` and `-language`. Use `-depot` to select the depots. `dd` cannot use a branch that has a password, and `-branchpassword` does not work.
 
 Each line in a `-filelist` file is a full path from the root of the depot, or a `regex:` pattern. Globs do not work. This is the same as in DepotDownloader. The files go into `<output>/<depot>/<manifest>/`, the same as with `get`. `-pubfile <item>` runs as `workshop get`, and the files go into `<output>/workshop/<item>/<manifest>/`. `-ugc <manifest>` runs as `get <app>/<app>:<manifest>`.
 

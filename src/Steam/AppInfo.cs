@@ -26,6 +26,30 @@ internal static class AppInfo
     }
 
     /// <summary>
+    /// The app in the depot's "depotfromapp" when it is a shared install, which that app owns the manifests of, or null.
+    /// Other depots with a "depotfromapp" are installed from the installing app's own manifests.
+    /// </summary>
+    public static string? GetSharedInstallApp(KeyValue depot)
+    {
+        if (depot["sharedinstall"].AsInteger() == 0)
+        {
+            return null;
+        }
+
+        return depot["depotfromapp"].Value;
+    }
+
+    /// <summary>
+    /// The app to request the depot's key with: the DLC that owns the depot when it has one, else the app being installed.
+    /// </summary>
+    public static uint GetKeyAppID(KeyValue? depot, uint appID)
+    {
+        var dlcAppID = depot?["dlcappid"].AsUnsignedInteger() ?? 0;
+
+        return dlcAppID != 0 ? dlcAppID : appID;
+    }
+
+    /// <summary>
     /// Whether the app has the branch and its manifests are visible, since otherwise every depot would silently
     /// fall back to public. Logs an error when not.
     /// </summary>

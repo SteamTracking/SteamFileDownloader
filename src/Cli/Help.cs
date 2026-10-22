@@ -345,9 +345,8 @@ internal static class Help
         and a list without entries is an error. Without -filelist every file is downloaded, like get without
         patterns, so stdout has no rows. -dir sets the root output folder; files still go to <dir>/<depot>/<manifest>/<path>.
         Without -dir, it is the folder saved with config output, else depots in the current folder.
-        -password logs in with it on every run, without saving a login. Other flags, like -remember-password
-        or -loginid, are skipped: a random login id is used.
-        -os and -language don't filter depots, so pick them with -depot.
+        -password logs in with it on every run, without saving a login. Other DepotDownloader flags, like
+        -remember-password or -os, are unsupported, so pick depots with -depot.
         Password protected branches (-branchpassword) are not supported.
         For new command lines, use get or ls, which also take several apps, branches and VPK entries.
 
