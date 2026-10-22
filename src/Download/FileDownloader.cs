@@ -654,7 +654,7 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         return failedFiles.IsEmpty;
     }
 
-    private static void LogFailures(string what, IEnumerable<string> names, string retryHint)
+    internal static void LogFailures(string what, IEnumerable<string> names, string retryHint)
     {
         var sorted = names.Order(StringComparer.Ordinal).ToList();
 

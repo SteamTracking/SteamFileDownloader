@@ -128,7 +128,7 @@ SteamFileDownloader workshop ls 3070715607
 SteamFileDownloader workshop get 3070715607 3070715607:5179645662803098587 -- "*.vpk"
 ```
 
-`workshop ls` and `workshop get` use the same patterns and the same `--output` as the main `ls` and `get` commands. SteamFileDownloader cannot download items from the legacy workshop. The legacy workshop did not keep files in depots.
+`workshop ls` and `workshop get` use the same patterns and the same `--output` as the main `ls` and `get` commands. The legacy workshop did not keep files in depots. A legacy item has one file at a URL, with no manifests. `workshop get` downloads that file into `<output>/workshop/<item>/`, and `workshop ls` lists it with `legacy` as its manifest. Patterns must match the file name. `workshop get` downloads the file again when the file on disk has another size, or is older than the last update of the item.
 
 ## Logins and rate limits
 

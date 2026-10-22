@@ -43,6 +43,9 @@ internal static class GetCommand
         public int? AbortExitCode;
 
         public List<ManifestJob> Jobs = [];
+
+        // The workshop items whose one file is a plain download, which have no manifest
+        public List<LegacyItem> LegacyItems = [];
         public Dictionary<ManifestJob, List<MatchedFile>> Matches = [];
         public Dictionary<string, int> MatchCounts = [];
 
@@ -117,12 +120,22 @@ internal static class GetCommand
 
         public void WriteRow(ManifestJob job, params string[] columns)
         {
+            // Workshop rows start with the item, since all items of an app share its workshop depot
+            WriteRow($"{job.ItemID ?? job.DepotID}", job.ManifestID.ToString(CultureInfo.InvariantCulture), columns);
+        }
+
+        /// <summary>
+        /// A row of a legacy item, whose manifest column says legacy.
+        /// </summary>
+        public void WriteLegacyRow(LegacyItem item, params string[] columns) => WriteRow(item.ToString(), LegacyItem.ManifestColumn, columns);
+
+        private void WriteRow(string first, string manifest, string[] columns)
+        {
             Rows++;
 
-            // Workshop rows start with the item, since all items of an app share its workshop depot
             if (!HideRows)
             {
-                Log.Result($"{job.ItemID ?? job.DepotID}\t{job.ManifestID}\t{string.Join('\t', columns)}");
+                Log.Result($"{first}\t{manifest}\t{string.Join('\t', columns)}");
             }
         }
     }
@@ -345,6 +358,8 @@ internal static class GetCommand
             }
         }
 
+        await DownloadLegacyFilesAsync(run, cancellationToken);
+
         // Folders of an install hold files of every depot, so they keep their own dates
         if (run.InstallFolder == null)
         {
@@ -352,6 +367,38 @@ internal static class GetCommand
         }
 
         return Finish(run, downloads: true);
+    }
+
+    private static async Task DownloadLegacyFilesAsync(Run run, CancellationToken cancellationToken)
+    {
+        var items = run.LegacyItems.Where(static i => i.Requested).ToList();
+
+        if (items.Count == 0)
+        {
+            return;
+        }
+
+        // The downloader times out requests that make no progress, since a file takes as long as its size needs
+        using var client = SteamSession.CreateHttpClient(HttpClientPurpose.CDN);
+        client.Timeout = Timeout.InfiniteTimeSpan;
+
+        var downloader = new LegacyFileDownloader(client, cancellationToken);
+        var (success, files) = await downloader.DownloadAllAsync(items);
+
+        if (!success)
+        {
+            run.Fail();
+        }
+
+        var pathsByItem = files.ToDictionary(static f => f.Item, static f => f.Path);
+
+        foreach (var item in items)
+        {
+            if (pathsByItem.TryGetValue(item, out var path))
+            {
+                run.WriteLegacyRow(item, path);
+            }
+        }
     }
 
     /// <summary>
@@ -420,6 +467,12 @@ internal static class GetCommand
 
                 run.WriteRow(job, hash, size, file.Path);
             }
+        }
+
+        // Steam gives no hash of a legacy item's file
+        foreach (var item in run.LegacyItems.Where(static i => i.Requested))
+        {
+            run.WriteLegacyRow(item, "-", item.Size.ToString(CultureInfo.InvariantCulture), item.FileName);
         }
 
         // Directory files have to be downloaded to read their entries
@@ -669,6 +722,19 @@ internal static class GetCommand
 
             run.Matches[job] = matches;
         }
+
+        // A legacy item has one file, which only patterns that match its name select
+        foreach (var item in run.LegacyItems)
+        {
+            var matching = filter.GetMatchingPatterns(item.FileName);
+
+            foreach (var pattern in matching)
+            {
+                run.MatchCounts[pattern.Source]++;
+            }
+
+            item.Requested = listAll || matching.Count > 0;
+        }
     }
 
     /// <summary>
@@ -747,7 +813,9 @@ internal static class GetCommand
         // that were read
         List<string> unmatched;
 
-        if (run.Matches.Count > 0)
+        var searched = run.Matches.Count + run.LegacyItems.Count;
+
+        if (searched > 0)
         {
             unmatched = run.MatchCounts
                 .Where(p => p.Value == 0 && !run.FailedVpkPatterns.Contains(p.Key))
@@ -765,9 +833,18 @@ internal static class GetCommand
         if (unmatched.Count > 0)
         {
             var skippedWhat = skippedJobs.Any(static j => j.ItemID != null) ? "item" : "depot";
-            var where = run.Matches.Count == 1 ? run.Matches.Keys.First().ToString() : null;
+            string? where = null;
 
-            Log.Error(DescribeUnmatched(unmatched, run.Matches.Count, where, skipped.Count, skippedWhat, run.SearchAllHint));
+            if (run.Matches.Count == 1 && searched == 1)
+            {
+                where = run.Matches.Keys.First().ToString();
+            }
+            else if (run.LegacyItems.Count == 1 && searched == 1)
+            {
+                where = run.LegacyItems[0].Label;
+            }
+
+            Log.Error(DescribeUnmatched(unmatched, searched, where, skipped.Count, skippedWhat, run.SearchAllHint));
         }
 
         // One closing line, so the outcome is clear without reading the whole log
@@ -781,6 +858,8 @@ internal static class GetCommand
         // A target without a match is fine, like a build from before the file existed. When no pattern matched at all, the error says so already
         var withoutMatches = run.Matches.Where(static m => m.Value.Count == 0 && !m.Key.Optional).Select(static m => m.Key.ToString()).ToList();
 
+        withoutMatches.AddRange(run.LegacyItems.Where(static i => !i.Requested).Select(static i => i.Label));
+
         var someMatched = unmatched.Count == 0 || unmatched.Count < run.MatchCounts.Count;
 
         if (withoutMatches.Count > 0 && someMatched)
@@ -788,7 +867,20 @@ internal static class GetCommand
             notes.Add($"nothing matched in {Log.JoinFirst(withoutMatches)}");
         }
 
-        var manifests = Log.PluralOf(run.Matches.Count, run.Jobs.Count, "manifest");
+        var counted = new List<string>();
+
+        if (run.Jobs.Count > 0 || run.LegacyItems.Count == 0)
+        {
+            counted.Add(Log.PluralOf(run.Matches.Count, run.Jobs.Count, "manifest"));
+        }
+
+        if (run.LegacyItems.Count > 0)
+        {
+            counted.Add(Log.Plural(run.LegacyItems.Count, "legacy item"));
+        }
+
+        var manifests = string.Join(" and ", counted);
+
         string rows;
 
         if (run.HideRows)

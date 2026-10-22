@@ -169,7 +169,7 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     /// CDN requests ask for HTTP/2, so each server gets one connection for all of them instead of one per request.
     /// Servers without HTTP/2, or without HTTPS, get HTTP/1.1. The CM connection is a WebSocket, which stays on HTTP/1.1.
     /// </summary>
-    private static HttpClient CreateHttpClient(HttpClientPurpose purpose)
+    internal static HttpClient CreateHttpClient(HttpClientPurpose purpose)
     {
 #pragma warning disable CA2000 // The client disposes its handlers
         var client = purpose == HttpClientPurpose.CDN ? new HttpClient(new Http2Handler { InnerHandler = new SocketsHttpHandler() }) : new HttpClient();
@@ -1176,18 +1176,27 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
             return;
         }
 
-        var delay = ExponentialBackoff(attempt);
-
         if (failure != null)
         {
-            Log.Info($"{failure}, retrying in {delay / 1000.0:F1}s ({attempt + 1}/{maxAttempts})...");
-        }
-        else
-        {
-            Log.Info($"Retrying the {what} in {delay / 1000.0:F1}s (attempt {attempt + 1}/{maxAttempts})...");
+            await DelayAfterFailureAsync(failure, attempt, maxAttempts, ExponentialBackoff, CancellationToken);
+            return;
         }
 
+        var delay = ExponentialBackoff(attempt);
+
+        Log.Info($"Retrying the {what} in {delay / 1000.0:F1}s (attempt {attempt + 1}/{maxAttempts})...");
+
         await Task.Delay(delay, CancellationToken);
+    }
+
+    // Says what failed and that it's retried after the given number of failed attempts, then waits
+    internal static async Task DelayAfterFailureAsync(string failure, int attempt, int maxAttempts, Func<int, int> backoff, CancellationToken cancellationToken)
+    {
+        var delay = backoff(attempt);
+
+        Log.Info($"{failure}, retrying in {delay / 1000.0:F1}s ({attempt + 1}/{maxAttempts})...");
+
+        await Task.Delay(delay, cancellationToken);
     }
 
     internal static int ExponentialBackoff(int i)

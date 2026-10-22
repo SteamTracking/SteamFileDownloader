@@ -36,9 +36,14 @@ internal static partial class OutputFiles
     /// <summary>
     /// Resolves a depot file name inside the job's output folder, refusing paths that escape it.
     /// </summary>
-    public static string GetFinalPath(ManifestJob job, string fileName)
+    public static string GetFinalPath(ManifestJob job, string fileName) => GetFinalPath(job.OutputFolder, fileName);
+
+    /// <summary>
+    /// Resolves a file name inside an output folder, refusing paths that escape it.
+    /// </summary>
+    public static string GetFinalPath(string outputFolder, string fileName)
     {
-        var root = Path.GetFullPath(job.OutputFolder);
+        var root = Path.GetFullPath(outputFolder);
         var normalized = FileFilter.NormalizePath(fileName);
 
         // NTFS would write "a:b" to the stream b of the file a

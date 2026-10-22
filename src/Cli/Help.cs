@@ -354,8 +354,9 @@ internal static class Help
         -branchpassword (or -betapassword) is the password of a password protected branch.
         For new command lines, use get or ls, which also take several apps, branches and VPK entries.
 
-        -pubfile runs as workshop get (or ls), so files go to <dir>/workshop/<item>/<manifest>/<path>. -ugc is a
-        manifest of the app's workshop depot, like get <app>/<app>:<manifest>; legacy workshop files aren't supported.
+        -pubfile runs as workshop get (or ls), so files go to <dir>/workshop/<item>/<manifest>/<path>, and the file of
+        a legacy workshop item to <dir>/workshop/<item>/<file name>. -ugc is a manifest of the app's workshop depot,
+        like get <app>/<app>:<manifest>; it does not work for legacy workshop items.
 
         {ExitCodesText}
         """;
@@ -369,8 +370,9 @@ internal static class Help
 
     private static string WorkshopItemNotes => """
         More on items:
-          Items of the legacy workshop, from before it kept files in depots, like those of Left 4 Dead 2, are not
-          implemented.
+          Items of the legacy workshop, from before it kept files in depots, like those of Left 4 Dead 2, have one
+          file at a URL and no manifests, so <item>:<manifest> does not apply to them. get downloads that file, and ls
+          lists it with "legacy" as its manifest and - as its sha1.
         """;
 
     private static string WorkshopExitCodesText => $"""
@@ -406,7 +408,8 @@ internal static class Help
           {ExeName} workshop get <item>... [-- <pattern>...]               download files, all without patterns
           {ExeName} workshop <subcommand> --help                           details and examples
 
-        Files go to <output>/workshop/<item>/<manifest>/<path>, and ls and get take the patterns of get.
+        Files go to <output>/workshop/<item>/<manifest>/<path>, and ls and get take the patterns of get. The file of
+        a legacy item goes to <output>/workshop/<item>/<file name>.
 
         {WorkshopItems}
 
@@ -473,6 +476,9 @@ internal static class Help
           Files already on disk with the right hash are kept, and ones with the same hash in another downloaded
           version of the item are copied. Rows include files that already were on disk. stderr has a line per
           item with its manifest and title.
+          The file of a legacy item goes to <output>/workshop/<item>/<file name>, dated to the item's last
+          update, and patterns match the file name. It is kept when it has the size Steam gives and is not older
+          than the update, and is downloaded again otherwise.
 
         {Streams}
 

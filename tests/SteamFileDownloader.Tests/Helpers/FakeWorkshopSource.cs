@@ -32,6 +32,18 @@ internal sealed class FakeWorkshopSource : IWorkshopSource
         title = title,
     };
 
+    public static PublishedFileDetails Legacy(ulong id, string filename = "map.zip", string url = "https://cdn.steamusercontent.com/ugc/1/", uint size = 100, uint app = 8930) => new()
+    {
+        result = (uint)EResult.OK,
+        publishedfileid = id,
+        consumer_appid = app,
+        flags = 0x600,
+        filename = filename,
+        file_url = url,
+        file_size = size,
+        time_updated = 1000,
+    };
+
     public static PublishedFileDetails Collection(ulong id, params (ulong ID, uint SortOrder)[] children)
     {
         var collection = Item(id, flags: 0);

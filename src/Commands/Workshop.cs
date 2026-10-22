@@ -42,7 +42,8 @@ internal sealed record WorkshopVersion(ulong ManifestID, uint Timestamp, string 
 internal sealed record ItemProblem(string Message, string SkipReason, bool NoAccess = false);
 
 /// <summary>
-/// Workshop items: an item's files are a manifest in the workshop depot of the app it's for.
+/// Workshop items: an item's files are a manifest in the workshop depot of the app it's for, or for a legacy item one
+/// file at a URL.
 /// </summary>
 internal static class Workshop
 {
@@ -65,6 +66,11 @@ internal static class Workshop
     public static bool IsCollection(PublishedFileDetails details) => details.file_type == FileTypeCollection;
 
     public static bool IsLegacy(PublishedFileDetails details) => (details.flags & FlagDepotContent) == 0;
+
+    /// <summary>
+    /// Whether a legacy item says where its file is, with a web address, and what it's called.
+    /// </summary>
+    public static bool HasLegacyFile(PublishedFileDetails details) => LegacyItem.TryCreate(details, "") != null;
 
     /// <summary>
     /// Gets the details of items, then level by level those of the items in collections among them. Items Steam
@@ -156,7 +162,7 @@ internal static class Workshop
 
         return result switch
         {
-            EResult.OK when IsLegacy(details!) => new($"Item {itemID} is a legacy (non-SteamPipe) workshop item, which is not implemented.", "legacy"),
+            EResult.OK when IsLegacy(details!) && !HasLegacyFile(details!) => new($"Item {itemID} is a legacy workshop item without a file to download.", "without files"),
             EResult.OK => null,
             EResult.FileNotFound => new($"Item {itemID} does not exist.{appIdHint}", "removed"),
             EResult.AccessDenied => new($"Item {itemID} is private, or this account can't see it.", "private", NoAccess: true),

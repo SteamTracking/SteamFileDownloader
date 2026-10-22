@@ -120,7 +120,20 @@ public class WorkshopTests
     public async Task ProblemsHaveAShortReasonForSkippedItems(EResult result, string reason)
     {
         await Assert.That(Workshop.GetProblem(5, Unavailable(5, result))!.SkipReason).IsEqualTo(reason);
-        await Assert.That(Workshop.GetProblem(5, Item(5, manifest: 9, flags: 0))!.SkipReason).IsEqualTo("legacy");
+        await Assert.That(Workshop.GetProblem(5, Item(5, manifest: 9, flags: 0))!.SkipReason).IsEqualTo("without files");
+    }
+
+    [Test]
+    public async Task LegacyItemsHaveFilesWhenTheyNameOne()
+    {
+        await Assert.That(Workshop.GetProblem(5, Legacy(5))).IsNull();
+        await Assert.That(Workshop.GetProblem(5, Legacy(5, url: ""))!.SkipReason).IsEqualTo("without files");
+        await Assert.That(Workshop.GetProblem(5, Legacy(5, url: "not a url"))!.SkipReason).IsEqualTo("without files");
+        await Assert.That(Workshop.GetProblem(5, Legacy(5, url: "file:///etc/passwd"))!.SkipReason).IsEqualTo("without files");
+        await Assert.That(Workshop.GetProblem(5, Legacy(5, filename: ""))!.SkipReason).IsEqualTo("without files");
+        await Assert.That(Workshop.GetProblem(5, Legacy(5, filename: "dir/.."))!.SkipReason).IsEqualTo("without files");
+        await Assert.That(Workshop.IsLegacy(Legacy(5))).IsTrue();
+        await Assert.That(Workshop.IsLegacy(Item(5))).IsFalse();
     }
 
     [Test]

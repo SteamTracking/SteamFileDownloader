@@ -295,6 +295,9 @@ internal static class WorkshopCommands
     {
         public HashSet<ManifestJob> Jobs { get; } = [];
 
+        // The legacy items among its items, which have a file instead of a job
+        public HashSet<ulong> LegacyItems { get; } = [];
+
         public List<(string Reason, ulong ItemID)> Skipped { get; } = [];
     }
 
@@ -362,6 +365,23 @@ internal static class WorkshopCommands
 
             candidates.Add(new Candidate(target, item!, FromCollection: false));
         }
+
+        var addedLegacyIDs = run.LegacyItems.Select(static i => i.ItemID).ToHashSet();
+        var depotCandidates = new List<Candidate>(candidates.Count);
+
+        foreach (var candidate in candidates)
+        {
+            if (Workshop.IsLegacy(candidate.Details))
+            {
+                AddLegacyItem(run, candidate, collections, addedLegacyIDs);
+            }
+            else
+            {
+                depotCandidates.Add(candidate);
+            }
+        }
+
+        candidates = depotCandidates;
 
         var appIDs = candidates.Select(static c => c.Details.consumer_appid).Distinct().ToList();
         var appInfosTask = source.GetAppInfosAsync(appIDs);
@@ -434,17 +454,59 @@ internal static class WorkshopCommands
         {
             var skippedNote = collection.Skipped.Count > 0 ? $" ({FormatSkipped(collection.Skipped)})" : "";
 
-            if (collection.Jobs.Count == 0)
+            var downloadable = collection.Jobs.Count + collection.LegacyItems.Count;
+
+            if (downloadable == 0)
             {
                 Log.Error($"None of the {collection.Items} items of collection {collection.ItemID} have files to download{skippedNote}.");
                 run.Fail(targetSource);
+                continue;
             }
-            else
+
+            Log.Info($"Collection {collection.ItemID}: {downloadable} of {Log.Plural(collection.Items, "item")}{skippedNote}.");
+
+            // Only manifests can fail as a whole target, so a collection of legacy items has none
+            if (collection.Jobs.Count > 0)
             {
-                Log.Info($"Collection {collection.ItemID}: {collection.Jobs.Count} of {Log.Plural(collection.Items, "item")}{skippedNote}.");
                 run.AllTargets[targetSource] = [.. collection.Jobs];
             }
         }
+    }
+
+    /// <summary>
+    /// Adds the file of a legacy item to the run, which downloads it from its URL into the folder of the item.
+    /// </summary>
+    private static void AddLegacyItem(GetCommand.Run run, Candidate candidate, Dictionary<string, CollectionTarget> collections, HashSet<ulong> addedItemIDs)
+    {
+        var itemID = candidate.ItemID;
+        var details = candidate.Details;
+
+        if (candidate.Target.ManifestID != null)
+        {
+            Log.Error($"Item {itemID} is a legacy workshop item, which has one file and no manifests; give it without one.");
+            run.Fail(candidate.Target.Source);
+            return;
+        }
+
+        if (candidate.FromCollection)
+        {
+            collections[candidate.Target.Source].LegacyItems.Add(itemID);
+        }
+
+        // An item given twice, or both directly and in a collection, is downloaded once
+        if (!addedItemIDs.Add(itemID))
+        {
+            return;
+        }
+
+        var folder = run.InstallFolder ?? Path.Combine(run.OutputRoot, "workshop", itemID.ToString(CultureInfo.InvariantCulture));
+
+        // Items without a file were already reported as problems
+        var item = LegacyItem.TryCreate(details, folder)!;
+
+        run.LegacyItems.Add(item);
+
+        Log.Info($"Item {itemID}: legacy file {item.FileName}, {Workshop.CleanText(details.title)}");
     }
 
     /// <summary>

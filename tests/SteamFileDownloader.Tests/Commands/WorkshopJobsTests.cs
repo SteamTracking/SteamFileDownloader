@@ -91,7 +91,7 @@ public class WorkshopJobsTests
         await Assert.That(run.Failed).IsFalse();
 
         var output = TestContext.Current!.GetStandardOutput() + TestContext.Current.GetErrorOutput();
-        await Assert.That(output).Contains("Collection 1: 2 of 4 items (2 skipped: 11 private, 12 legacy).").And.DoesNotContain("Skipping");
+        await Assert.That(output).Contains("Collection 1: 2 of 4 items (2 skipped: 11 private, 12 without files).").And.DoesNotContain("Skipping");
     }
 
     [Test]
@@ -180,10 +180,50 @@ public class WorkshopJobsTests
     }
 
     [Test]
+    public async Task LegacyItemIsOneFileInTheItemsFolderWithoutAWorkshopDepot()
+    {
+        var source = new FakeWorkshopSource().Add(Legacy(30, filename: "ugc/dir\\map.zip", size: 55));
+
+        var run = await Resolve(source, "30");
+
+        var item = run.LegacyItems.Single();
+        await Assert.That(run.Jobs).IsEmpty();
+        await Assert.That(item.ItemID).IsEqualTo(30ul);
+        await Assert.That(item.FileName).IsEqualTo("map.zip");
+        await Assert.That(item.Size).IsEqualTo(55L);
+        await Assert.That(item.TimeUpdated).IsEqualTo(1000u);
+        await Assert.That(item.OutputFolder).IsEqualTo(Path.Combine(run.OutputRoot, "workshop", "30"));
+        await Assert.That(run.Failed).IsFalse();
+    }
+
+    [Test]
+    public async Task LegacyItemsInACollectionCountAsItsFiles()
+    {
+        var source = new FakeWorkshopSource().Add(Collection(1, (30, 1), (31, 2)), Legacy(30), Legacy(31, url: ""));
+
+        var run = await Resolve(source, "1", "30");
+
+        await Assert.That(run.LegacyItems.Select(static i => i.ItemID)).IsEquivalentTo([30ul]);
+        await Assert.That(run.Failed).IsFalse();
+        await Assert.That(TestContext.Current!.GetStandardOutput()).Contains("Collection 1: 1 of 2 items (1 skipped: 31 without files).");
+    }
+
+    [Test]
+    public async Task LegacyItemHasNoManifestToAskFor()
+    {
+        var source = new FakeWorkshopSource().Add(Legacy(30));
+
+        var run = await Resolve(source, "30:123");
+
+        await Assert.That(run.LegacyItems).IsEmpty();
+        await Assert.That(run.FailedTargets).IsEquivalentTo(["30:123"]);
+    }
+
+    [Test]
     [Arguments("12")]
     [Arguments("99")]
     [Arguments("20")]
-    public async Task LegacyMissingAndDepotlessItemsFail(string item)
+    public async Task LegacyWithoutFileMissingAndDepotlessItemsFail(string item)
     {
         var source = new FakeWorkshopSource().Add(Item(12, manifest: 1200, flags: 0), Item(20, manifest: 2000, app: 550)).AddApp(730, 730);
 
