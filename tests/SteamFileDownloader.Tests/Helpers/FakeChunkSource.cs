@@ -76,8 +76,18 @@ internal sealed class FakeChunkSource : IChunkSource
 }
 
 // Waits between retries end right away
-internal sealed class InstantTimeProvider : TimeProvider
+internal class InstantTimeProvider : TimeProvider
 {
     public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) =>
         base.CreateTimer(callback, state, TimeSpan.Zero, period);
+}
+
+// Waits end right away, and every reading of the clock is a step later than the one before
+internal sealed class SteppingTimeProvider(TimeSpan step) : InstantTimeProvider
+{
+    private long Timestamp;
+
+    public override long TimestampFrequency => 1000;
+
+    public override long GetTimestamp() => Interlocked.Add(ref Timestamp, (long)step.TotalMilliseconds);
 }

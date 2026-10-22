@@ -89,9 +89,9 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
         Content = SteamClient.GetHandler<SteamContent>()!;
         PublishedFiles = SteamClient.GetHandler<SteamUnifiedMessages>()!.CreateService<PublishedFile>();
 
-        // A server that doesn't answer is given up on soon, since the retry goes to another one. A body gets much
-        // longer, since many chunks share the connection and a slow one can take minutes for each, as can big manifests
-        Client.RequestTimeout = TimeSpan.FromSeconds(10);
+        // Many chunks share a connection, so on a slow line even the headers of one can take a while. A body gets much
+        // longer, since a slow chunk can take minutes, as can big manifests
+        Client.RequestTimeout = TimeSpan.FromMinutes(1);
         Client.ResponseBodyTimeout = TimeSpan.FromMinutes(5);
 
         Manager.Subscribe<SteamClient.ConnectedCallback>(_ => ConnectedTcs.TrySetResult(true));
@@ -590,9 +590,13 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
 
         try
         {
-            var tokenResult = await Apps.PICSGetAccessTokens(appIDs, []);
-            var requests = appIDs.Select(appID => new SteamApps.PICSRequest(appID, tokenResult.AppTokens.GetValueOrDefault(appID)));
-            var productInfo = await Apps.PICSGetProductInfo(requests, []);
+            var productInfo = await RequestFromSteamAsync("app info request", async () =>
+            {
+                var tokenResult = await Apps.PICSGetAccessTokens(appIDs, []);
+                var requests = appIDs.Select(appID => new SteamApps.PICSRequest(appID, tokenResult.AppTokens.GetValueOrDefault(appID)));
+
+                return await Apps.PICSGetProductInfo(requests, []);
+            });
 
             foreach (var result in productInfo.Results ?? [])
             {

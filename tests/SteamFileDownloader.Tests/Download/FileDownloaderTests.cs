@@ -13,6 +13,10 @@ public class FileDownloaderTests
 
     private static FileDownloader Downloader(FakeChunkSource source, CancellationToken cancellationToken = default) => new(source, cancellationToken) { TimeProvider = new InstantTimeProvider() };
 
+    // Chunks that keep failing end it after a few readings of the clock, instead of after the outage timeout
+    private static FileDownloader OutageDownloader(FakeChunkSource source, string? tempFolder = null) =>
+        new(source, CancellationToken.None) { TimeProvider = new SteppingTimeProvider(TimeSpan.FromMinutes(5)), TempFolder = tempFolder };
+
     private static string[] FilesIn(string folder) => Directory.GetFiles(folder, "*", SearchOption.AllDirectories);
 
     private static FakeChunkSource SourceOf(params byte[][] chunks)
@@ -245,7 +249,7 @@ public class FileDownloaderTests
         var job = TestManifests.Job(temp.Path, 1, bad, good);
         var source = SourceOf(ChunkA, ChunkB, ChunkC);
         source.Serve = (_, data) => data == ChunkA ? throw new HttpRequestException("reset") : data;
-        using var downloader = Downloader(source);
+        using var downloader = OutageDownloader(source);
 
         var (success, files) = await downloader.DownloadAllFiles([new FileJob(job, bad), new FileJob(job, good)]);
 
@@ -254,10 +258,27 @@ public class FileDownloaderTests
         await Assert.That(files.Select(static f => f.Path)).IsEquivalentTo([goodPath]);
         await Assert.That(Directory.GetFiles(temp.Path)).IsEquivalentTo([goodPath]);
 
-        // The first attempt and eight retries
+        // It was retried, each time on another server, until no chunk had downloaded for the outage timeout
         var servers = source.Calls.Where(c => c.Chunk == bad.Chunks[0]).Select(static c => c.Server).ToList();
-        await Assert.That(servers.Count).IsEqualTo(9);
+        await Assert.That(servers.Count).IsGreaterThan(1);
         await Assert.That(servers.Zip(servers.Skip(1)).All(static p => p.First != p.Second)).IsTrue();
+    }
+
+    [Test]
+    public async Task ChunkIsRetriedUntilItDownloads()
+    {
+        using var temp = new TempDirectory();
+        var file = TestManifests.File("a.bin", ChunkA);
+        var job = TestManifests.Job(temp.Path, 1, file);
+        var source = SourceOf(ChunkA);
+        source.Serve = static (attempt, data) => attempt < 20 ? throw new HttpRequestException("reset") : data;
+        using var downloader = Downloader(source);
+
+        var (success, _) = await downloader.DownloadAllFiles([new FileJob(job, file)]);
+
+        await Assert.That(success).IsTrue();
+        await Assert.That(await File.ReadAllBytesAsync(Path.Combine(temp.Path, "a.bin"))).IsEquivalentTo(ChunkA);
+        await Assert.That(source.Calls.Count).IsEqualTo(21);
     }
 
     [Test]
@@ -269,7 +290,7 @@ public class FileDownloaderTests
         var job = TestManifests.Job(temp.Path, 1, first, second);
         var source = SourceOf(ChunkA);
         source.Broken.Add(first.Chunks[0]);
-        using var downloader = Downloader(source);
+        using var downloader = OutageDownloader(source);
 
         var (success, files) = await downloader.DownloadAllFiles([new FileJob(job, first), new FileJob(job, second)]);
 
@@ -319,7 +340,7 @@ public class FileDownloaderTests
             duringDownload.Add((FilesIn(output).Length, FilesIn(tempFolder).Length));
             return data;
         };
-        using var downloader = new FileDownloader(source, CancellationToken.None) { TimeProvider = new InstantTimeProvider(), TempFolder = tempFolder };
+        using var downloader = OutageDownloader(source, tempFolder);
 
         var (success, files) = await downloader.DownloadAllFiles([new FileJob(job, good), new FileJob(job, bad)]);
 

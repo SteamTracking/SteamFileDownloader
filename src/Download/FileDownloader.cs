@@ -44,6 +44,12 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
     // Chunks downloaded at once, which fills a gigabit line, while many more only slow down the last files
     private const int Connections = 64;
 
+    // Chunks keep retrying until nothing has downloaded for this long, which means the CDN is down, not one chunk or server
+    private static readonly TimeSpan OutageTimeout = TimeSpan.FromMinutes(15);
+
+    // The waits between retries of a chunk double up to 2^this seconds
+    private const int MaxBackoffExponent = 5;
+
     // Most files are one chunk, and a file also holds its worker while it's hashed or written, so files can't be what limits downloads, only chunks are
     private ParallelOptions FileWorkers => new() { MaxDegreeOfParallelism = Connections * 2, CancellationToken = cancellationToken };
 
@@ -75,6 +81,11 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
     private readonly ConcurrentDictionary<string, int> ChunkErrorReasons = new();
     private readonly ConcurrentDictionary<string, int> ChunkErrorServers = new();
     private int FailedChunks;
+
+    // When a chunk last completed, while chunks are downloading. It restarts with the first chunk after an idle time
+    private long LastProgress;
+    private int ActiveChunks;
+    private int OutageDetected;
 
     public void Dispose() => SemaphorePerDownloadChunk.Dispose();
 
@@ -280,7 +291,12 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
             return;
         }
 
-        Log.Warn($"{reasons.Sum(static c => c.Value)} chunk errors ({Format(reasons)}) from {Format(servers)}; {failed} chunks failed after all retries.");
+        Log.Warn($"{reasons.Sum(static c => c.Value)} chunk errors ({Format(reasons)}) from {Format(servers)}; {failed} chunks failed.");
+
+        if (Interlocked.Exchange(ref OutageDetected, 0) == 1)
+        {
+            Log.Error($"No chunk was downloaded in {OutageTimeout.TotalMinutes} minutes, so the CDN seems to be down. Check the network, or retry later.");
+        }
 
         // Most first
         static List<KeyValuePair<string, int>> TakeCounts(ConcurrentDictionary<string, int> counts)
@@ -639,10 +655,31 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         SafeFileHandle handle,
         CancellationToken chunkCancellation)
     {
-        // Each attempt goes to another server than the last, so the first retries don't wait. The waits after them add
-        // up to about two minutes, which rides out a short network outage
+        if (Interlocked.Increment(ref ActiveChunks) == 1)
+        {
+            Volatile.Write(ref LastProgress, TimeProvider.GetTimestamp());
+        }
+
+        try
+        {
+            return await DownloadChunkWithRetries(job, placement, handle, chunkCancellation);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref ActiveChunks);
+        }
+    }
+
+    // A chunk is retried until it downloads, a second server refuses it, or no chunk of the run has downloaded for OutageTimeout
+    private async Task<bool> DownloadChunkWithRetries(
+        ManifestJob job,
+        ChunkPlacement placement,
+        SafeFileHandle handle,
+        CancellationToken chunkCancellation)
+    {
+        // Each attempt goes to another server than the last, so the first retries don't wait. The waits after them grow
+        // to half a minute, which rides out a network outage
         const int ImmediateRetries = 2;
-        const int MaxChunkRetries = 8;
 
         Server? lastServer = null;
         Server? refusedBy = null;
@@ -653,6 +690,7 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
 
             if (error == null)
             {
+                Volatile.Write(ref LastProgress, TimeProvider.GetTimestamp());
                 return true;
             }
 
@@ -670,22 +708,24 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
             // Refused by a second server too, so the CDN doesn't have it, rather than one server
             var refusedByAnotherServer = isRefusal && refusedBy != null && refusedBy != server;
 
-            if (attempt >= MaxChunkRetries || refusedByAnotherServer)
+            if (refusedByAnotherServer || IsOutage())
             {
                 Interlocked.Increment(ref FailedChunks);
                 return false;
             }
 
-            // Another server may have it, so it's tried right away
-            if (isRefusal)
+            // Another server may have it, so it's tried right away. When the same server refuses it again, because it's the
+            // only one, the wait applies
+            if (isRefusal && refusedBy == null)
             {
-                refusedBy ??= server;
+                refusedBy = server;
                 continue;
             }
 
             if (attempt >= ImmediateRetries)
             {
-                var delay = SteamSession.ExponentialBackoff(attempt - ImmediateRetries + 1);
+                var exponent = Math.Min(attempt - ImmediateRetries + 1, MaxBackoffExponent);
+                var delay = SteamSession.ExponentialBackoff(exponent);
 
                 if (!await DelayUnlessCancelled(delay, chunkCancellation))
                 {
@@ -693,6 +733,20 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
                 }
             }
         }
+    }
+
+    private bool IsOutage()
+    {
+        var sinceProgress = TimeProvider.GetElapsedTime(Volatile.Read(ref LastProgress));
+
+        if (sinceProgress < OutageTimeout)
+        {
+            return false;
+        }
+
+        Volatile.Write(ref OutageDetected, 1);
+
+        return true;
     }
 
     // One attempt, on another server than the one to avoid if there is one. The download slot is held until the chunk is
