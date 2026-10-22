@@ -39,6 +39,10 @@ internal static class GetCommand
         public string? BranchPassword;
         public Dictionary<uint, List<string>> UnlockedBranches = [];
 
+        // Added to the error of a workshop item that does not exist, and once after manifests that Steam gave no access to
+        public string? ItemNotFoundHint;
+        public string? ManifestNotFoundHint;
+
         // The exit code to end the run with right away, after an error that makes the rest pointless
         public int? AbortExitCode;
 
@@ -221,6 +225,8 @@ internal static class GetCommand
         {
             Command = command,
             BranchPassword = options.BranchPassword,
+            ItemNotFoundHint = options.ItemNotFoundHint,
+            ManifestNotFoundHint = options.ManifestNotFoundHint,
             Filter = filter,
             Session = session,
             OutputRoot = outputRoot,
@@ -244,6 +250,11 @@ internal static class GetCommand
         foreach (var job in run.Jobs.Where(static j => j.Manifest == null && !(j.Optional && j.NoAccess)))
         {
             run.Fail(job.ToString(), job.NoAccess);
+        }
+
+        if (run.ManifestNotFoundHint != null && run.Jobs.Exists(static j => j.Manifest == null && j.NoAccess))
+        {
+            Log.Info(run.ManifestNotFoundHint);
         }
 
         // Files come from the CDN, which does not need the Steam connection
@@ -905,16 +916,7 @@ internal static class GetCommand
         // Another login only helps targets that failed for lack of access
         if (run.FailedForAccess)
         {
-            var usernames = AccountStore.GetUsernames();
-
-            if (run.Session.IsAnonymous)
-            {
-                Log.Info($"Anonymous logins only have some free apps. Run \"{Help.ExeName} login\" to use an account that owns this content.");
-            }
-            else if (usernames.Count > 1)
-            {
-                Log.Info($"If another saved login owns this content, pick it with --username ({string.Join(", ", usernames)}).");
-            }
+            Log.Info(Help.AccessHint(run.Session.IsAnonymous, AccountStore.GetUsernames()));
         }
 
         // The failed targets are named in the error that explains the exit code

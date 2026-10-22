@@ -64,6 +64,33 @@ public class DepotDownloaderArgumentsTests
     }
 
     [Test]
+    public async Task UgcHintsAtPubfileForMissingManifests()
+    {
+        var result = DepotDownloaderArguments.Parse(["-app", "730", "-ugc", "8344780363095656278"]);
+
+        await Assert.That(result!.Options.ManifestNotFoundHint).IsEqualTo("If 8344780363095656278 is a workshop item id, use -pubfile instead of -ugc.");
+        await Assert.That(result.Options.ItemNotFoundHint).IsNull();
+    }
+
+    [Test]
+    public async Task PubfileHintsAtUgcForMissingItems()
+    {
+        var result = DepotDownloaderArguments.Parse(["-pubfile", "8344780363095656278"]);
+
+        await Assert.That(result!.Options.ItemNotFoundHint).IsEqualTo("If 8344780363095656278 is a UGC id, use -ugc instead of -pubfile.");
+        await Assert.That(result.Options.ManifestNotFoundHint).IsNull();
+    }
+
+    [Test]
+    public async Task DepotsGetNoIdHints()
+    {
+        var result = DepotDownloaderArguments.Parse(["-app", "730", "-depot", "731"]);
+
+        await Assert.That(result!.Options.ItemNotFoundHint).IsNull();
+        await Assert.That(result.Options.ManifestNotFoundHint).IsNull();
+    }
+
+    [Test]
     [Arguments("-pubfile 3070715607 -depot 730")]
     [Arguments("-app 730 -ugc 5 -depot 730 -manifest 5")]
     [Arguments("-pubfile 3070715607 -app 730 -ugc 5")]

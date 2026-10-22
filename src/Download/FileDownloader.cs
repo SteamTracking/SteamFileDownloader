@@ -136,12 +136,11 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         // Returns the file's path, or null when it failed
         async Task<string?> DownloadFileLocal(FileJob fileJob, string? copyFrom)
         {
-            DownloadResult fileState;
-            string finalPath;
+            FileOutcome outcome;
 
             try
             {
-                (fileState, finalPath) = await DownloadFile(fileJob.Job, fileJob.File, copyFrom);
+                outcome = await DownloadFile(fileJob.Job, fileJob.File, copyFrom);
             }
             catch (Exception e) when (OutputFiles.IsFileError(e))
             {
@@ -149,6 +148,8 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
                 failedFiles.Add(fileJob);
                 return null;
             }
+
+            var fileState = outcome.Result;
 
             if (fileState is DownloadResult.DownloadFailed)
             {
@@ -162,15 +163,19 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
                 return null;
             }
 
-            downloadedFiles.Add(new DownloadedFile(fileJob.Job, fileJob.File, finalPath));
+            downloadedFiles.Add(new DownloadedFile(fileJob.Job, fileJob.File, outcome.Path));
             Interlocked.Increment(ref resultCounts[(int)fileState]);
 
-            if (fileState is not DownloadResult.Success)
+            if (fileState is DownloadResult.Success)
+            {
+                Interlocked.Add(ref skippedBytes, outcome.KeptBytes);
+            }
+            else
             {
                 Interlocked.Add(ref skippedBytes, (long)fileJob.File.TotalSize);
             }
 
-            return finalPath;
+            return outcome.Path;
         }
 
         (double, string) RenderProgress()
@@ -348,13 +353,16 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
 
     /// <summary>
     /// Where a file is written before it is complete. By default next to it, so an interrupted run leaves it
-    /// where the next run overwrites it.
+    /// where the next run picks it up.
     /// </summary>
     public string GetPartialPath(string finalPath) => TempFolder != null
         ? Path.Combine(TempFolder, Path.GetRandomFileName())
         : finalPath + ".partial";
 
-    private async Task<(DownloadResult Result, string Path)> DownloadFile(
+    // KeptBytes are the ones of a partial file that were already right, which didn't need downloading
+    private readonly record struct FileOutcome(DownloadResult Result, string Path, long KeptBytes = 0);
+
+    private async Task<FileOutcome> DownloadFile(
         ManifestJob job,
         DepotManifest.FileData file,
         string? copyFrom)
@@ -365,7 +373,7 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
 
         if ((file.Flags & EDepotFileFlag.Symlink) != 0)
         {
-            return (DownloadLink(job, file, finalPath), finalPath);
+            return new FileOutcome(DownloadLink(job, file, finalPath), finalPath);
         }
 
         // Manifests list empty files with an all-zero hash, so only their size is checked
@@ -373,17 +381,17 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         {
             if (HasExpectedSize(finalPath, file))
             {
-                return (DownloadResult.AlreadyValid, finalPath);
+                return new FileOutcome(DownloadResult.AlreadyValid, finalPath);
             }
 
             await OutputFiles.WriteFileAsync(finalPath, [], job.CreationTime, cancellationToken);
 
-            return (DownloadResult.Success, finalPath);
+            return new FileOutcome(DownloadResult.Success, finalPath);
         }
 
         if (await HasExpectedHash(finalPath, file))
         {
-            return (DownloadResult.AlreadyValid, finalPath);
+            return new FileOutcome(DownloadResult.AlreadyValid, finalPath);
         }
 
         var partialPath = GetPartialPath(finalPath);
@@ -400,24 +408,40 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
                 File.SetLastWriteTimeUtc(partialPath, job.CreationTime);
                 File.Move(partialPath, finalPath, overwrite: true);
 
-                return (DownloadResult.Copied, finalPath);
+                return new FileOutcome(DownloadResult.Copied, finalPath);
             }
 
             var placements = file.Chunks.Select(static c => new ChunkPlacement(c, (long)c.Offset)).ToList();
+            var length = (long)file.TotalSize;
+            bool downloaded;
+            var keptBytes = 0L;
 
-            if (!await DownloadChunksToFile(job, placements, (long)file.TotalSize, partialPath))
+            if (TempFolder == null)
             {
-                return (DownloadResult.DownloadFailed, finalPath);
+                (downloaded, keptBytes) = await ResumeChunksToFile(job, placements, length, partialPath);
+            }
+            else
+            {
+                downloaded = await DownloadChunksToFile(job, placements, length, partialPath);
+            }
+
+            if (!downloaded)
+            {
+                return new FileOutcome(DownloadResult.DownloadFailed, finalPath);
             }
 
             File.Move(partialPath, finalPath, overwrite: true);
 
-            return (DownloadResult.Success, finalPath);
+            return new FileOutcome(DownloadResult.Success, finalPath, keptBytes);
         }
         finally
         {
-            // Left over when anything failed, including cancellation
-            File.Delete(partialPath);
+            // A partial file next to the file is kept when anything failed, including cancellation, for the next run to
+            // resume. One in the temp folder has a random name that no run looks for again
+            if (TempFolder != null)
+            {
+                File.Delete(partialPath);
+            }
         }
     }
 
@@ -507,44 +531,92 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
 
     private async Task<bool> HashMatches(string path, DepotManifest.FileData file)
     {
-        await SemaphorePerDiskOperation.WaitAsync(cancellationToken);
-
-        try
+        using (await EnterDiskOperation())
         {
             await using var fs = File.OpenRead(path);
             var hash = await SHA1.HashDataAsync(fs, cancellationToken);
 
             return file.FileHash.SequenceEqual(hash);
         }
-        finally
+    }
+
+    private readonly struct DiskOperation(SemaphoreSlim semaphore) : IDisposable
+    {
+        public void Dispose() => semaphore.Release();
+    }
+
+    // Limits the disk operations at once, until the returned value is disposed
+    private async Task<DiskOperation> EnterDiskOperation()
+    {
+        await SemaphorePerDiskOperation.WaitAsync(cancellationToken);
+
+        return new DiskOperation(SemaphorePerDiskOperation);
+    }
+
+    // Opens the file at the given length, and disposes it when that fails. A new file has its space allocated up front.
+    // Returns the file's length from before
+    private static FileStream OpenAtLength(string path, FileMode mode, long length, out long previousLength)
+    {
+        var preallocationSize = mode == FileMode.Create ? length : 0;
+        var stream = OutputFiles.Open(path, mode, FileAccess.ReadWrite, FileOptions.Asynchronous, preallocationSize);
+
+        try
         {
-            SemaphorePerDiskOperation.Release();
+            previousLength = RandomAccess.GetLength(stream.SafeFileHandle);
+
+            if (previousLength != length)
+            {
+                RandomAccess.SetLength(stream.SafeFileHandle, length);
+            }
+
+            return stream;
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
         }
     }
 
     private async Task<FileStream> CreatePreallocatedFile(string path, long length)
     {
-        await SemaphorePerDiskOperation.WaitAsync(cancellationToken);
-
-        try
+        using (await EnterDiskOperation())
         {
-            var stream = OutputFiles.Open(path, FileMode.Create, FileAccess.ReadWrite, FileOptions.Asynchronous, length);
-
-            try
-            {
-                RandomAccess.SetLength(stream.SafeFileHandle, length);
-            }
-            catch
-            {
-                stream.Dispose();
-                throw;
-            }
-
-            return stream;
+            return OpenAtLength(path, FileMode.Create, length, out _);
         }
-        finally
+    }
+
+    // Opens the file at the given length, which keeps what an earlier run wrote. Returns its length from before, which is 0
+    // for a file that is new, and then has its space allocated up front
+    private async Task<(FileStream Stream, long ExistingLength)> OpenPartialFile(string path, long length)
+    {
+        using (await EnterDiskOperation())
         {
-            SemaphorePerDiskOperation.Release();
+            var info = new FileInfo(path);
+
+            if (!info.Exists || info.Length == 0)
+            {
+                return (OpenAtLength(path, FileMode.Create, length, out _), 0);
+            }
+
+            var stream = OpenAtLength(path, FileMode.OpenOrCreate, length, out var existingLength);
+
+            return (stream, existingLength);
+        }
+    }
+
+    // Downloads the chunks that a partial file of an earlier run doesn't have. Returns whether the file is complete, and the bytes it had
+    private async Task<(bool Success, long KeptBytes)> ResumeChunksToFile(
+        ManifestJob job,
+        IReadOnlyCollection<ChunkPlacement> placements,
+        long length,
+        string path)
+    {
+        var (stream, existingLength) = await OpenPartialFile(path, length);
+
+        using (stream)
+        {
+            return await DownloadMissingChunks(job, placements, stream.SafeFileHandle, existingLength);
         }
     }
 
@@ -695,37 +767,25 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
             RandomAccess.SetLength(handle, length);
         }
 
-        // Chunks are identified by their hash, so ones written by an earlier run, even of another build, are kept
-        var missing = new List<ChunkPlacement>();
-        var keptBytes = 0L;
-        var buffer = ArrayPool<byte>.Shared.Rent((int)chunks.Max(static c => c.UncompressedLength));
+        var placements = chunks.Select(static c => new ChunkPlacement(c, (long)c.Offset)).ToList();
 
-        try
+        return await DownloadMissingChunks(job, placements, handle, existingLength);
+    }
+
+    // Chunks are identified by their hash, so ones written by an earlier run, even of another build, are kept.
+    // Returns whether all chunks are in the file, and the bytes of the ones that already were
+    private async Task<(bool Success, long KeptBytes)> DownloadMissingChunks(
+        ManifestJob job,
+        IReadOnlyCollection<ChunkPlacement> placements,
+        SafeFileHandle handle,
+        long existingLength)
+    {
+        List<ChunkPlacement> missing;
+        long keptBytes;
+
+        using (await EnterDiskOperation())
         {
-            foreach (var chunk in chunks)
-            {
-                var data = buffer.AsMemory(0, (int)chunk.UncompressedLength);
-                var offset = (long)chunk.Offset;
-                var isInFile = false;
-
-                if (offset + data.Length <= existingLength)
-                {
-                    var read = await RandomAccess.ReadAsync(handle, data, offset, cancellationToken);
-                    isInFile = read == data.Length && IsChunkData(data.Span, chunk);
-                }
-
-                if (isInFile)
-                {
-                    keptBytes += data.Length;
-                    continue;
-                }
-
-                missing.Add(new ChunkPlacement(chunk, offset));
-            }
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(buffer);
+            (missing, keptBytes) = await FindMissingChunks(handle, existingLength, placements, cancellationToken);
         }
 
         var success = missing.Count == 0 || await DownloadChunks(job, missing, handle);
@@ -736,6 +796,66 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         }
 
         return (success, keptBytes);
+    }
+
+    /// <summary>
+    /// Finds the chunks that are not in the first existingLength bytes of a file at their position, by their hash.
+    /// Returns them with the bytes of the chunks that are.
+    /// </summary>
+    internal static async Task<(List<ChunkPlacement> Missing, long KeptBytes)> FindMissingChunks(
+        SafeFileHandle handle,
+        long existingLength,
+        IReadOnlyCollection<ChunkPlacement> placements,
+        CancellationToken cancellationToken)
+    {
+        var missing = new List<ChunkPlacement>();
+        var keptBytes = 0L;
+
+        if (placements.Count == 0)
+        {
+            return (missing, keptBytes);
+        }
+
+        if (existingLength == 0)
+        {
+            missing.AddRange(placements);
+
+            return (missing, keptBytes);
+        }
+
+        var buffer = ArrayPool<byte>.Shared.Rent((int)placements.Max(static p => p.Chunk.UncompressedLength));
+
+        try
+        {
+            foreach (var placement in placements)
+            {
+                var chunk = placement.Chunk;
+                var data = buffer.AsMemory(0, (int)chunk.UncompressedLength);
+                var isInFile = false;
+
+                if (placement.Position + data.Length <= existingLength)
+                {
+                    var read = await RandomAccess.ReadAsync(handle, data, placement.Position, cancellationToken);
+
+                    // A gap that was never written reads as zeros, which is not worth hashing
+                    isInFile = read == data.Length && data.Span.IndexOfAnyExcept((byte)0) >= 0 && IsChunkData(data.Span, chunk);
+                }
+
+                if (isInFile)
+                {
+                    keptBytes += data.Length;
+                    continue;
+                }
+
+                missing.Add(placement);
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+
+        return (missing, keptBytes);
     }
 
     // Returns false when any chunk failed

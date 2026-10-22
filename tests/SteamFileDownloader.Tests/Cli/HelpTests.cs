@@ -29,6 +29,39 @@ public partial class HelpTests
     public static IEnumerable<string> Commands() => ArgumentParser.CommandOptions.Keys;
 
     [Test]
+    public async Task AnonymousRunsAreToldToLogIn()
+    {
+        await Assert.That(Help.AnonymousAccessHint).Contains("login").And.DoesNotContain("--anonymous");
+    }
+
+    [Test]
+    public async Task AccountRunsAreToldAboutAnonymousOnlyAppsAndFreeLicenses()
+    {
+        var hint = Help.AccountAccessHint(["a"]);
+
+        await Assert.That(hint).Contains("--anonymous").And.Contains("free weekends").And.DoesNotContain("--username");
+    }
+
+    [Test]
+    public async Task AccessHintDependsOnTheLogin()
+    {
+        await Assert.That(Help.AccessHint(true, ["a"])).IsEqualTo(Help.AnonymousAccessHint);
+        await Assert.That(Help.AccessHint(false, ["a", "b"])).IsEqualTo(Help.AccountAccessHint(["a", "b"]));
+    }
+
+    [Test]
+    public async Task AccountRunsWithSeveralLoginsAreToldToPickOne()
+    {
+        await Assert.That(Help.AccountAccessHint(["a", "b"])).StartsWith("If another saved login owns this content, pick it with --username (a, b).");
+    }
+
+    [Test]
+    public async Task ExitCodeFiveMentionsFreeLicenses()
+    {
+        await Assert.That(Help.Get).Contains("Free apps and free weekends need");
+    }
+
+    [Test]
     [MethodDataSource(nameof(Commands))]
     public async Task HelpMentionsEveryOptionOfTheCommand(string command)
     {

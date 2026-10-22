@@ -358,7 +358,9 @@ internal static class WorkshopCommands
 
             if (itemProblem != null)
             {
-                Log.Error(itemProblem.Message);
+                var hint = itemProblem.SkipReason == "removed" && run.ItemNotFoundHint != null ? $" {run.ItemNotFoundHint}" : "";
+
+                Log.Error($"{itemProblem.Message}{hint}");
                 run.Fail(target.Source, itemProblem.NoAccess);
                 continue;
             }

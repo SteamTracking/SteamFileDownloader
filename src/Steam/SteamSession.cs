@@ -622,9 +622,16 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
             return appInfos;
         }
 
-        foreach (var appID in appIDs.Where(appID => !appInfos.ContainsKey(appID)))
+        var missing = appIDs.Where(appID => !appInfos.ContainsKey(appID)).ToList();
+
+        foreach (var appID in missing)
         {
             Log.Error($"App {appID} does not exist, or this account can't see it. Check the app id, which is the number in the app's store page url.");
+        }
+
+        if (missing.Count > 0)
+        {
+            Log.Info(IsAnonymous ? Help.AnonymousAccessHint : Help.AnonymousOnlyAppHint);
         }
 
         return appInfos;

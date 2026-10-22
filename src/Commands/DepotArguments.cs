@@ -18,6 +18,12 @@ internal sealed record DepotOptions(
 {
     public LoginOptions Login { get; init; } = new();
 
+    // Only dd has these, for ids that may be from the other of -ugc and -pubfile: added to the error of a workshop item
+    // that does not exist, or of a manifest that Steam gave no access to
+    public string? ItemNotFoundHint { get; init; }
+
+    public string? ManifestNotFoundHint { get; init; }
+
     public static DepotOptions From(ParsedArguments parsed, uint? app) => new(
         app,
         parsed.Options.GetValueOrDefault("output"),

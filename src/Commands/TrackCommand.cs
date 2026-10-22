@@ -332,6 +332,11 @@ internal static class TrackCommand
 
         Log.Error(DescribeFailure(elapsed, failedDepots, buildId.HasValue, writeFailed));
 
+        if (manifestJobs.Exists(static job => !job.Optional && job.Manifest == null && job.NoAccess))
+        {
+            Log.Info(Help.AccessHint(session.IsAnonymous, AccountStore.GetUsernames()));
+        }
+
         return ExitCodes.Failed;
     }
 

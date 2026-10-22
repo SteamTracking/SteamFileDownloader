@@ -84,6 +84,39 @@ internal static class Help
         return $"Exit codes: 0 ok, 1 failed, 2 usage error, 3 log in again, 4 rate limited, 5 no access, 6 no match{detailsNote}.";
     }
 
+    /// <summary>
+    /// The hint after an anonymous run lacked access, which an account that owns the content doesn't.
+    /// </summary>
+    public static string AnonymousAccessHint => $"Anonymous logins only have some free apps. Run \"{ExeName} login\" to use an account that owns this content.";
+
+    /// <summary>
+    /// The hints after a run with an account lacked access: another saved login, anonymous only apps and free licenses.
+    /// </summary>
+    public static string AccountAccessHint(IReadOnlyCollection<string> usernames)
+    {
+        var hint = AnonymousOnlyAppHint;
+
+        if (usernames.Count > 1)
+        {
+            hint = $"If another saved login owns this content, pick it with --username ({string.Join(", ", usernames)}). {hint}";
+        }
+
+        return $"{hint} {FreeLicenseHint}";
+    }
+
+    /// <summary>
+    /// The hint after a run lacked access, for an anonymous login or an account.
+    /// </summary>
+    public static string AccessHint(bool isAnonymous, IReadOnlyCollection<string> usernames) =>
+        isAnonymous ? AnonymousAccessHint : AccountAccessHint(usernames);
+
+    /// <summary>
+    /// The hint for an app that an account can't see, which an anonymous login may.
+    /// </summary>
+    public const string AnonymousOnlyAppHint = "Some apps, like dedicated servers, are only available anonymously: try --anonymous.";
+
+    private const string FreeLicenseHint = "Free apps and free weekends need a license on the account first, which the Steam client can add; this tool doesn't request free licenses.";
+
     private static string LoginOptions => """
           --username <name>   saved login to use instead of the last one, or with --password <pw> the account to log in as
           --anonymous         log in anonymously, enough for some free apps, and the default without saved logins
@@ -110,7 +143,9 @@ internal static class Help
           5  only access failed: Steam gave no depot key or manifest request code for some targets.
              Another account may own them (--username), or the manifest is on another branch
              (@<branch>) or in another app (<app>/<depot>). Also given when the account can't see an
-             app's password protected branches (--branch-password)
+             app's password protected branches (--branch-password). Free apps and free weekends need
+             a license on the account first: add them in the Steam client, since this tool doesn't
+             request free licenses
           6  a pattern matched nothing in any target, and nothing failed
         """;
 

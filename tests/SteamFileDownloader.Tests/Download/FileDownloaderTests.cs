@@ -241,7 +241,7 @@ public class FileDownloaderTests
     }
 
     [Test]
-    public async Task ChunkThatKeepsFailingFailsOnlyItsFileAndLeavesNothingBehind()
+    public async Task ChunkThatKeepsFailingFailsOnlyItsFileAndLeavesItsPartialFile()
     {
         using var temp = new TempDirectory();
         var bad = TestManifests.File("bad.bin", ChunkA, ChunkB);
@@ -256,7 +256,7 @@ public class FileDownloaderTests
         var goodPath = Path.Combine(temp.Path, "good.bin");
         await Assert.That(success).IsFalse();
         await Assert.That(files.Select(static f => f.Path)).IsEquivalentTo([goodPath]);
-        await Assert.That(Directory.GetFiles(temp.Path)).IsEquivalentTo([goodPath]);
+        await Assert.That(Directory.GetFiles(temp.Path)).IsEquivalentTo([goodPath, Path.Combine(temp.Path, "bad.bin.partial")]);
 
         // It was retried, each time on another server, until no chunk had downloaded for the outage timeout
         var servers = source.Calls.Where(c => c.Chunk == bad.Chunks[0]).Select(static c => c.Server).ToList();
@@ -298,12 +298,12 @@ public class FileDownloaderTests
         await Assert.That(success).IsFalse();
         await Assert.That(files.Select(static f => f.Path)).IsEquivalentTo([secondPath]);
         await Assert.That(await File.ReadAllBytesAsync(secondPath)).IsEquivalentTo(ChunkA);
-        await Assert.That(FilesIn(temp.Path)).IsEquivalentTo([secondPath]);
+        await Assert.That(FilesIn(temp.Path)).IsEquivalentTo([secondPath, Path.Combine(temp.Path, "a.bin.partial")]);
         await Assert.That(source.Calls.Count(c => c.Chunk == second.Chunks[0])).IsEqualTo(1);
     }
 
     [Test]
-    public async Task CancellationMidDownloadThrowsAndLeavesNothingBehind()
+    public async Task CancellationMidDownloadThrowsAndLeavesThePartialFile()
     {
         using var temp = new TempDirectory();
         using var cancellation = new CancellationTokenSource();
@@ -319,7 +319,143 @@ public class FileDownloaderTests
         source.Gate.SetResult();
 
         await Assert.That(async () => await download).Throws<OperationCanceledException>();
-        await Assert.That(FilesIn(temp.Path)).IsEmpty();
+        await Assert.That(FilesIn(temp.Path)).IsEquivalentTo([Path.Combine(temp.Path, "a.bin.partial")]);
+    }
+
+    [Test]
+    public async Task InterruptedDownloadResumesFromItsPartialFile()
+    {
+        using var temp = new TempDirectory();
+        var file = TestManifests.File("a.bin", ChunkA, ChunkB, ChunkC);
+        var job = TestManifests.Job(temp.Path, 1, file);
+        var path = Path.Combine(temp.Path, "a.bin");
+        WriteFile(path + ".partial", [.. ChunkA, .. new byte[60], .. ChunkC]);
+        var source = SourceOf(ChunkA, ChunkB, ChunkC);
+        using var downloader = Downloader(source);
+
+        var (success, _) = await downloader.DownloadAllFiles([new FileJob(job, file)]);
+
+        await Assert.That(success).IsTrue();
+        await Assert.That(await File.ReadAllBytesAsync(path)).IsEquivalentTo([.. ChunkA, .. ChunkB, .. ChunkC]);
+        await Assert.That(source.Calls.Select(static c => c.Chunk)).IsEquivalentTo([file.Chunks[1]]);
+        await Assert.That(FilesIn(temp.Path)).IsEquivalentTo([path]);
+        await Assert.That(File.GetLastWriteTimeUtc(path)).IsEqualTo(TestManifests.CreationTime);
+        await Assert.That(TestContext.Current!.GetStandardOutput() + TestContext.Current.GetErrorOutput()).Contains("Files: 1 downloaded (");
+    }
+
+    [Test]
+    [Arguments(30)]
+    [Arguments(160)]
+    [Arguments(500)]
+    public async Task PartialFileOfAnotherLengthKeepsOnlyTheChunksThatMatch(int partialLength)
+    {
+        using var temp = new TempDirectory();
+        var file = TestManifests.File("a.bin", ChunkA, ChunkB, ChunkC);
+        var job = TestManifests.Job(temp.Path, 1, file);
+        var path = Path.Combine(temp.Path, "a.bin");
+
+        // The first chunk is from another version of the file, the second is cut or missing
+        var other = Bytes(9, 100);
+        byte[] partial = [.. other, .. ChunkB, .. Enumerable.Repeat((byte)0xEE, 340)];
+        WriteFile(path + ".partial", partial[..partialLength]);
+        var source = SourceOf(ChunkA, ChunkB, ChunkC);
+        using var downloader = Downloader(source);
+
+        var (success, _) = await downloader.DownloadAllFiles([new FileJob(job, file)]);
+
+        var expectedCalls = partialLength >= 160 ? 2 : 3;
+        await Assert.That(success).IsTrue();
+        await Assert.That(await File.ReadAllBytesAsync(path)).IsEquivalentTo([.. ChunkA, .. ChunkB, .. ChunkC]);
+        await Assert.That(source.Calls.Count).IsEqualTo(expectedCalls);
+        await Assert.That(source.Calls.Any(c => c.Chunk == file.Chunks[0])).IsTrue();
+        await Assert.That(source.Calls.Any(c => c.Chunk == file.Chunks[1])).IsEqualTo(partialLength < 160);
+        await Assert.That(FilesIn(temp.Path)).IsEquivalentTo([path]);
+    }
+
+    [Test]
+    public async Task PartialFileInTheTempFolderIsNotResumed()
+    {
+        using var temp = new TempDirectory();
+        var tempFolder = Path.Combine(temp.Path, "tmp");
+        var file = TestManifests.File("a.bin", ChunkA, ChunkB);
+        var job = TestManifests.Job(Path.Combine(temp.Path, "out"), 1, file);
+        WriteFile(Path.Combine(temp.Path, "out", "a.bin.partial"), [.. ChunkA, .. ChunkB]);
+        Directory.CreateDirectory(tempFolder);
+        var source = SourceOf(ChunkA, ChunkB);
+        using var downloader = OutageDownloader(source, tempFolder);
+
+        var (success, _) = await downloader.DownloadAllFiles([new FileJob(job, file)]);
+
+        await Assert.That(success).IsTrue();
+        await Assert.That(source.Calls.Count).IsEqualTo(2);
+        await Assert.That(FilesIn(tempFolder)).IsEmpty();
+    }
+
+    [Test]
+    public async Task FindMissingChunksSkipsTheChunksThatMatchTheirHash()
+    {
+        using var temp = new TempDirectory();
+        var file = TestManifests.File("a.bin", ChunkA, ChunkB, ChunkC);
+        var path = Path.Combine(temp.Path, "a.bin.partial");
+        var other = Bytes(9, 100);
+
+        // The last chunk is cut off, and the first one is not the file's
+        WriteFile(path, [.. other, .. ChunkB, .. ChunkC[..40]]);
+        var placements = file.Chunks.Select(static c => new ChunkPlacement(c, (long)c.Offset)).ToList();
+
+        using var handle = File.OpenHandle(path);
+        var (missing, keptBytes) = await FileDownloader.FindMissingChunks(handle, new FileInfo(path).Length, placements, CancellationToken.None);
+
+        await Assert.That(missing.Select(static m => m.Chunk)).IsEquivalentTo([file.Chunks[0], file.Chunks[2]]);
+        await Assert.That(keptBytes).IsEqualTo(60L);
+    }
+
+    [Test]
+    public async Task FindMissingChunksIgnoresWhatIsPastTheExistingLength()
+    {
+        using var temp = new TempDirectory();
+        var file = TestManifests.File("a.bin", ChunkA, ChunkB);
+        var path = Path.Combine(temp.Path, "a.bin.partial");
+        WriteFile(path, [.. ChunkA, .. ChunkB]);
+        var placements = file.Chunks.Select(static c => new ChunkPlacement(c, (long)c.Offset)).ToList();
+
+        using var handle = File.OpenHandle(path);
+        var (missing, keptBytes) = await FileDownloader.FindMissingChunks(handle, 100, placements, CancellationToken.None);
+
+        await Assert.That(missing.Select(static m => m.Chunk)).IsEquivalentTo([file.Chunks[1]]);
+        await Assert.That(keptBytes).IsEqualTo(100L);
+    }
+
+    [Test]
+    public async Task FindMissingChunksKeepsNothingOfAnEmptyFile()
+    {
+        using var temp = new TempDirectory();
+        var file = TestManifests.File("a.bin", ChunkA, ChunkB);
+        var path = Path.Combine(temp.Path, "a.bin.partial");
+        WriteFile(path, []);
+        var placements = file.Chunks.Select(static c => new ChunkPlacement(c, (long)c.Offset)).ToList();
+
+        using var handle = File.OpenHandle(path);
+        var (missing, keptBytes) = await FileDownloader.FindMissingChunks(handle, 0, placements, CancellationToken.None);
+
+        await Assert.That(missing.Select(static m => m.Chunk)).IsEquivalentTo(file.Chunks);
+        await Assert.That(keptBytes).IsEqualTo(0L);
+    }
+
+    [Test]
+    public async Task FindMissingChunksTreatsAGapOfZerosAsMissing()
+    {
+        using var temp = new TempDirectory();
+        var file = TestManifests.File("a.bin", ChunkA, ChunkB);
+        var path = Path.Combine(temp.Path, "a.bin.partial");
+        WriteFile(path, [.. new byte[ChunkA.Length], .. ChunkB]);
+        var placements = file.Chunks.Select(static c => new ChunkPlacement(c, (long)c.Offset)).ToList();
+
+        using var handle = File.OpenHandle(path);
+        var (missing, keptBytes) = await FileDownloader.FindMissingChunks(handle, new FileInfo(path).Length, placements, CancellationToken.None);
+
+        await Assert.That(missing.Select(static m => m.Chunk)).IsEquivalentTo([file.Chunks[0]]);
+        await Assert.That(keptBytes).IsEqualTo((long)ChunkB.Length);
     }
 
     [Test]
@@ -404,7 +540,7 @@ public class FileDownloaderTests
         await Assert.That(files).IsEmpty();
         await Assert.That(calls.Count).IsEqualTo(2);
         await Assert.That(calls[1].Server).IsNotEqualTo(calls[0].Server);
-        await Assert.That(Directory.GetFiles(temp.Path)).IsEmpty();
+        await Assert.That(Directory.GetFiles(temp.Path)).IsEquivalentTo([Path.Combine(temp.Path, "a.bin.partial")]);
     }
 
     [Test]

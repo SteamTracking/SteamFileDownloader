@@ -168,6 +168,8 @@ internal static class DepotDownloaderArguments
         // The item's files go to the workshop folder, like with workshop get, and its app doesn't matter
         if (pubfile != null)
         {
+            options = options with { ItemNotFoundHint = $"If {pubfile} is a UGC id, use -ugc instead of -pubfile." };
+
             return new DepotArguments(manifestOnly ? "workshop ls" : "workshop get", options, [pubfile], patterns);
         }
 
@@ -188,6 +190,7 @@ internal static class DepotDownloaderArguments
         if (ugc != null)
         {
             targets.Add($"{options.App}:{ugc}");
+            options = options with { ManifestNotFoundHint = $"If {ugc} is a workshop item id, use -pubfile instead of -ugc." };
         }
         else
         {
