@@ -40,7 +40,7 @@ public partial class HelpTests
     {
         var hint = Help.AccountAccessHint(["a"]);
 
-        await Assert.That(hint).Contains("--anonymous").And.Contains("free weekends").And.DoesNotContain("--username");
+        await Assert.That(hint).Contains("--anonymous").And.Contains("Free weekends").And.DoesNotContain("--username");
     }
 
     [Test]
@@ -59,7 +59,7 @@ public partial class HelpTests
     [Test]
     public async Task ExitCodeFiveMentionsFreeLicenses()
     {
-        await Assert.That(Help.Get).Contains("Free apps and free weekends need");
+        await Assert.That(Help.Get).Contains("The licenses of free apps and DLC");
     }
 
     [Test]

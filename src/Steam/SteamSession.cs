@@ -53,6 +53,7 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     private readonly CancellationToken CancellationToken;
     private readonly Dictionary<(uint DepotID, uint KeyAppID), Task<(byte[]? Key, bool NoAccess, string? Problem)>> DepotKeys = [];
     private readonly Dictionary<uint, Dictionary<string, byte[]>> BranchKeys = [];
+    private readonly Dictionary<uint, Task<bool>> FreeLicenses = [];
     private readonly Lock LazyLock = new();
     private readonly Client CdnClient;
     private Task<bool>? CdnServersTask;
@@ -1138,12 +1139,13 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
 
         try
         {
-            keyResult = await RequestFromSteamAsync("depot key request", async () =>
+            keyResult = await RequestDepotKeyFromSteamAsync(job);
+
+            // Free apps and DLC are denied until their license is on the account, which Steam adds when asked
+            if (keyResult.Result == EResult.AccessDenied && !IsAnonymous && await GetFreeLicenseAsync(job.KeyAppID))
             {
-                var keyTask = Apps.GetDepotDecryptionKey(job.DepotID, job.KeyAppID);
-                keyTask.Timeout = TimeSpan.FromSeconds(30);
-                return await keyTask;
-            });
+                keyResult = await RequestDepotKeyFromSteamAsync(job);
+            }
         }
         catch (Exception e) when (IsError(e))
         {
@@ -1170,6 +1172,59 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
         DepotCache.SaveDepotKey(job.DepotID, keyResult.DepotKey);
 
         return (keyResult.DepotKey, false, null);
+    }
+
+    private Task<SteamApps.DepotKeyCallback> RequestDepotKeyFromSteamAsync(ManifestJob job) =>
+        RequestFromSteamAsync("depot key request", async () =>
+        {
+            var keyTask = Apps.GetDepotDecryptionKey(job.DepotID, job.KeyAppID);
+            keyTask.Timeout = TimeSpan.FromSeconds(30);
+            return await keyTask;
+        });
+
+    // Concurrent jobs of one app share a single request. Returns whether the account got the app's license
+    private Task<bool> GetFreeLicenseAsync(uint appID)
+    {
+        lock (FreeLicenses)
+        {
+            if (!FreeLicenses.TryGetValue(appID, out var licenseTask))
+            {
+                licenseTask = RequestFreeLicenseAsync(appID);
+                FreeLicenses[appID] = licenseTask;
+            }
+
+            return licenseTask;
+        }
+    }
+
+    // Like adding a free game to the library in the Steam client. Steam grants nothing for an app that isn't free
+    private async Task<bool> RequestFreeLicenseAsync(uint appID)
+    {
+        SteamApps.FreeLicenseCallback licenseResult;
+
+        try
+        {
+            licenseResult = await RequestFromSteamAsync("free license request", async () =>
+            {
+                var licenseTask = Apps.RequestFreeLicense(appID);
+                licenseTask.Timeout = TimeSpan.FromSeconds(30);
+                return await licenseTask;
+            });
+        }
+        catch (Exception e) when (IsError(e))
+        {
+            Log.Warn($"Failed to request a free license for app {appID}: {DescribeError(e)}");
+            return false;
+        }
+
+        if (!licenseResult.GrantedApps.Contains(appID))
+        {
+            return false;
+        }
+
+        Log.Info($"Added the free license of app {appID} to {Credentials!.Username}.");
+
+        return true;
     }
 
     // Any failure of a job whose manifest isn't needed is only a warning. Everything else fails the run, so it's an error

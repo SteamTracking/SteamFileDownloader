@@ -115,7 +115,7 @@ internal static class Help
     /// </summary>
     public const string AnonymousOnlyAppHint = "Some apps, like dedicated servers, are only available anonymously: try --anonymous.";
 
-    private const string FreeLicenseHint = "Free apps and free weekends need a license on the account first, which the Steam client can add; this tool doesn't request free licenses.";
+    private const string FreeLicenseHint = "Free weekends need a license on the account first, which the Steam client can add; this tool only adds the licenses of free apps and DLC itself.";
 
     private static string LoginOptions => """
           --username <name>   saved login to use instead of the last one, or with --password <pw> the account to log in as
@@ -143,10 +143,10 @@ internal static class Help
           5  only access failed: Steam gave no depot key or manifest request code for some targets.
              Another account may own them (--username), or the manifest is on another branch
              (@<branch>) or in another app (<app>/<depot>). Also given when the account can't see an
-             app's password protected branches (--branch-password). Free apps and free weekends need
-             a license on the account first: add them in the Steam client, since this tool doesn't
-             request free licenses. Steam also stops giving codes for many old manifests, so one that
-             isn't the latest of its branch may not be downloadable
+             app's password protected branches (--branch-password). The licenses of free apps and DLC
+             are added to the account when Steam denies their depots, but free weekends need a license
+             from the Steam client first. Steam also stops giving codes for many old manifests, so one
+             that isn't the latest of its branch may not be downloadable
           6  a pattern matched nothing in any target, and nothing failed
         """;
 
