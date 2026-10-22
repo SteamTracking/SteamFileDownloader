@@ -5,6 +5,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.IO.Hashing;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using SteamKit2;
 using ValvePak;
@@ -20,6 +21,10 @@ internal static class VpkReader
 {
     private const ushort DirArchiveIndex = 0x7FFF;
     private const int ParallelEntryChecks = 16;
+
+    // Archives extracted at once, each holding a temporary file open, shared by all directory files, so a VPK of hundreds of archives can't run out of file handles
+    private const int ParallelArchives = 16;
+    private static readonly SemaphoreSlim ArchiveSlots = new(ParallelArchives, ParallelArchives);
 
     /// <summary>
     /// Reads a downloaded directory file. Returns null, with the error logged, when it isn't a valid VPK.
@@ -231,9 +236,29 @@ internal static class VpkReader
         // Archives download in parallel, the shared chunk limit keeps the total in check
         var results = await Task.WhenAll(pending
             .GroupBy(static p => p.Entry.ArchiveIndex)
-            .Select(archive => ExtractArchiveAsync(downloader, jobs, job, dirFileName, package, archive)));
+            .Select(archive => ExtractArchiveLimitedAsync(downloader, jobs, job, dirFileName, package, archive)));
 
         return (success && results.All(static r => r.Success), [.. extracted, .. results.SelectMany(static r => r.Paths)]);
+    }
+
+    private static async Task<(bool Success, List<string> Paths)> ExtractArchiveLimitedAsync(
+        FileDownloader downloader,
+        IReadOnlyList<ManifestJob> jobs,
+        ManifestJob job,
+        string dirFileName,
+        Package package,
+        IGrouping<ushort, (PackageEntry Entry, string Path)> archive)
+    {
+        await ArchiveSlots.WaitAsync();
+
+        try
+        {
+            return await ExtractArchiveAsync(downloader, jobs, job, dirFileName, package, archive);
+        }
+        finally
+        {
+            ArchiveSlots.Release();
+        }
     }
 
     private static async Task<(bool Success, List<string> Paths)> ExtractArchiveAsync(

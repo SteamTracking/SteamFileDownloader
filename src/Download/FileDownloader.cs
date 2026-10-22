@@ -75,6 +75,11 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
 
     private readonly SemaphoreSlim SemaphorePerDownloadChunk = new(Connections, Connections);
 
+    // Files hashed or preallocated at once. Many more only make a hard disk seek between them
+    private static readonly int DiskOperations = Math.Min(Environment.ProcessorCount, 8);
+
+    private readonly SemaphoreSlim SemaphorePerDiskOperation = new(DiskOperations, DiskOperations);
+
     // Chunk bytes as they came from the CDN, compressed, and as they were written to disk, for the progress line
     private long NetworkBytes;
     private long DiskBytes;
@@ -93,7 +98,11 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
     private int ActiveChunks;
     private int OutageDetected;
 
-    public void Dispose() => SemaphorePerDownloadChunk.Dispose();
+    public void Dispose()
+    {
+        SemaphorePerDownloadChunk.Dispose();
+        SemaphorePerDiskOperation.Dispose();
+    }
 
     /// <summary>
     /// Identifies identical file contents across depots and manifests.
@@ -498,10 +507,45 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
 
     private async Task<bool> HashMatches(string path, DepotManifest.FileData file)
     {
-        await using var fs = File.OpenRead(path);
-        var hash = await SHA1.HashDataAsync(fs, cancellationToken);
+        await SemaphorePerDiskOperation.WaitAsync(cancellationToken);
 
-        return file.FileHash.SequenceEqual(hash);
+        try
+        {
+            await using var fs = File.OpenRead(path);
+            var hash = await SHA1.HashDataAsync(fs, cancellationToken);
+
+            return file.FileHash.SequenceEqual(hash);
+        }
+        finally
+        {
+            SemaphorePerDiskOperation.Release();
+        }
+    }
+
+    private async Task<FileStream> CreatePreallocatedFile(string path, long length)
+    {
+        await SemaphorePerDiskOperation.WaitAsync(cancellationToken);
+
+        try
+        {
+            var stream = OutputFiles.Open(path, FileMode.Create, FileAccess.ReadWrite, FileOptions.Asynchronous, length);
+
+            try
+            {
+                RandomAccess.SetLength(stream.SafeFileHandle, length);
+            }
+            catch
+            {
+                stream.Dispose();
+                throw;
+            }
+
+            return stream;
+        }
+        finally
+        {
+            SemaphorePerDiskOperation.Release();
+        }
     }
 
     /// <summary>
@@ -514,9 +558,8 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         long length,
         string path)
     {
-        using var stream = OutputFiles.Open(path, FileMode.Create, FileAccess.ReadWrite, FileOptions.Asynchronous, length);
+        using var stream = await CreatePreallocatedFile(path, length);
         var handle = stream.SafeFileHandle;
-        RandomAccess.SetLength(handle, length);
 
         if (!await DownloadChunks(job, placements, handle))
         {
