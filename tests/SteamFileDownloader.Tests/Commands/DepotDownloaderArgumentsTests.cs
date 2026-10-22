@@ -5,12 +5,12 @@ namespace SteamFileDownloader.Tests;
 public class DepotDownloaderArgumentsTests
 {
     [Test]
-    public async Task MinimalCommandDownloadsEveryDepotAndFile()
+    public async Task MinimalCommandRunsDownloadWithoutTargets()
     {
         var result = DepotDownloaderArguments.Parse(["-app", "730"]);
 
         await Assert.That(result).IsNotNull();
-        await Assert.That(result!.Command).IsEqualTo("get");
+        await Assert.That(result!.Command).IsEqualTo("download");
         await Assert.That(result.Options.App).IsEqualTo(730u);
         await Assert.That(result.Targets.Count).IsEqualTo(0);
         await Assert.That(result.Patterns.Count).IsEqualTo(0);
@@ -59,7 +59,7 @@ public class DepotDownloaderArgumentsTests
         var result = DepotDownloaderArguments.Parse(["-app", "730", "-ugc", "8344780363095656278"]);
 
         await Assert.That(result).IsNotNull();
-        await Assert.That(result!.Command).IsEqualTo("get");
+        await Assert.That(result!.Command).IsEqualTo("download");
         await Assert.That(result.Targets).IsEquivalentTo(["730:8344780363095656278"]);
     }
 
@@ -113,8 +113,10 @@ public class DepotDownloaderArgumentsTests
     [Arguments("-app")]
     [Arguments("-depot")]
     [Arguments("-manifest")]
-    [Arguments("-filelist")]
     [Arguments("-dir")]
+    [Arguments("-os")]
+    [Arguments("-osarch")]
+    [Arguments("-language")]
     [Arguments("-branch")]
     [Arguments("-beta")]
     [Arguments("-branchpassword")]
@@ -186,9 +188,7 @@ public class DepotDownloaderArgumentsTests
     [Arguments("-remember-password")]
     [Arguments("-loginid")]
     [Arguments("-max-downloads")]
-    [Arguments("-os")]
-    [Arguments("-language")]
-    [Arguments("-all-platforms")]
+    [Arguments("-cellid")]
     public async Task OtherDepotDownloaderOptionsAreUnsupported(string option)
     {
         await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", option])).IsNull();
@@ -216,25 +216,66 @@ public class DepotDownloaderArgumentsTests
     }
 
     [Test]
-    public async Task FileListLinesBecomeEscapedRegexPatterns()
+    public async Task FilelistIsRejectedWithAHintToUseGet()
     {
-        using var temp = new TempDirectory();
-        var list = temp.Write("files.txt", "game/bin/a+b.dll\n  game\\bin\\c.dll  \n\n/lead/slash.txt\r\nregex:^game/.*\\.so$\n");
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-filelist", "files.txt"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("download has no file patterns, so -filelist is not supported.").And.Contains("get <app>/<depot> -- <pattern>...");
+    }
 
-        var result = DepotDownloaderArguments.Parse(["-app", "730", "-filelist", list]);
+    [Test]
+    public async Task FilelistWithoutAValueIsRejectedToo()
+    {
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-filelist"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("-filelist is not supported.");
+    }
+
+    [Test]
+    public async Task PlatformAndLanguageOptionsAreKept()
+    {
+        var result = DepotDownloaderArguments.Parse(["-app", "730", "-os", "Linux", "-osarch", "32", "-language", "French", "-lowviolence"]);
 
         await Assert.That(result).IsNotNull();
+        await Assert.That(result!.Command).IsEqualTo("download");
+        await Assert.That(result.Options.Install).IsEqualTo(new InstallOptions(Os: "linux", OsArch: "32", Language: "french", LowViolence: true));
+    }
 
-        var filter = FileFilter.FromPatterns(result!.Patterns);
+    [Test]
+    public async Task AllPlatformsAndAllLanguagesAreFlags()
+    {
+        var result = DepotDownloaderArguments.Parse(["-app", "730", "-all-platforms", "-all-languages", "-depot", "1"]);
 
-        await Assert.That(result.Patterns.Count).IsEqualTo(4);
-        await Assert.That(filter.GetMatchingPatterns("game/bin/a+b.dll").Count).IsEqualTo(1);
-        await Assert.That(filter.GetMatchingPatterns("game/bin/aab.dll").Count).IsEqualTo(0);
-        await Assert.That(filter.GetMatchingPatterns("game/bin/a+bXdll").Count).IsEqualTo(0);
-        await Assert.That(filter.GetMatchingPatterns("x/game/bin/a+b.dll").Count).IsEqualTo(0);
-        await Assert.That(filter.GetMatchingPatterns("game/bin/c.dll").Count).IsEqualTo(1);
-        await Assert.That(filter.GetMatchingPatterns("game/lib/x.so").Count).IsEqualTo(1);
-        await Assert.That(filter.GetMatchingPatterns("lead/slash.txt").Count).IsEqualTo(1);
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.Options.Install).IsEqualTo(new InstallOptions(AllPlatforms: true, AllLanguages: true));
+        await Assert.That(result.Targets).IsEquivalentTo(["1"]);
+    }
+
+    [Test]
+    [Arguments("-os", "beos")]
+    [Arguments("-osarch", "16")]
+    public async Task InvalidPlatformValueIsAnError(string option, string value)
+    {
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", option, value])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains($"{option} needs ");
+    }
+
+    [Test]
+    public async Task AllPlatformsCannotBeCombinedWithOs()
+    {
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-all-platforms", "-os", "linux"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("-all-platforms can't be combined with -os or -osarch.");
+    }
+
+    [Test]
+    public async Task DirIsTheInstallFolderOfDownloadAndTheOutputOfLs()
+    {
+        var install = DepotDownloaderArguments.Parse(["-app", "730", "-dir", "out"]);
+        var list = DepotDownloaderArguments.Parse(["-app", "730", "-dir", "out", "-manifest-only"]);
+
+        await Assert.That(install!.Options.Install.Dir).IsEqualTo("out");
+        await Assert.That(install.Options.Output).IsNull();
+        await Assert.That(list!.Command).IsEqualTo("ls");
+        await Assert.That(list.Options.Output).IsEqualTo("out");
+        await Assert.That(list.Options.Install.Dir).IsNull();
     }
 
     [Test]
@@ -243,53 +284,6 @@ public class DepotDownloaderArgumentsTests
     public async Task EmptyDirIsAnError(string dir)
     {
         await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-dir", dir])).IsNull();
-    }
-
-    [Test]
-    public async Task FileListEntriesAreExactPathsWithoutGlobs()
-    {
-        using var temp = new TempDirectory();
-        var list = temp.Write("files.txt", "game/*.dll\nserver.dll\n");
-
-        var filter = FileFilter.FromPatterns(DepotDownloaderArguments.Parse(["-app", "730", "-filelist", list])!.Patterns);
-
-        await Assert.That(filter.GetMatchingPatterns("game/*.dll").Count).IsEqualTo(1);
-        await Assert.That(filter.GetMatchingPatterns("game/a.dll").Count).IsEqualTo(0);
-        await Assert.That(filter.GetMatchingPatterns("server.dll").Count).IsEqualTo(1);
-        await Assert.That(filter.GetMatchingPatterns("bin/server.dll").Count).IsEqualTo(0);
-    }
-
-    [Test]
-    public async Task FileListsAccumulate()
-    {
-        using var temp = new TempDirectory();
-        var first = temp.Write("a.txt", "a.txt");
-        var second = temp.Write("b.txt", "regex:b");
-
-        var result = DepotDownloaderArguments.Parse(["-app", "730", "-filelist", first, "-filelist", second]);
-
-        await Assert.That(result).IsNotNull();
-        await Assert.That(result!.Patterns.Count).IsEqualTo(2);
-    }
-
-    [Test]
-    [Arguments("")]
-    [Arguments("\n\n")]
-    [Arguments("   \r\n\t\r\n")]
-    public async Task EmptyFileListIsAnError(string content)
-    {
-        using var temp = new TempDirectory();
-        var list = temp.Write("files.txt", content);
-
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-filelist", list])).IsNull();
-    }
-
-    [Test]
-    public async Task MissingFileListIsAnError()
-    {
-        using var temp = new TempDirectory();
-
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-filelist", Path.Combine(temp.Path, "missing.txt")])).IsNull();
     }
 
     [Test]
@@ -307,7 +301,7 @@ public class DepotDownloaderArgumentsTests
 
         if (accepted)
         {
-            await Assert.That(result!.Options.Output).IsEqualTo(dir);
+            await Assert.That(result!.Options.Install.Dir).IsEqualTo(dir);
         }
     }
 

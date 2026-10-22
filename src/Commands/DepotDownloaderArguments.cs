@@ -1,14 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
-using System.Linq;
-using System.Text.RegularExpressions;
 
 namespace SteamFileDownloader;
 
 /// <summary>
-/// Translates DepotDownloader's command line into get or ls, so existing DepotDownloader commands keep working.
+/// Translates DepotDownloader's command line into download or ls, so existing DepotDownloader commands keep working.
 /// </summary>
 internal static class DepotDownloaderArguments
 {
@@ -30,17 +27,27 @@ internal static class DepotDownloaderArguments
         "username",
         "user",
         "password",
+        "os",
+        "osarch",
+        "language",
+        "all-platforms",
+        "all-languages",
+        "lowviolence",
     ];
 
     /// <summary>
-    /// Returns the arguments of the get or ls command it runs as, or null after printing an error.
+    /// Returns the arguments of the download or ls command it runs as, or null after printing an error.
     /// </summary>
     public static DepotArguments? Parse(string[] args)
     {
         var depots = new List<string>();
         var manifests = new List<string>();
-        var patterns = new List<string>();
-        var options = new DepotOptions(null);
+        uint? app = null;
+        var branch = "public";
+        string? branchPassword = null;
+        var login = new LoginOptions();
+        var install = new InstallOptions();
+        string? dir = null;
         var manifestOnly = false;
         string? pubfile = null;
         string? ugc = null;
@@ -67,8 +74,19 @@ internal static class DepotDownloaderArguments
                 case "-manifest-only":
                     manifestOnly = true;
                     continue;
-                case "-app" or "-depot" or "-manifest" or "-pubfile" or "-ugc" or "-filelist"
-                    or "-dir" or "-branch" or "-beta" or "-branchpassword" or "-betapassword" or "-username" or "-user" or "-password" when value == null:
+                case "-all-platforms":
+                    install = install with { AllPlatforms = true };
+                    continue;
+                case "-all-languages":
+                    install = install with { AllLanguages = true };
+                    continue;
+                case "-lowviolence":
+                    install = install with { LowViolence = true };
+                    continue;
+                case "-filelist":
+                    return Fail($"download has no file patterns, so -filelist is not supported. To get some files, use {Help.ExeName} get <app>/<depot> -- <pattern>...");
+                case "-app" or "-depot" or "-manifest" or "-pubfile" or "-ugc" or "-dir" or "-branch" or "-beta" or "-branchpassword"
+                    or "-betapassword" or "-username" or "-user" or "-password" or "-os" or "-osarch" or "-language" when value == null:
                     return Fail($"{args[i]} needs a value.");
                 case "-app":
                     if (!uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var appID))
@@ -76,7 +94,7 @@ internal static class DepotDownloaderArguments
                         return Fail($"-app needs a numeric app id, got \"{value}\".");
                     }
 
-                    options = options with { App = appID };
+                    app = appID;
                     break;
                 case "-depot" or "-manifest" or "-pubfile" or "-ugc" when InvalidId(name, value) is { } invalid:
                     return Fail(invalid);
@@ -92,47 +110,34 @@ internal static class DepotDownloaderArguments
                 case "-manifest":
                     manifests.Add(value);
                     break;
-                case "-filelist":
-                    var lines = ReadLines(value, "-filelist");
-
-                    if (lines == null)
-                    {
-                        return null;
-                    }
-
-                    var filePatterns = lines
-                        .Select(static l => l.Trim())
-                        .Where(static l => l.Length > 0)
-                        .Select(ToFileListPattern)
-                        .ToList();
-
-                    // A list without entries downloads nothing in DepotDownloader, rather than every file
-                    if (filePatterns.Count == 0)
-                    {
-                        return Fail($"The file list \"{value}\" has no entries.");
-                    }
-
-                    patterns.AddRange(filePatterns);
-                    break;
                 case "-dir":
                     if (!ArgumentParser.CheckOutputPath(value, "-dir"))
                     {
                         return null;
                     }
 
-                    options = options with { Output = value };
+                    dir = value;
+                    break;
+                case "-os":
+                    install = install with { Os = value.ToLowerInvariant() };
+                    break;
+                case "-osarch":
+                    install = install with { OsArch = value };
+                    break;
+                case "-language":
+                    install = install with { Language = value.ToLowerInvariant() };
                     break;
                 case "-branch" or "-beta":
-                    options = options with { Branch = value };
+                    branch = value;
                     break;
                 case "-branchpassword" or "-betapassword":
-                    options = options with { BranchPassword = value };
+                    branchPassword = value;
                     break;
                 case "-username" or "-user":
-                    options = options with { Login = options.Login with { Username = value } };
+                    login = login with { Username = value };
                     break;
                 case "-password":
-                    options = options with { Login = options.Login with { Password = value } };
+                    login = login with { Password = value };
                     break;
                 default:
                     var suggestion = ArgumentParser.DidYouMean(name[1..], SupportedOptions, "-");
@@ -143,11 +148,18 @@ internal static class DepotDownloaderArguments
             i++;
         }
 
-        var loginError = options.Login.Validate("-");
+        var loginError = login.Validate("-");
 
         if (loginError != null)
         {
             return Fail(loginError);
+        }
+
+        var installError = install.Validate("-");
+
+        if (installError != null)
+        {
+            return Fail(installError);
         }
 
         var hasItem = pubfile != null || ugc != null;
@@ -168,12 +180,12 @@ internal static class DepotDownloaderArguments
         // The item's files go to the workshop folder, like with workshop get, and its app doesn't matter
         if (pubfile != null)
         {
-            options = options with { ItemNotFoundHint = $"If {pubfile} is a UGC id, use -ugc instead of -pubfile." };
+            var itemOptions = CreateOptions(dir) with { ItemNotFoundHint = $"If {pubfile} is a UGC id, use -ugc instead of -pubfile." };
 
-            return new DepotArguments(manifestOnly ? "workshop ls" : "workshop get", options, [pubfile], patterns);
+            return new DepotArguments(manifestOnly ? "workshop ls" : "workshop get", itemOptions, [pubfile], []);
         }
 
-        if (options.App == null)
+        if (app == null)
         {
             return Fail($"dd needs -app <app>, like: {Help.ExeName} dd -app 730 -depot 2347771.");
         }
@@ -186,11 +198,12 @@ internal static class DepotDownloaderArguments
         // A UGC id is a manifest of the depot with the app's id. Without -depot, DepotDownloader takes every depot of
         // the app, as no targets do, and -depot and -manifest pair up in order
         var targets = new List<string>();
+        string? manifestNotFoundHint = null;
 
         if (ugc != null)
         {
-            targets.Add($"{options.App}:{ugc}");
-            options = options with { ManifestNotFoundHint = $"If {ugc} is a workshop item id, use -pubfile instead of -ugc." };
+            targets.Add($"{app}:{ugc}");
+            manifestNotFoundHint = $"If {ugc} is a workshop item id, use -pubfile instead of -ugc.";
         }
         else
         {
@@ -200,21 +213,23 @@ internal static class DepotDownloaderArguments
             }
         }
 
-        return new DepotArguments(manifestOnly ? "ls" : "get", options, targets, patterns);
-    }
+        // Listing manifests puts the _dir.vpk files of entries in the output folder, while an install is one folder
+        if (manifestOnly)
+        {
+            var lsOptions = CreateOptions(dir) with { ManifestNotFoundHint = manifestNotFoundHint };
 
-    // Returns null after printing an error
-    private static string[]? ReadLines(string path, string option)
-    {
-        try
-        {
-            return File.ReadAllLines(path);
+            return new DepotArguments("ls", lsOptions, targets, []);
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+
+        install = install with { Dir = dir };
+
+        return new DepotArguments("download", CreateOptions(null) with { ManifestNotFoundHint = manifestNotFoundHint }, targets, []);
+
+        DepotOptions CreateOptions(string? output) => new(app, output, branch, branchPassword)
         {
-            Log.Error($"Failed to read {option} \"{path}\": {e.Message}");
-            return null;
-        }
+            Login = login,
+            Install = install,
+        };
     }
 
     private static DepotArguments? Fail(string message)
@@ -249,17 +264,5 @@ internal static class DepotDownloaderArguments
             0 => $"{option} needs a nonzero {idKind} id, got \"{value}\".",
             _ => null,
         };
-    }
-
-    // DepotDownloader's file lists are "regex:" lines and exact paths from the depot root, even for a bare name, and
-    // without globs
-    private static string ToFileListPattern(string line)
-    {
-        if (line.StartsWith("regex:", StringComparison.Ordinal))
-        {
-            return line;
-        }
-
-        return $"regex:^{Regex.Escape(FileFilter.NormalizePath(line))}$";
     }
 }

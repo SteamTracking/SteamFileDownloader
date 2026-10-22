@@ -25,7 +25,8 @@ SteamFileDownloader helps with datamining and reverse engineering of Source 2 ga
 - **File lists**: SteamFileDownloader can list the names, sizes and SHA-1 hashes of files. It does not download the files. Use these lists to compare builds.
 - **Parts of VPK archives**: list the entries of a VPK. You can also extract entries, and SteamFileDownloader downloads only the chunks that contain them.
 - **No second download of a file**: SteamFileDownloader does a check of each file that is already on the disk, and keeps the correct files. If a file is the same in another build, SteamFileDownloader copies it. If a command fails and you run it again, it downloads only the files that failed. A file that stopped in the middle stays as `<file>.partial`. The next run keeps the chunks in it that are correct, and downloads only the other chunks.
-- **Same files as Steam**: if you give no patterns, `get` creates the empty folders of the depot. It creates symbolic links as links. On Windows, links need Developer Mode or an elevated terminal, and SteamFileDownloader skips them with a warning if it cannot create them. It skips a link that points outside the output folder. On Linux and macOS, files get the permissions 0777 and the umask removes some of them, the same as Steam.
+- **Game installs**: `download` puts a game in one folder, with the depots that Steam picks for your system and language.
+- **Same files as Steam**: if you give no patterns, `get` and `download` create the empty folders of the depot. It creates symbolic links as links. On Windows, links need Developer Mode or an elevated terminal, and SteamFileDownloader skips them with a warning if it cannot create them. It skips a link that points outside the output folder. On Linux and macOS, files get the permissions 0777 and the umask removes some of them, the same as Steam.
 - **Workshop items**: show the details and the version history of items, and search for items. List or download the files of an item from any version. This also applies to collections.
 - **Saved logins**: log in one time with a QR code from the Steam mobile app. SteamFileDownloader encrypts the tokens for the Windows user.
 - **Compatible with DepotDownloader**: `dd` runs your current DepotDownloader command lines.
@@ -66,8 +67,8 @@ SteamFileDownloader get 730 2347770 -- "game/core/pak01_dir.vpk:scripts/scenes.v
 # If you also give no targets, it downloads all depots that the account can access. This can be tens of gigabytes.
 SteamFileDownloader get 730 2347771:8344780363095656278
 
-# Download depots into one folder, the same as a Steam install.
-SteamFileDownloader get 730 2347770 2347771 --install-dir D:/Games/CS2
+# Install a game into one folder, with the depots that Steam installs on this machine.
+SteamFileDownloader download 730 --dir D:/Games/CS2
 
 # Find the depot that has a file. If you give no targets, ls searches all depots of the app.
 SteamFileDownloader ls 570 -- hammer.dll
@@ -98,11 +99,38 @@ SteamFileDownloader puts the files in `<output>/<depot>/<manifest>/`. The defaul
 
 To use one output folder from all locations, save it with `config output <dir>`. `config output` shows the saved folder. `config output --reset` removes the saved folder. SteamFileDownloader saves the folder as an absolute path in `settings.json`, in the same folder as the saved logins.
 
-For `get`, `ls`, `workshop get`, `workshop ls` and `dd`, `--output` has priority over the saved folder. For `dd`, use `-dir` in place of `--output`. `track` always needs its own `--output`.
+For `get`, `download`, `ls`, `workshop get`, `workshop ls` and `dd`, `--output` has priority over the saved folder. `track` always needs its own `--output`.
 
-With `get --install-dir <dir>`, SteamFileDownloader puts the files of all manifests in `<dir>/<path>`, the same as a Steam install. If two manifests have different files at the same path, the file of the later target or depot replaces the other, and a warning shows the files. If you give no targets, `get` uses all depots, for all platforms and languages, so give the depots to install. SteamFileDownloader does not delete files that are no longer in the manifests. It still saves the manifests in `<output>/manifests/`. You cannot use `<path>_dir.vpk:` patterns with `--install-dir`.
+## Install a game
 
-`get`, `ls`, `depots` and `track` accept `--branch-password <password>` for branches that have a password. With the password, SteamFileDownloader asks Steam to unlock the password branches of each app that needs its app info, and adds them to the branches and depots of the app. Use `--branch` or `@<branch>` to select one of them. The password is for one app, so use it with one app. If Steam does not accept the password, the exit code is `2` (`1` for `track`). If the account cannot see the private branches of the app, for example because it does not own the app, the exit code is `5`. If the password is correct but does not unlock the branch, the error shows the branches that it unlocks.
+`download <app>` puts the files of a game in one folder, the same as a Steam install. The default folder is `<output>/<app>`, and `--dir <dir>` sets another folder. It takes one app, and it has no file patterns. To get only some files, use `get`.
+
+If you give no depots, `download` picks the depots like Steam does. It uses the depots for this operating system, this CPU architecture and the language. For a soundtrack, it uses the high quality audio depots, as Steam does. It also uses the depots of DLC that the account owns, and the depots that other apps share. It skips the other depots, for example depots for another system, and depots of a mod. A line on stderr lists the skipped depots and why. If you give depots, for example `download 730 2347770 2347771`, it installs those depots and does no filtering.
+
+```bash
+# Install for this machine, in English.
+SteamFileDownloader download 730 --dir D:/Games/CS2
+
+# Install the Linux build, in French, from a beta branch.
+SteamFileDownloader download 730 --os linux --language french --branch beta --dir D:/Games/CS2-linux
+
+# Install the depots of a mod too. Find its depot with: depots 90
+SteamFileDownloader download 90 --include <depot>
+
+# Install the depots of all systems and all languages.
+SteamFileDownloader download 730 --all-platforms --all-languages
+```
+
+- `--os windows|linux|macos`, `--osarch 32|64` and `--oscpu x86|arm64` select another platform. `--oscpu` is `arm64` by default on arm64 Linux and macOS, and `x86` on other systems. `--all-platforms` uses the depots of all platforms.
+- `--language <name>` selects a language. If the app does not have it, `download` uses a fallback (`spanish` and `latam`, `sc_schinese` and `schinese`), then `english`, then the first language of the app. `--all-languages` uses the depots of all languages.
+- `--lowviolence` also installs the depots for the low violence version.
+- `--steamdeck` also installs the depots for the Steam Deck, as on a Steam Deck. A Steam Frame is `--os linux --steamdeck --oscpu arm64`. `--all-platforms` includes them.
+- `--include <id>` also installs a depot that the filters skipped, and `--exclude <id>` removes a depot that they picked. An id is a depot id, or a DLC app id for all depots of that DLC. You can repeat both options. `--exclude` wins over `--include`. Use `depots <app>` to see why a depot is skipped, in its notes, for example `skipped: mod czero`. You cannot use them with depots as targets.
+- With `--os` for another system than your own, `download` skips symbolic links.
+
+If two depots have different files at the same path, the depot that is last in the app info keeps its file, the same as in Steam. A warning shows the files. SteamFileDownloader writes a file again if its hash is not correct. It keeps no record of earlier runs, so it does not delete files that are no longer in the manifests. It still saves the manifests in `<output>/manifests/`. stdout has no rows.
+
+`get`, `download`, `ls`, `depots` and `track` accept `--branch-password <password>` for branches that have a password. With the password, SteamFileDownloader asks Steam to unlock the password branches of each app that needs its app info, and adds them to the branches and depots of the app. Use `--branch` or `@<branch>` to select one of them. The password is for one app, so use it with one app. If Steam does not accept the password, the exit code is `2` (`1` for `track`). If the account cannot see the private branches of the app, for example because it does not own the app, the exit code is `5`. If the password is correct but does not unlock the branch, the error shows the branches that it unlocks.
 
 SteamFileDownloader saves each manifest to `<output>/manifests/<depot>_<manifest>.manifest`. When it needs that manifest again, it reads this file and does not download the manifest again. The `depotcache` folder of Steam uses the same file names, and you can copy its files into this folder too.
 
@@ -144,15 +172,15 @@ Each login uses a random login id. Because of this, parallel runs on one account
 
 ## DepotDownloader commands
 
-`dd` runs a DepotDownloader command line as `get`. With `-manifest-only`, it runs the command line as `ls`:
+`dd` runs a DepotDownloader command line as `download`. With `-manifest-only`, it runs the command line as `ls`:
 
 ```bash
-SteamFileDownloader dd -app 730 -depot 2347771 -manifest 8344780363095656278 -filelist files.txt
+SteamFileDownloader dd -app 730 -depot 2347771 -manifest 8344780363095656278 -dir D:/Games/CS2
 ```
 
-`dd` uses these flags: `-app`, `-depot`, `-manifest`, `-filelist`, `-dir`, `-branch`, `-branchpassword`, `-username`, `-password` and `-manifest-only`. `-username` selects a saved login. With `-password`, `dd` logs in with the password and does not save a login. `dd` rejects all other flags, for example `-remember-password`, `-loginid`, `-os` and `-language`. Use `-depot` to select the depots. `-branchpassword`, or `-betapassword`, is the same as `--branch-password`.
+`dd` uses these flags: `-app`, `-depot`, `-manifest`, `-dir`, `-os`, `-osarch`, `-language`, `-all-platforms`, `-all-languages`, `-lowviolence`, `-branch`, `-branchpassword`, `-username`, `-password` and `-manifest-only`. `-username` selects a saved login. With `-password`, `dd` logs in with the password and does not save a login. `dd` rejects all other flags, for example `-remember-password` and `-loginid`. `-branchpassword`, or `-betapassword`, is the same as `--branch-password`.
 
-Each line in a `-filelist` file is a full path from the root of the depot, or a `regex:` pattern. Globs do not work. This is the same as in DepotDownloader. The files go into `<output>/<depot>/<manifest>/`, the same as with `get`. `-pubfile <item>` runs as `workshop get`, and the files go into `<output>/workshop/<item>/<manifest>/`. `-ugc <manifest>` runs as `get <app>/<app>:<manifest>`.
+`-dir` is the install folder of `download`. With `-manifest-only`, it is the output folder of `ls`. `dd` rejects `-filelist`, because `download` has no file patterns. To get some files, use `get <app>/<depot> -- <patterns>`. `-pubfile <item>` runs as `workshop get`, and the files go into `<output>/workshop/<item>/<manifest>/`. `-ugc <manifest>` runs as `download <app> <app>:<manifest>`.
 
 ## Exit codes
 

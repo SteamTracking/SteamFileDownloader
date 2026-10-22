@@ -12,6 +12,7 @@ public partial class HelpTests
     private static string GetHelp(string command) => command switch
     {
         "get" => Help.Get,
+        "download" => Help.Download,
         "ls" => Help.Ls,
         "depots" => Help.Depots,
         "login" => Help.Login,
@@ -156,6 +157,7 @@ public partial class HelpTests
 
     [Test]
     [Arguments("get", ExitCodes.UsageError)]
+    [Arguments("download", ExitCodes.UsageError)]
     [Arguments("ls", ExitCodes.UsageError)]
     [Arguments("depots", ExitCodes.UsageError)]
     [Arguments("dd", ExitCodes.UsageError)]
@@ -210,6 +212,8 @@ public partial class HelpTests
 
     [Test]
     [Arguments("get --help", "get")]
+    [Arguments("download --help", "download")]
+    [Arguments("help download", "download")]
     [Arguments("dd --help", "dd")]
     [Arguments("get 1 -h", "get")]
     [Arguments("ls 730 /? 1", "ls")]
@@ -257,6 +261,7 @@ public partial class HelpTests
         {
             ["Overview"] = Help.Overview,
             ["get"] = Help.Get,
+            ["download"] = Help.Download,
             ["ls"] = Help.Ls,
             ["depots"] = Help.Depots,
             ["dd"] = Help.DepotDownloader,

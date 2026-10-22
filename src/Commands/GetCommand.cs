@@ -11,7 +11,8 @@ using ValvePak;
 namespace SteamFileDownloader;
 
 /// <summary>
-/// The get and ls commands: many depot manifests over one Steam login, with results on stdout.
+/// The get and ls commands: many depot manifests over one Steam login, with results on stdout. The download command
+/// shares their run, with the files of every manifest in one folder.
 /// </summary>
 internal static class GetCommand
 {
@@ -29,19 +30,20 @@ internal static class GetCommand
         public required SteamSession Session;
         public required string OutputRoot;
 
-        // The folder of --install-dir, which every manifest's files go to directly instead of a folder per manifest
+        // The folder of the download command, which every manifest's files go to directly instead of a folder per manifest
         public string? InstallFolder;
+
+        // Whether symbolic links are left out, since the files are for another operating system than this one
+        public bool SkipSymlinks;
 
         // The command's name, which decides the exit code of a usage error
         public string Command = "get";
 
-        // The password of the password protected branches to unlock, and the branches it unlocked per app
-        public string? BranchPassword;
-        public Dictionary<uint, List<string>> UnlockedBranches = [];
+        // The options of the command line, with the branch password and the hints for ids that may be of the other kind
+        public DepotOptions Options = new(App: null);
 
-        // Added to the error of a workshop item that does not exist, and once after manifests that Steam gave no access to
-        public string? ItemNotFoundHint;
-        public string? ManifestNotFoundHint;
+        // The branches that the branch password unlocked, per app
+        public Dictionary<uint, List<string>> UnlockedBranches = [];
 
         // The exit code to end the run with right away, after an error that makes the rest pointless
         public int? AbortExitCode;
@@ -174,15 +176,16 @@ internal static class GetCommand
     }
 
     /// <summary>
-    /// Runs get or ls, or workshop get or ls: logs in, adds the run's jobs with resolveJobs, gets every manifest, and
-    /// lists or downloads the matching files.
+    /// Runs get, ls or download, or workshop get or ls: logs in, adds the run's jobs with resolveJobs, gets every manifest,
+    /// and lists or downloads the matching files. The configure callback sets up the run before its jobs are resolved.
     /// </summary>
     internal static async Task<int> RunAsync(
         string command,
         DepotOptions options,
         List<string> patterns,
         Func<Run, Task> resolveJobs,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<Run>? configure = null)
     {
         FileFilter filter;
 
@@ -193,13 +196,6 @@ internal static class GetCommand
         catch (ArgumentException e)
         {
             Log.Error($"Invalid regex pattern: {e.Message}");
-            return ExitCodes.ForUsageError(command);
-        }
-
-        // VPK entries are extracted into a folder next to their VPK, which would put them among the installed files
-        if (options.InstallDir != null && filter.VpkPatterns.Count > 0)
-        {
-            Log.Error("--install-dir can't be combined with <dir.vpk>:<pattern> patterns, whose entries are extracted next to the VPK. Use --output for those.");
             return ExitCodes.ForUsageError(command);
         }
 
@@ -220,19 +216,18 @@ internal static class GetCommand
 
         using var session = loggedOn;
 
-        var downloads = command is "get" or "workshop get";
+        var downloads = command is "get" or "download" or "workshop get";
         var run = new Run
         {
             Command = command,
-            BranchPassword = options.BranchPassword,
-            ItemNotFoundHint = options.ItemNotFoundHint,
-            ManifestNotFoundHint = options.ManifestNotFoundHint,
+            Options = options,
             Filter = filter,
             Session = session,
             OutputRoot = outputRoot,
-            InstallFolder = options.InstallDir != null ? Path.GetFullPath(options.InstallDir) : null,
             HideRows = downloads && patterns.Count == 0,
         };
+
+        configure?.Invoke(run);
 
         // Manifests come from the CDN too, so its server list loads while the jobs resolve
         _ = session.EnsureCdnServersAsync();
@@ -252,9 +247,9 @@ internal static class GetCommand
             run.Fail(job.ToString(), job.NoAccess);
         }
 
-        if (run.ManifestNotFoundHint != null && run.Jobs.Exists(static j => j.Manifest == null && j.NoAccess))
+        if (options.ManifestNotFoundHint != null && run.Jobs.Exists(static j => j.Manifest == null && j.NoAccess))
         {
-            Log.Info(run.ManifestNotFoundHint);
+            Log.Info(options.ManifestNotFoundHint);
         }
 
         // Files come from the CDN, which does not need the Steam connection
@@ -270,12 +265,27 @@ internal static class GetCommand
         // With only VPK patterns, the files are directory files to read entries from
         using var downloader = new FileDownloader(run.Session, cancellationToken) { LogFilesSummary = !run.VpkOnly };
 
-        var fileJobs = run.Matches
-            .SelectMany(static m => m.Value.Select(f => new FileJob(m.Key, f.File)))
+        // In the order of the jobs, which decides the file that stays at a path that several manifests have
+        var fileJobs = run.Jobs
+            .Where(run.Matches.ContainsKey)
+            .SelectMany(job => run.Matches[job].Select(f => new FileJob(job, f.File)))
             .ToList();
+
+        if (run.SkipSymlinks)
+        {
+            var linkCount = fileJobs.RemoveAll(static f => (f.File.Flags & EDepotFileFlag.Symlink) != 0);
+
+            if (linkCount > 0)
+            {
+                Log.Info($"Skipping {Log.Plural(linkCount, "symbolic link")}, since the files are for another operating system.");
+            }
+        }
 
         if (run.InstallFolder != null)
         {
+            // A file is written whole even when an earlier run left an older version of it, which a later version could patch
+            // or move chunks of in place instead. No state file lists what an earlier run installed, so files that are no
+            // longer in the manifests stay in the folder
             fileJobs = KeepLastAtEachPath(fileJobs);
         }
 
@@ -518,16 +528,44 @@ internal static class GetCommand
         return Finish(run, downloads: false);
     }
 
-    private static async Task ResolveJobsAsync(Run run, List<Target> targets)
+    /// <summary>
+    /// Gets the info of the apps with their DLC depots merged in, and unlocks the branches that the run's branch password
+    /// is for. Returns null after setting the exit code to abort the run with.
+    /// </summary>
+    internal static async Task<Dictionary<uint, KeyValue>?> GetAppInfosAsync(Run run, List<uint> appIDs)
+    {
+        var (appInfos, unlockedBranches, exitCode) = await run.Session.GetAppInfosForDepotsAsync(run.Command, appIDs, run.Options.BranchPassword);
+
+        if (exitCode != ExitCodes.Ok)
+        {
+            run.AbortExitCode = exitCode;
+            return null;
+        }
+
+        foreach (var (appID, unlocked) in unlockedBranches)
+        {
+            run.UnlockedBranches[appID] = unlocked;
+        }
+
+        return appInfos;
+    }
+
+    /// <summary>
+    /// Adds the jobs of the targets, which are depots, or every depot of an app when they don't name one.
+    /// </summary>
+    internal static async Task ResolveJobsAsync(Run run, List<Target> targets)
     {
         var appIDs = targets
             .Where(static t => t.DepotID == null || t.ManifestID == null)
             .Select(static t => t.AppID)
             .Distinct()
             .ToList();
-        var appInfos = await run.Session.GetAppInfosAsync(appIDs);
+        var appInfos = await GetAppInfosAsync(run, appIDs);
 
-        await run.Session.AddDlcDepotsAsync(appInfos.Values);
+        if (appInfos == null)
+        {
+            return;
+        }
 
         // Explicit targets only need their app to find the depot's DLC for its key, so an app that can't be found is no error
         var explicitAppIDs = targets.Select(static t => t.AppID).Distinct().Except(appIDs).ToList();
@@ -536,22 +574,6 @@ internal static class GetCommand
         foreach (var (appID, appInfo) in explicitAppInfos)
         {
             appInfos[appID] = appInfo;
-        }
-
-        if (run.BranchPassword != null)
-        {
-            foreach (var appID in appIDs.Where(appInfos.ContainsKey))
-            {
-                var (unlocked, exitCode) = await run.Session.UnlockBranchesAsync(run.Command, appID, appInfos[appID], run.BranchPassword);
-
-                if (unlocked == null)
-                {
-                    run.AbortExitCode = exitCode;
-                    return;
-                }
-
-                run.UnlockedBranches[appID] = unlocked;
-            }
         }
 
         run.SearchAllHint = GetSearchAllHint(targets);

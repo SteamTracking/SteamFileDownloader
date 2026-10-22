@@ -138,28 +138,19 @@ internal static class TrackCommand
         // Manifests come from the CDN too, so its server list loads while the app info does
         _ = session.EnsureCdnServersAsync();
 
-        var appInfo = await session.GetAppInfoAsync(appID);
+        var (appInfos, unlockedBranchesByApp, appInfosExitCode) = await session.GetAppInfosForDepotsAsync("track", [appID], branchPassword);
 
-        if (appInfo == null)
+        if (appInfosExitCode != ExitCodes.Ok)
+        {
+            return appInfosExitCode;
+        }
+
+        if (!appInfos.TryGetValue(appID, out var appInfo))
         {
             return ExitCodes.Failed;
         }
 
-        await session.AddDlcDepotsAsync([appInfo]);
-
-        List<string>? unlockedBranches = null;
-
-        if (branchPassword != null)
-        {
-            var (unlocked, unlockExitCode) = await session.UnlockBranchesAsync("track", appID, appInfo, branchPassword);
-
-            if (unlocked == null)
-            {
-                return unlockExitCode;
-            }
-
-            unlockedBranches = unlocked;
-        }
+        var unlockedBranches = unlockedBranchesByApp.GetValueOrDefault(appID);
 
         var depots = appInfo["depots"];
 

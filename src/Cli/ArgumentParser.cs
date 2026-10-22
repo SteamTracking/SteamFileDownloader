@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 
@@ -8,7 +9,8 @@ namespace SteamFileDownloader;
 internal sealed record ParsedArguments(
     Dictionary<string, string> Options,
     List<string> Positionals,
-    List<string> Patterns);
+    List<string> Patterns,
+    InstallOptions Install);
 
 /// <summary>
 /// Parses "--name value" or "--name=value" options and "--name" flags anywhere before "--", positional arguments,
@@ -16,10 +18,16 @@ internal sealed record ParsedArguments(
 /// </summary>
 internal static class ArgumentParser
 {
+    // Options that can be given more than once
+    private static readonly string[] RepeatableOptions = ["include", "exclude"];
+
     // Options of each command: ones followed by a value, and flags
     internal static readonly Dictionary<string, (string[] Values, string[] Flags)> CommandOptions = new()
     {
-        ["get"] = (["output", "install-dir", "branch", "branch-password", "username", "password"], ["anonymous"]),
+        ["get"] = (["output", "branch", "branch-password", "username", "password"], ["anonymous"]),
+        ["download"] = (
+            ["output", "dir", "branch", "branch-password", "os", "osarch", "oscpu", "language", "include", "exclude", "username", "password"],
+            ["lowviolence", "steamdeck", "all-platforms", "all-languages", "anonymous"]),
         ["ls"] = (["output", "branch", "branch-password", "username", "password"], ["anonymous"]),
         ["depots"] = (["branch", "branch-password", "username", "password"], ["anonymous"]),
         ["login"] = (["username", "password"], []),
@@ -145,6 +153,16 @@ internal static class ArgumentParser
                 value = optionArgs[++i];
             }
 
+            if (RepeatableOptions.Contains(name, StringComparer.OrdinalIgnoreCase))
+            {
+                if (!AddIds(options, name, value, usage))
+                {
+                    return null;
+                }
+
+                continue;
+            }
+
             // Keeping only one of them would silently drop the other
             if (!options.TryAdd(name, value))
             {
@@ -166,12 +184,42 @@ internal static class ArgumentParser
             return null;
         }
 
-        if (options.TryGetValue("install-dir", out var installDir) && !CheckOutputPath(installDir, "--install-dir"))
+        if (options.TryGetValue("dir", out var dir) && !CheckOutputPath(dir, "--dir"))
         {
             return null;
         }
 
-        return new ParsedArguments(options, positionals, patterns);
+        var install = InstallOptions.From(options);
+        var installError = install.Validate("--");
+
+        if (installError != null)
+        {
+            Log.Error($"{installError} {usage}");
+            return null;
+        }
+
+        return new ParsedArguments(options, positionals, patterns, install);
+    }
+
+    // Adds depot or app ids to an option that can be given several times, which keeps them as a comma separated list.
+    // Returns false after printing an error.
+    private static bool AddIds(Dictionary<string, string> options, string name, string value, string usage)
+    {
+        InstallOptions.ParseIds(value, out var invalid);
+
+        if (invalid != null)
+        {
+            Log.Error($"--{name} needs a depot id or DLC app id, got \"{invalid}\". {usage}");
+            return false;
+        }
+
+        if (options.TryGetValue(name, out var existing))
+        {
+            value = $"{existing},{value}";
+        }
+
+        options[name] = value;
+        return true;
     }
 
     /// <summary>

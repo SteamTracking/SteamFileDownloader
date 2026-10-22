@@ -45,25 +45,11 @@ internal static class DepotsCommand
 
         using var session = loggedOn;
 
-        var appInfos = await session.GetAppInfosAsync(appIDs);
+        var (appInfos, unlockedBranches, exitCode) = await session.GetAppInfosForDepotsAsync("depots", appIDs, options.BranchPassword);
 
-        await session.AddDlcDepotsAsync(appInfos.Values);
-
-        var unlockedBranches = new Dictionary<uint, List<string>>();
-
-        if (options.BranchPassword != null)
+        if (exitCode != ExitCodes.Ok)
         {
-            foreach (var appID in appIDs.Where(appInfos.ContainsKey))
-            {
-                var (unlocked, exitCode) = await session.UnlockBranchesAsync("depots", appID, appInfos[appID], options.BranchPassword);
-
-                if (unlocked == null)
-                {
-                    return exitCode;
-                }
-
-                unlockedBranches[appID] = unlocked;
-            }
+            return exitCode;
         }
 
         session.Disconnect();
@@ -79,14 +65,17 @@ internal static class DepotsCommand
                 continue;
             }
 
-            success &= ListAppDepots(appID, appInfo["depots"], options.Branch, unlockedBranches.GetValueOrDefault(appID));
+            var selection = DepotFilter.SelectForApp(appInfo, new InstallOptions());
+
+            success &= ListAppDepots(appID, appInfo["depots"], options.Branch, unlockedBranches.GetValueOrDefault(appID), selection);
         }
 
         return success ? ExitCodes.Ok : ExitCodes.Failed;
     }
 
-    // Returns false after an error
-    internal static bool ListAppDepots(uint appID, KeyValue depots, string branchName, IReadOnlyCollection<string>? unlockedBranches = null)
+    // Returns false after an error. The depots that the selection skips, which is what download skips by default, get a
+    // note with the reason
+    internal static bool ListAppDepots(uint appID, KeyValue depots, string branchName, IReadOnlyCollection<string>? unlockedBranches, DepotSelection selection)
     {
         if (!AppInfo.CheckBranch(depots, appID, branchName, unlockedBranches))
         {
@@ -114,6 +103,8 @@ internal static class DepotsCommand
             return false;
         }
 
+        var skipped = selection.Skipped.ToDictionary(static s => s.ID);
+
         foreach (var (depotID, depot) in AppInfo.GetDepots(depots))
         {
             var (manifestID, fromPublic) = AppInfo.GetManifestIdForBranch(depot, branchName);
@@ -131,6 +122,14 @@ internal static class DepotsCommand
             if (fromPublic)
             {
                 notes.Add("manifest from public");
+            }
+
+            if (skipped.TryGetValue(depotID, out var skippedDepot))
+            {
+                // With the depot's own value of the config key, like "mod czero", when the reason is a key
+                var value = skippedDepot.Value;
+
+                notes.Add(string.IsNullOrEmpty(value) ? $"skipped: {skippedDepot.Reason}" : $"skipped: {skippedDepot.Reason} {value}");
             }
 
             // A target for ls and get. Shared installs are downloaded through the app that owns them

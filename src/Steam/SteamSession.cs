@@ -638,34 +638,68 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     }
 
     /// <summary>
-    /// Adds the DLC depots to the info of apps that keep some in their DLC's own info, using one request for all the DLC.
-    /// A DLC that can't be seen is skipped without an error.
+    /// Gets the info of the apps with their DLC depots merged in, and unlocks the branches that the branch password is
+    /// for. Returns the infos and the names of the unlocked branches by app id, with an exit code that is not Ok after
+    /// logging why the command can't go on. Apps that failed are missing from the infos.
     /// </summary>
-    public async Task AddDlcDepotsAsync(IReadOnlyCollection<KeyValue> appInfos)
+    public async Task<(Dictionary<uint, KeyValue> AppInfos, Dictionary<uint, List<string>> UnlockedBranches, int ExitCode)> GetAppInfosForDepotsAsync(
+        string command, IReadOnlyCollection<uint> appIDs, string? branchPassword)
     {
-        var dlcAppIDs = new List<uint>();
+        var appInfos = await GetAppInfosAsync(appIDs);
+        var unlockedBranches = new Dictionary<uint, List<string>>();
+
+        await AddDlcDepotsAsync(appInfos.Values);
+
+        if (branchPassword == null)
+        {
+            return (appInfos, unlockedBranches, ExitCodes.Ok);
+        }
+
+        foreach (var appID in appIDs.Where(appInfos.ContainsKey))
+        {
+            var (unlocked, exitCode) = await UnlockBranchesAsync(command, appID, appInfos[appID], branchPassword);
+
+            if (unlocked == null)
+            {
+                return (appInfos, unlockedBranches, exitCode);
+            }
+
+            unlockedBranches[appID] = unlocked;
+        }
+
+        return (appInfos, unlockedBranches, ExitCodes.Ok);
+    }
+
+    // Adds the DLC depots to the info of apps that keep some in their DLC's own info, using one request for all the DLC.
+    // A DLC that can't be seen is skipped without an error.
+    private async Task AddDlcDepotsAsync(IReadOnlyCollection<KeyValue> appInfos)
+    {
+        var dlcAppIDsByApp = new List<(KeyValue AppInfo, List<uint> DlcAppIDs)>();
+        var allDlcAppIDs = new HashSet<uint>();
 
         foreach (var appInfo in appInfos)
         {
-            foreach (var dlcAppID in AppInfo.GetDlcAppIDs(appInfo))
+            var dlcAppIDs = AppInfo.GetDlcAppIDs(appInfo);
+
+            if (dlcAppIDs.Count == 0)
             {
-                if (!dlcAppIDs.Contains(dlcAppID))
-                {
-                    dlcAppIDs.Add(dlcAppID);
-                }
+                continue;
             }
+
+            dlcAppIDsByApp.Add((appInfo, dlcAppIDs));
+            allDlcAppIDs.UnionWith(dlcAppIDs);
         }
 
-        if (dlcAppIDs.Count == 0)
+        if (allDlcAppIDs.Count == 0)
         {
             return;
         }
 
-        var dlcInfos = await GetAppInfosAsync(dlcAppIDs, logFailures: false);
+        var dlcInfos = await GetAppInfosAsync(allDlcAppIDs, logFailures: false);
 
-        foreach (var appInfo in appInfos)
+        foreach (var (appInfo, dlcAppIDs) in dlcAppIDsByApp)
         {
-            foreach (var dlcAppID in AppInfo.GetDlcAppIDs(appInfo))
+            foreach (var dlcAppID in dlcAppIDs)
             {
                 if (dlcInfos.TryGetValue(dlcAppID, out var dlcInfo))
                 {
@@ -680,7 +714,7 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     /// app's info. Returns the names of the unlocked branches, or null after logging why there are none, with the exit
     /// code of the command for it.
     /// </summary>
-    public async Task<(List<string>? Branches, int ExitCode)> UnlockBranchesAsync(string command, uint appID, KeyValue appInfo, string password)
+    private async Task<(List<string>? Branches, int ExitCode)> UnlockBranchesAsync(string command, uint appID, KeyValue appInfo, string password)
     {
         SteamApps.CheckAppBetaPasswordCallback check;
 
@@ -713,6 +747,23 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
             return (null, ExitCodes.Failed);
         }
 
+        ulong accessToken;
+
+        try
+        {
+            accessToken = await RequestFromSteamAsync("app access token request", async () =>
+            {
+                var tokenResult = await Apps.PICSGetAccessTokens([appID], []);
+
+                return tokenResult.AppTokens.GetValueOrDefault(appID);
+            });
+        }
+        catch (Exception e) when (IsError(e))
+        {
+            Log.Error($"Failed to get the access token of app {appID}: {DescribeError(e)}");
+            return (null, ExitCodes.Failed);
+        }
+
         var unlocked = new List<string>();
         var keys = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
 
@@ -722,13 +773,7 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
 
             try
             {
-                privateBeta = await RequestFromSteamAsync("private branch request", async () =>
-                {
-                    var tokenResult = await Apps.PICSGetAccessTokens([appID], []);
-                    var accessToken = tokenResult.AppTokens.GetValueOrDefault(appID);
-
-                    return await Apps.PICSGetPrivateBeta(appID, accessToken, branch, key);
-                });
+                privateBeta = await RequestFromSteamAsync("private branch request", async () => await Apps.PICSGetPrivateBeta(appID, accessToken, branch, key));
             }
             catch (Exception e) when (IsError(e))
             {

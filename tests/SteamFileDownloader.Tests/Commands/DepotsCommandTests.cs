@@ -55,10 +55,18 @@ public class DepotsCommandTests
 
     private static KeyValue Parse(string text) => KeyValue.LoadFromString(text)!;
 
+    private static bool ListAppDepots(KeyValue depots, string branch, IReadOnlyDictionary<string, string>? userConfig = null)
+    {
+        var install = new InstallOptions();
+        var selection = DepotFilter.Select(depots, install, userConfig ?? DepotFilter.CreateUserConfig(install, isMusic: false));
+
+        return DepotsCommand.ListAppDepots(AppID, depots, branch, null, selection);
+    }
+
     // The result rows by depot id, as their columns: target, max size, notes
     private static (bool Result, Dictionary<string, string[]> Rows) List(string depots, string branch)
     {
-        var result = DepotsCommand.ListAppDepots(AppID, Parse(depots), branch);
+        var result = ListAppDepots(Parse(depots), branch);
 
         var rows = TestContext.Current!.GetStandardOutput()
             .Split(Environment.NewLine)
@@ -89,7 +97,7 @@ public class DepotsCommandTests
     [Test]
     public async Task EveryBranchGetsARowWithItsBuildBeforeTheDepots()
     {
-        DepotsCommand.ListAppDepots(AppID, Parse(Depots), "beta");
+        ListAppDepots(Parse(Depots), "beta");
 
         var lines = TestContext.Current!.GetStandardOutput().Split(Environment.NewLine);
 
@@ -119,6 +127,42 @@ public class DepotsCommandTests
         await Assert.That(rows["101"][2]).Contains("public");
         await Assert.That(rows["100"][2]).DoesNotContain("public");
         await Assert.That(TestContext.Current!.GetErrorOutput()).DoesNotContain("using the one on");
+    }
+
+    [Test]
+    public async Task DepotsThatDownloadSkipsNoteTheReasonWithTheirValue()
+    {
+        var depots = """
+            "depots"
+            {
+                "baselanguages" "english"
+                "1" { "manifests" { "public" { "gid" "10" } } }
+                "2" { "config" { "mod" "czero" } }
+                "3" { "config" { "oslist" "macos" } }
+                "4" { "config" { "optionaldlc" "1234" } }
+                "5" { "nocontentdlc" "1" }
+                "6" { "config" { "language" "french" } }
+                "7" { "config" { "steamdeck" "1" } }
+                "branches" { "public" { "buildid" "10" } }
+            }
+            """;
+        var config = DepotFilter.CreateUserConfig(new InstallOptions(), "windows", true, "x86");
+
+        var result = ListAppDepots(Parse(depots), "public", config);
+        var rows = TestContext.Current!.GetStandardOutput()
+            .Split(Environment.NewLine)
+            .Select(static line => line.Split('\t'))
+            .Where(static columns => columns.Length == 3)
+            .ToDictionary(static columns => columns[0].Split('/', ':')[1], static columns => columns[2]);
+
+        await Assert.That(result).IsTrue();
+        await Assert.That(rows["1"]).DoesNotContain("skipped");
+        await Assert.That(rows["2"]).Contains("skipped: mod czero");
+        await Assert.That(rows["3"]).Contains("skipped: oslist macos");
+        await Assert.That(rows["4"]).Contains("skipped: optionaldlc 1234");
+        await Assert.That(rows["5"]).IsEqualTo("skipped: no content DLC");
+        await Assert.That(rows["6"]).Contains("skipped: language french");
+        await Assert.That(rows["7"]).Contains("skipped: steamdeck 1");
     }
 
     [Test]

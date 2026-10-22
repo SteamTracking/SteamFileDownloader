@@ -180,6 +180,7 @@ internal static class Help
           {ExeName} ls <app> [<target>...] [-- <pattern>...]  list files without downloading
           {ExeName} ls <app> -- <pattern>...                  find which depot of the app has a file
           {ExeName} get <app> [<target>...] [-- <pattern>...] download files, all without patterns
+          {ExeName} download <app> [<depot>...]               install a game into one folder, like Steam
           {ExeName} workshop <subcommand> ...                 workshop items: info, search, ls and get
           {ExeName} dd <DepotDownloader arguments>            run a DepotDownloader command line
           {ExeName} config output <dir>                       save the default output folder
@@ -305,7 +306,6 @@ internal static class Help
         Examples:
           {ExeName} get 730 2347771 2347773 -- server.dll "regex:lib(tier0|engine2)\.so$"
           {ExeName} get 730 2347771:8344780363095656278 2347771:latest -- game/csgo/bin/win64/server.dll
-          {ExeName} get 730 2347770 2347771 --install-dir D:/Games/CS2
 
         {Targets}
 
@@ -320,13 +320,7 @@ internal static class Help
           they are in are downloaded, plus the _dir.vpk, which gets no row.
           Files already on disk with the right hash are kept, and ones with the same hash in another target
           or downloaded manifest of the depot are copied. Rows include files that already were on disk.
-
-        Install folder:
-          --install-dir <dir> puts the files of every manifest in <dir>/<path>, like a Steam install. Where two
-          have different files at one path, the later target's or depot's file is kept, with a warning. Without
-          targets, that is every depot, of every platform and language, so name the depots to install.
-          Files that are no longer in the manifests stay, and manifests are still saved in <output>/manifests.
-          <dir.vpk>:<pattern> patterns can't be used with it.
+          To install a game into one folder, use "{ExeName} download" instead.
 
         {Streams}
 
@@ -335,6 +329,73 @@ internal static class Help
         {PatternNotes}
 
         {ExitCodesText}
+        """;
+
+    public static string Download => $"""
+        Installs a game into one folder, with the depots that Steam installs on this machine, over one Steam login.
+
+        Usage:
+          {ExeName} download <app> [<depot>[:<manifest>]...] [--dir <dir>] [--branch <name> [--branch-password <pw>]]
+            [--os windows|linux|macos] [--osarch 32|64] [--oscpu x86|arm64] [--language <name>] [--lowviolence]
+            [--steamdeck] [--all-platforms] [--all-languages] [--include <id>...] [--exclude <id>...]
+        stdout has nothing, and stderr has the progress and a summary. One app per run, with no file patterns,
+        so use get for parts of a game.
+        Exit codes: 0 ok, 1 failed, 2 usage error, 3 log in again, 4 rate limited, 5 no access (see the end).
+
+        Examples:
+          {ExeName} download 730 --dir D:/Games/CS2
+          {ExeName} download 730 --os linux --dir D:/Games/CS2-linux
+          {ExeName} download 570 --language french --branch beta
+          {ExeName} download 730 2347770 2347771 --dir D:/Games/CS2
+          {ExeName} download 90 --include <depot> --dir D:/Games/HL1
+
+        Options (anywhere):
+          --dir <dir>         install folder (default: <output>/<app>)
+          --output <dir>      root of the default install folder and the manifests (default: config output, else ./depots)
+          --branch <name>, --branch-password <pw>  branch to install (default: public), and its password
+          --os <name>, --osarch <bits>, --oscpu <name>  install for windows, linux or macos (default: this machine's),
+                              32 or 64 bit (default: 64), x86 or arm64 (default: arm64 on arm64 Linux and macOS)
+          --language <name>   language to install, like french (default: english)
+          --lowviolence       also install the depots for the low violence version
+          --steamdeck         also install the depots for the Steam Deck. A Steam Frame is: --os linux --steamdeck --oscpu arm64
+          --all-platforms, --all-languages  install the depots of every platform (system, architecture, Steam Deck), or language
+          --include <id>, --exclude <id>  add a depot the filters skipped, or remove one they picked. Repeatable (see Depots)
+        {LoginOptions}
+
+        Depots:
+          Without <depot>, the depots are picked like Steam does. A depot is installed when each of its config
+          values (operating system, architecture, language, ...) matches this machine and the options, and it has a
+          manifest on the branch. Depots of DLC are included, and ones the account doesn't own are skipped. Depots
+          shared from another app go in the folder too. A depot that only fits another configuration, like one for
+          a mod or optional DLC, is skipped. stderr lists the depots that were skipped, with the reason.
+          "{ExeName} depots <app>" notes the same reason on each depot that is skipped by default.
+          --include <id> installs a depot that was skipped, and --exclude <id> leaves out one that was picked. An id
+          is a depot id, or a DLC app id for all depots of that DLC. Give each option as often as needed. --exclude
+          wins when both name a depot. An id that is not a depot of the app is a usage error. Neither option can be
+          combined with <depot>.
+          With <depot> or <depot>:<manifest>, those depots are installed as they are, without any filter.
+          If the app has no depot in the language, Steam's fallback is used (spanish and latam, sc_schinese
+          and schinese), else english, else the first language the app has.
+
+        Output:
+          Files go to the install folder, dated to when their manifest was created, and folders keep their own
+          dates. Where two depots have different files at one path, the depot that comes last in the app's info is
+          kept, with a warning. With --os for another system than this one, symbolic links are skipped.
+          Files already there with the right hash are kept, and the others are written again. Nothing records
+          what an earlier run installed, so files that are no longer in the manifests stay. Manifests are saved
+          in <output>/manifests.
+
+        {Streams}
+
+        Exit codes:
+          0  success
+          1  something failed, see stderr. Running the same command again retries only what failed
+        {UsageErrorExitCode}
+          3  no saved login, or Steam rejected it: a person has to run "login"
+          4  Steam is rate limiting logins: wait about 15 minutes
+          5  only access failed: Steam gave no depot key or manifest request code for the depots. Another
+             account may own the app (--username). Also given when the account can't see an app's password
+             protected branches (--branch-password)
         """;
 
     public static string Depots => $"""
@@ -360,38 +421,39 @@ internal static class Help
           target is <app>/<depot>:<manifest>, ready to pass to ls or get. The manifest is the latest on the
           branch, or public's when the branch has none ("manifest from public" in notes), and a depot with
           neither is just <app>/<depot>. max size is in bytes, or -. notes lists the name, os, arch, language,
-          dlc and "shared from app <app>"; a shared depot's target names the app it is shared from.
+          dlc and "shared from app <app>", and "skipped: <key> <value>" for a depot that download skips on this
+          machine, like "skipped: mod czero", which download can add. A shared depot's target names the app it is
+          shared from.
 
         {DepotsExitCodesText}
         """;
 
     public static string DepotDownloader => $"""
-        Runs a DepotDownloader command line as get, or as ls with -manifest-only.
+        Runs a DepotDownloader command line as download, or as ls with -manifest-only.
 
         Usage:
-          {ExeName} dd -app <app> [-depot <depot> [-manifest <manifest>]]... [-filelist <file>] [-dir <dir>]
+          {ExeName} dd -app <app> [-depot <depot> [-manifest <manifest>]]... [-dir <dir>]
+            [-os windows|linux|macos] [-osarch 32|64] [-language <name>] [-lowviolence] [-all-platforms] [-all-languages]
             [-branch <name> [-branchpassword <pw>]] [-username <name> [-password <pw>]] [-manifest-only]
-          {ExeName} dd -pubfile <item> [-filelist <file>] [-dir <dir>] [-username <name> [-password <pw>]]
-            [-manifest-only]
-          {ExeName} dd -app <app> -ugc <manifest> [-filelist <file>] [-dir <dir>] [-username <name> [-password <pw>]]
-            [-manifest-only]
+          {ExeName} dd -pubfile <item> [-dir <dir>] [-username <name> [-password <pw>]] [-manifest-only]
+          {ExeName} dd -app <app> -ugc <manifest> [-dir <dir>] [-username <name> [-password <pw>]] [-manifest-only]
 
         Example:
-          {ExeName} dd -app 730 -depot 2347771 -manifest 8344780363095656278 -filelist files.txt
+          {ExeName} dd -app 730 -depot 2347771 -manifest 8344780363095656278 -dir D:/Games/CS2
 
-        -depot and -manifest pair up in order. Without -depot every depot of the app is used. File list
-        lines are exact paths from the depot root, without globs, or "regex:" patterns, like in DepotDownloader,
-        and a list without entries is an error. Without -filelist every file is downloaded, like get without
-        patterns, so stdout has no rows. -dir sets the root output folder; files still go to <dir>/<depot>/<manifest>/<path>.
-        Without -dir, it is the folder saved with config output, else depots in the current folder.
+        -depot and -manifest pair up in order. Without -depot the depots are picked like download does, for -os,
+        -osarch and -language, which -all-platforms and -all-languages turn off. -dir is the install folder, else
+        <output>/<app>. -filelist is not supported, since download has no file patterns: use
+        "{ExeName} get <app>/<depot> -- <pattern>..." to get some files. stdout has no rows.
+        With -manifest-only, -dir is the root output folder, as for ls.
         -password logs in with it on every run, without saving a login. Other DepotDownloader flags, like
-        -remember-password or -os, are unsupported, so pick depots with -depot.
+        -remember-password, are unsupported.
         -branchpassword (or -betapassword) is the password of a password protected branch.
-        For new command lines, use get or ls, which also take several apps, branches and VPK entries.
+        For new command lines, use download, get or ls.
 
         -pubfile runs as workshop get (or ls), so files go to <dir>/workshop/<item>/<manifest>/<path>, and the file of
         a legacy workshop item to <dir>/workshop/<item>/<file name>. -ugc is a manifest of the app's workshop depot,
-        like get <app>/<app>:<manifest>; it does not work for legacy workshop items.
+        like download <app> <app>:<manifest>; it does not work for legacy workshop items.
 
         {ExitCodesText}
         """;
@@ -655,7 +717,7 @@ internal static class Help
         Saves settings for later runs.
 
         Usage:
-          {ExeName} config output <dir>      save the root output folder of get, ls, workshop ls and get, and dd
+          {ExeName} config output <dir>      save the root output folder of get, download, ls, workshop ls/get and dd
           {ExeName} config output            print the saved folder, or say that there is none
           {ExeName} config output --reset    forget the saved folder
 
@@ -758,6 +820,7 @@ internal static class Help
     private static string? GetCommandHelp(string? command) => command switch
     {
         "get" => Get,
+        "download" => Download,
         "ls" => Ls,
         "depots" => Depots,
         "dd" => DepotDownloader,

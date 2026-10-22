@@ -57,16 +57,6 @@ public class GetCommandTests
     }
 
     [Test]
-    public async Task InstallDirWithVpkPatternsIsAUsageErrorBeforeLoggingIn()
-    {
-        var options = new DepotOptions(730, InstallDir: "D:/Games/CS2") { Login = new LoginOptions(Anonymous: true) };
-        var arguments = new DepotArguments("get", options, ["2347770"], ["pak01_dir.vpk:scripts/a.txt"]);
-
-        await Assert.That(await GetCommand.RunAsync(arguments, new CancellationToken(canceled: true))).IsEqualTo(ExitCodes.UsageError);
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("--install-dir can't be combined with <dir.vpk>:<pattern> patterns");
-    }
-
-    [Test]
     public async Task InstallKeepsTheLaterFileAtAPathAndWarnsWhenItDiffers()
     {
         var first = TestManifests.Job("install", 1, TestManifests.File("bin/a.dll", new byte[] { 1 }), TestManifests.File("same.txt", new byte[] { 5 }), TestManifests.File("only1.txt", new byte[] { 7 }));

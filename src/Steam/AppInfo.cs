@@ -26,6 +26,12 @@ internal static class AppInfo
     }
 
     /// <summary>
+    /// Whether the app is a soundtrack, which is when its "common" type is music.
+    /// </summary>
+    public static bool IsMusic(KeyValue appInfo) =>
+        string.Equals(appInfo["common"]["type"].Value, "music", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// The app in the depot's "depotfromapp" when it is a shared install, which that app owns the manifests of, or null.
     /// Other depots with a "depotfromapp" are installed from the installing app's own manifests.
     /// </summary>
@@ -37,6 +43,27 @@ internal static class AppInfo
         }
 
         return depot["depotfromapp"].Value;
+    }
+
+    /// <summary>
+    /// The app that owns the manifests of a shared install depot when it is another app than the one being installed,
+    /// or null for any other depot.
+    /// </summary>
+    public static uint? GetSharedInstallSourceApp(KeyValue depot, uint appID)
+    {
+        var sourceApp = GetSharedInstallApp(depot);
+
+        if (!uint.TryParse(sourceApp, NumberStyles.None, CultureInfo.InvariantCulture, out var sourceAppID))
+        {
+            return null;
+        }
+
+        if (sourceAppID == appID)
+        {
+            return null;
+        }
+
+        return sourceAppID;
     }
 
     /// <summary>
@@ -69,9 +96,11 @@ internal static class AppInfo
             return dlcAppIDs;
         }
 
+        var seen = new HashSet<uint>();
+
         foreach (var part in listOfDlc.Split(','))
         {
-            if (uint.TryParse(part.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var dlcAppID) && !dlcAppIDs.Contains(dlcAppID))
+            if (uint.TryParse(part.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var dlcAppID) && seen.Add(dlcAppID))
             {
                 dlcAppIDs.Add(dlcAppID);
             }
@@ -179,6 +208,19 @@ internal static class AppInfo
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Whether the branch is only for a local content server, which Steam installs public's build instead of unless one is set up.
+    /// </summary>
+    public static bool RequiresLocalContentServer(KeyValue depots, string branch)
+    {
+        if (string.Equals(branch, "public", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return depots["branches"][branch]["lcsrequired"].AsBoolean();
     }
 
     /// <summary>

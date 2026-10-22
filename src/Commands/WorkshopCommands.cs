@@ -358,7 +358,7 @@ internal static class WorkshopCommands
 
             if (itemProblem != null)
             {
-                var hint = itemProblem.SkipReason == "removed" && run.ItemNotFoundHint != null ? $" {run.ItemNotFoundHint}" : "";
+                var hint = itemProblem.SkipReason == "removed" && run.Options.ItemNotFoundHint != null ? $" {run.Options.ItemNotFoundHint}" : "";
 
                 Log.Error($"{itemProblem.Message}{hint}");
                 run.Fail(target.Source, itemProblem.NoAccess);
@@ -501,7 +501,7 @@ internal static class WorkshopCommands
             return;
         }
 
-        var folder = run.InstallFolder ?? Path.Combine(run.OutputRoot, "workshop", itemID.ToString(CultureInfo.InvariantCulture));
+        var folder = Path.Combine(run.OutputRoot, "workshop", itemID.ToString(CultureInfo.InvariantCulture));
 
         // Items without a file were already reported as problems
         var item = LegacyItem.TryCreate(details, folder)!;

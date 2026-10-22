@@ -7,16 +7,18 @@ using System.Text.RegularExpressions;
 namespace SteamFileDownloader;
 
 /// <summary>
-/// Options shared by the get, ls and depots commands, and the workshop commands.
+/// Options shared by the get, ls, download and depots commands, and the workshop commands.
 /// </summary>
 internal sealed record DepotOptions(
     uint? App,
     string? Output = null,
     string Branch = "public",
-    string? InstallDir = null,
     string? BranchPassword = null)
 {
     public LoginOptions Login { get; init; } = new();
+
+    // Only the download command has these
+    public InstallOptions Install { get; init; } = new();
 
     // Only dd has these, for ids that may be from the other of -ugc and -pubfile: added to the error of a workshop item
     // that does not exist, or of a manifest that Steam gave no access to
@@ -28,15 +30,15 @@ internal sealed record DepotOptions(
         app,
         parsed.Options.GetValueOrDefault("output"),
         parsed.Options.GetValueOrDefault("branch") ?? "public",
-        parsed.Options.GetValueOrDefault("install-dir"),
         parsed.Options.GetValueOrDefault("branch-password"))
     {
         Login = LoginOptions.From(parsed.Options),
+        Install = parsed.Install,
     };
 }
 
 /// <summary>
-/// A parsed get, ls or depots command line. Get and ls without targets take every depot of the app.
+/// A parsed get, ls, download or depots command line. Get and ls without targets take every depot of the app.
 /// </summary>
 internal sealed record DepotArguments(
     string Command,
@@ -67,7 +69,7 @@ internal static partial class DepotArgumentParser
     private static partial Regex AllTargetRegex();
 
     /// <summary>
-    /// Parses "[app] [options] [targets] [-- patterns]" for get, ls and depots. Options can go anywhere before "--".
+    /// Parses "[app] [options] [targets] [-- patterns]" for get, ls, download and depots. Options can go anywhere before "--".
     /// Returns null after printing an error.
     /// </summary>
     public static DepotArguments? ParseArguments(string command, string[] args)
@@ -102,7 +104,7 @@ internal static partial class DepotArgumentParser
             return null;
         }
 
-        if (command == "depots" && !ArgumentParser.NoPatterns(parsed, command))
+        if (command is "depots" or "download" && !ArgumentParser.NoPatterns(parsed, command))
         {
             return null;
         }
@@ -131,8 +133,16 @@ internal static partial class DepotArgumentParser
             return null;
         }
 
-        if (command is "get" or "ls" && app == null && targets.Count == 0)
+        if (command == "download")
         {
+            if (!CheckDownloadArguments(parsed, app, targets))
+            {
+                return null;
+            }
+        }
+        else if (command is "get" or "ls" && app == null && targets.Count == 0)
+        {
+            // Get and ls can take the apps from their targets
             Log.Error(DescribeMissingApp(command, parsed.Patterns));
             return null;
         }
@@ -141,7 +151,8 @@ internal static partial class DepotArgumentParser
         {
             var allTarget = AllTargetRegex().Match(target);
 
-            if (!allTarget.Success)
+            // Download without targets takes the depots that Steam installs, not every depot
+            if (!allTarget.Success || command == "download")
             {
                 continue;
             }
@@ -196,8 +207,38 @@ internal static partial class DepotArgumentParser
         return new DepotArguments(command, DepotOptions.From(parsed, app), targets, parsed.Patterns);
     }
 
+    // Download takes one app, which has to come first, and depots of it as targets, on the branch of --branch.
+    // Returns false after printing an error
+    private static bool CheckDownloadArguments(ParsedArguments parsed, uint? app, List<string> targets)
+    {
+        if (app == null)
+        {
+            Log.Error(DescribeMissingApp("download", parsed.Patterns));
+            return false;
+        }
+
+        foreach (var target in targets)
+        {
+            var match = TargetRegex().Match(target);
+
+            if (match.Success && (match.Groups["app"].Success || match.Groups["branch"].Success))
+            {
+                Log.Error($"\"{target}\" names an app or branch. download takes <depot>[:<manifest>] of its one app, and --branch for the branch. {Help.UsageHint("download")}");
+                return false;
+            }
+        }
+
+        if (targets.Count > 0 && parsed.Install.HasIncludeOrExclude)
+        {
+            Log.Error($"--include and --exclude change the depots that download picks, so they can't be combined with depots as targets. {Help.UsageHint("download")}");
+            return false;
+        }
+
+        return true;
+    }
+
     /// <summary>
-    /// The error for get or ls without an app id or targets.
+    /// The error for get, ls or download without an app id or targets.
     /// </summary>
     internal static string DescribeMissingApp(string command, List<string> patterns) =>
         $"{command} needs an app id, the number in the app's store page URL, like: {SuggestCommand(command, null, [], patterns)}.";

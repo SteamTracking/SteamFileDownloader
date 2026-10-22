@@ -178,9 +178,160 @@ public class DepotArgumentsTests
 
         await Assert.That(anonymous!.Options.Login.Anonymous).IsTrue();
 
-        var install = DepotArgumentParser.ParseArguments("get", ["730", "1", "--install-dir", "D:/Games/CS2"]);
+        var install = DepotArgumentParser.ParseArguments("download", ["730", "1", "--dir", "D:/Games/CS2"]);
 
-        await Assert.That(install!.Options.InstallDir).IsEqualTo("D:/Games/CS2");
+        await Assert.That(install!.Options.Install.Dir).IsEqualTo("D:/Games/CS2");
+        await Assert.That(install.Options.Output).IsNull();
+    }
+
+    [Test]
+    public async Task InstallOptionsAreMappedAndDefaulted()
+    {
+        var defaults = DepotArgumentParser.ParseArguments("download", ["730"]);
+
+        await Assert.That(defaults).IsNotNull();
+        await Assert.That(defaults!.Command).IsEqualTo("download");
+        await Assert.That(defaults.Options).IsEqualTo(new DepotOptions(730));
+
+        var all = DepotArgumentParser.ParseArguments("download", ["730", "1", "2:5", "--os", "Linux", "--osarch", "32", "--language", "French", "--lowviolence", "--branch", "beta"]);
+
+        await Assert.That(all).IsNotNull();
+        await Assert.That(string.Join(",", all!.Targets)).IsEqualTo("1,2:5");
+        await Assert.That(all.Options).IsEqualTo(new DepotOptions(730, Branch: "beta") { Install = new InstallOptions(Os: "linux", OsArch: "32", Language: "french", LowViolence: true) });
+
+        var everything = DepotArgumentParser.ParseArguments("download", ["730", "--all-platforms", "--all-languages"]);
+
+        await Assert.That(everything!.Options.Install).IsEqualTo(new InstallOptions(AllPlatforms: true, AllLanguages: true));
+
+        var steamDeck = DepotArgumentParser.ParseArguments("download", ["730", "--steamdeck"]);
+
+        await Assert.That(steamDeck!.Options.Install).IsEqualTo(new InstallOptions(SteamDeck: true));
+    }
+
+    [Test]
+    public async Task AllPlatformsCannotBeCombinedWithSteamDeck()
+    {
+        await Assert.That(DepotArgumentParser.ParseArguments("download", ["730", "--all-platforms", "--steamdeck"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("--all-platforms can't be combined with --steamdeck.");
+    }
+
+    [Test]
+    [Arguments("--os", "beos", "--os needs windows, linux or macos, got \"beos\".")]
+    [Arguments("--osarch", "16", "--osarch needs 32 or 64, got \"16\".")]
+    public async Task InvalidPlatformValueIsRejected(string option, string value, string expected)
+    {
+        await Assert.That(DepotArgumentParser.ParseArguments("download", ["730", option, value])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains(expected);
+    }
+
+    [Test]
+    [Arguments("--all-platforms", "--os", "linux", "--all-platforms can't be combined with --os or --osarch.")]
+    [Arguments("--all-platforms", "--osarch", "64", "--all-platforms can't be combined with --os or --osarch.")]
+    [Arguments("--all-languages", "--language", "french", "--all-languages can't be combined with --language.")]
+    public async Task ConflictingInstallOptionsAreRejected(string flag, string option, string value, string expected)
+    {
+        await Assert.That(DepotArgumentParser.ParseArguments("download", ["730", flag, option, value])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains(expected);
+    }
+
+    [Test]
+    public async Task OsCpuIsParsedAndLowercased()
+    {
+        var parsed = DepotArgumentParser.ParseArguments("download", ["730", "--oscpu", "ARM64"]);
+
+        await Assert.That(parsed!.Options.Install).IsEqualTo(new InstallOptions(OsCpu: "arm64"));
+    }
+
+    [Test]
+    public async Task InvalidOsCpuIsRejected()
+    {
+        await Assert.That(DepotArgumentParser.ParseArguments("download", ["730", "--oscpu", "mips"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("--oscpu needs x86 or arm64, got \"mips\".");
+    }
+
+    [Test]
+    public async Task AllPlatformsCannotBeCombinedWithOsCpu()
+    {
+        await Assert.That(DepotArgumentParser.ParseArguments("download", ["730", "--all-platforms", "--oscpu", "x86"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("--all-platforms can't be combined with --oscpu.");
+    }
+
+    [Test]
+    public async Task IncludeAndExcludeCanBeRepeated()
+    {
+        var parsed = DepotArgumentParser.ParseArguments("download", ["730", "--include", "91", "--exclude", "5", "--include=92,93", "--include", "94"]);
+        var install = parsed!.Options.Install;
+
+        await Assert.That(install.Include).IsEquivalentTo([91u, 92u, 93u, 94u]);
+        await Assert.That(install.Exclude).IsEquivalentTo([5u]);
+        await Assert.That(parsed.Targets).IsEmpty();
+    }
+
+    [Test]
+    [Arguments("--include", "abc", "--include needs a depot id or DLC app id, got \"abc\".")]
+    [Arguments("--exclude", "0", "--exclude needs a depot id or DLC app id, got \"0\".")]
+    [Arguments("--include", "1,x", "--include needs a depot id or DLC app id, got \"x\".")]
+    public async Task InvalidIncludeAndExcludeIdsAreRejected(string option, string value, string expected)
+    {
+        await Assert.That(DepotArgumentParser.ParseArguments("download", ["730", option, value])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains(expected);
+    }
+
+    [Test]
+    [Arguments("--include")]
+    [Arguments("--exclude")]
+    public async Task IncludeAndExcludeCannotBeCombinedWithDepotTargets(string option)
+    {
+        await Assert.That(DepotArgumentParser.ParseArguments("download", ["730", "1", option, "2"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("can't be combined with depots as targets");
+    }
+
+    [Test]
+    public async Task IncludeIsOnlyForDownload()
+    {
+        await Assert.That(DepotArgumentParser.ParseArguments("get", ["730", "1", "--include", "2"])).IsNull();
+    }
+
+    [Test]
+    public async Task DownloadNeedsAnAppFirst()
+    {
+        await Assert.That(DepotArgumentParser.ParseArguments("download", [])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput().Replace(Help.ExeName, "SFD", StringComparison.Ordinal)).Contains("download needs an app id, the number in the app's store page URL, like: SFD download <app>.");
+        await Assert.That(DepotArgumentParser.ParseArguments("download", ["1"])).IsNotNull();
+    }
+
+    [Test]
+    [Arguments("570/373303")]
+    [Arguments("373303@beta")]
+    public async Task DownloadTargetsAreDepotsOfItsApp(string target)
+    {
+        await Assert.That(DepotArgumentParser.ParseArguments("download", ["730", "1", target])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("names an app or branch.");
+    }
+
+    [Test]
+    public async Task DownloadHasNoPatterns()
+    {
+        await Assert.That(DepotArgumentParser.ParseArguments("download", ["730", "--", "server.dll"])).IsNull();
+        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("download takes no patterns after --.");
+    }
+
+    [Test]
+    public async Task DownloadWithoutPatternsHasNoEveryFileTip()
+    {
+        await Assert.That(DepotArgumentParser.ParseArguments("download", ["730", "1"])).IsNotNull();
+
+        var output = TestContext.Current!.GetStandardOutput() + TestContext.Current.GetErrorOutput();
+
+        await Assert.That(output).DoesNotContain("Downloading every file");
+    }
+
+    [Test]
+    public async Task GetHasNoInstallOptions()
+    {
+        await Assert.That(DepotArgumentParser.ParseArguments("get", ["730", "1", "--install-dir", "D:/Games/CS2"])).IsNull();
+        await Assert.That(DepotArgumentParser.ParseArguments("get", ["730", "1", "--dir", "D:/Games/CS2"])).IsNull();
+        await Assert.That(DepotArgumentParser.ParseArguments("get", ["730", "1", "--os", "linux"])).IsNull();
     }
 
     [Test]

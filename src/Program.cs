@@ -18,7 +18,7 @@ internal static class Program
 
     public static string? Commit => VersionInfo.Commit;
 
-    private static readonly string[] Commands = ["get", "ls", "depots", "workshop", "dd", "login", "config", "track"];
+    private static readonly string[] Commands = ["get", "download", "ls", "depots", "workshop", "dd", "login", "config", "track"];
 
     private static async Task<int> Main(string[] args)
     {
@@ -57,7 +57,7 @@ internal static class Program
         {
             return args[0] switch
             {
-                "get" or "ls" or "depots" or "dd" => await RunDepotCommandAsync(args[0], args[1..], cts.Token),
+                "get" or "download" or "ls" or "depots" or "dd" => await RunDepotCommandAsync(args[0], args[1..], cts.Token),
                 "login" => await RunLoginAsync(args[1..], cts.Token),
                 "config" => RunConfig(args[1..]),
                 "track" => await RunTrackAsync(args[1..], cts.Token),
@@ -107,6 +107,7 @@ internal static class Program
         return arguments.Command switch
         {
             "get" or "ls" => await GetCommand.RunAsync(arguments, cancellationToken),
+            "download" => await DownloadCommand.RunAsync(arguments, cancellationToken),
             _ => await DepotsCommand.ListDepotsAsync(arguments, cancellationToken),
         };
     }
