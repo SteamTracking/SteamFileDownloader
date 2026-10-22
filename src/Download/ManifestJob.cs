@@ -91,7 +91,7 @@ internal sealed class ManifestJob
     };
 
     /// <summary>
-    /// The manifest's files with their normalized paths, without its directories.
+    /// The manifest's files with their normalized paths, without its directories. Symbolic links are files.
     /// </summary>
     public IEnumerable<(DepotManifest.FileData File, string Path)> GetFiles()
     {
@@ -104,7 +104,22 @@ internal sealed class ManifestJob
         }
     }
 
-    private static bool IsDirectory(DepotManifest.FileData file) => (file.Flags & EDepotFileFlag.Directory) != 0;
+    /// <summary>
+    /// The normalized paths of the manifest's directory entries, which include empty directories.
+    /// </summary>
+    public IEnumerable<string> GetDirectories()
+    {
+        foreach (var file in Manifest!.Files!)
+        {
+            if (IsDirectory(file))
+            {
+                yield return FileFilter.NormalizePath(file.FileName);
+            }
+        }
+    }
+
+    // A link to a directory has the directory flag too, but is written like any other link
+    private static bool IsDirectory(DepotManifest.FileData file) => (file.Flags & EDepotFileFlag.Directory) != 0 && (file.Flags & EDepotFileFlag.Symlink) == 0;
 
     private Dictionary<string, DepotManifest.FileData> IndexFiles()
     {

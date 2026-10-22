@@ -245,6 +245,24 @@ internal static class GetCommand
             run.Fail();
         }
 
+        // Without patterns the whole depot is wanted, including its empty directories. With patterns only the folders of matched files exist
+        var folders = new List<(ManifestJob Job, string Path)>();
+
+        if (run.Filter.Patterns.Count == 0 && run.Filter.VpkPatterns.Count == 0)
+        {
+            foreach (var job in run.Jobs.Where(static j => j.Manifest != null))
+            {
+                var created = new List<string>();
+
+                if (!OutputFiles.CreateDirectories(job, created))
+                {
+                    run.Fail();
+                }
+
+                folders.AddRange(created.Select(path => (job, path)));
+            }
+        }
+
         if (run.HideRows)
         {
             // Every file was asked for, and there is no VPK pattern to fetch directory files for
@@ -313,7 +331,7 @@ internal static class GetCommand
         // Folders of an install hold files of every depot, so they keep their own dates
         if (run.InstallFolder == null)
         {
-            OutputFiles.SetFolderTimes(paths);
+            OutputFiles.SetFolderTimes(paths, folders);
         }
 
         return Finish(run, downloads: true);

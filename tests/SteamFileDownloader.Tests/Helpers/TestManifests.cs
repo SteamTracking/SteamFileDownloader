@@ -29,6 +29,9 @@ internal static class TestManifests
 
     public static DepotManifest.FileData Directory(string name) => new(name, [], EDepotFileFlag.Directory, 0, new byte[20], "", false, 0);
 
+    public static DepotManifest.FileData Symlink(string name, string target, bool isDirectory = false) =>
+        new(name, [], EDepotFileFlag.Symlink | (isDirectory ? EDepotFileFlag.Directory : 0), 0, new byte[20], target, false, 0);
+
     public static ManifestJob Job(string outputFolder, uint depotID, params DepotManifest.FileData[] files) => new()
     {
         AppID = 1,

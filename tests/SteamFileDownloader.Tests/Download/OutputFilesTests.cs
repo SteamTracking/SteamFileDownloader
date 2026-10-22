@@ -157,6 +157,71 @@ public class OutputFilesTests
     }
 
     [Test]
+    public async Task CreateDirectoriesCreatesEmptyFoldersAndReplacesFiles()
+    {
+        using var temp = new TempDirectory();
+        var job = TestManifests.Job(temp.Path, 1, TestManifests.Directory("empty\\nested"), TestManifests.Directory("file"), TestManifests.File("other.txt", [1]));
+        temp.Write("file", "in the way");
+        var created = new List<string>();
+
+        var success = OutputFiles.CreateDirectories(job, created);
+
+        await Assert.That(success).IsTrue();
+        await Assert.That(created.Count).IsEqualTo(2);
+        await Assert.That(Directory.Exists(Path.Combine(temp.Path, "empty", "nested"))).IsTrue();
+        await Assert.That(Directory.Exists(Path.Combine(temp.Path, "file"))).IsTrue();
+    }
+
+    [Test]
+    public async Task GetFilesKeepsLinksAndDropsDirectories()
+    {
+        using var temp = new TempDirectory();
+        var job = TestManifests.Job(temp.Path, 1, TestManifests.Directory("dir"), TestManifests.Symlink("link", "dir"), TestManifests.Symlink("dirlink", "dir", isDirectory: true));
+
+        var paths = job.GetFiles().Select(static f => f.Path).ToList();
+
+        await Assert.That(paths).IsEquivalentTo(new[] { "link", "dirlink" });
+        await Assert.That(job.GetDirectories().ToList()).IsEquivalentTo(new[] { "dir" });
+    }
+
+    [Test]
+    public async Task WriteLinkRefusesTargetsOutsideTheFolder()
+    {
+        using var temp = new TempDirectory();
+        var job = JobIn(Path.Combine(temp.Path, "out"));
+        Directory.CreateDirectory(job.OutputFolder);
+
+        var result = OutputFiles.WriteLink(job, Path.Combine(job.OutputFolder, "link"), "..\\other", isDirectory: false);
+
+        await Assert.That(result).IsEqualTo(LinkResult.OutsideFolder);
+        await Assert.That(new FileInfo(Path.Combine(job.OutputFolder, "link")).Exists).IsFalse();
+    }
+
+    [Test]
+    public async Task WriteLinkCreatesLinkWithPlatformSeparatorsAndKeepsValidOne()
+    {
+        using var temp = new TempDirectory();
+        var job = JobIn(temp.Path);
+        Directory.CreateDirectory(Path.Combine(temp.Path, "sub"));
+        var path = Path.Combine(temp.Path, "sub", "link");
+        temp.Write("sub/link", "replaced");
+
+        var result = OutputFiles.WriteLink(job, path, "..\\target\\file", isDirectory: false);
+
+        // Windows needs a privilege to create links
+        if (result == LinkResult.NoPrivilege)
+        {
+            return;
+        }
+
+        var expected = Path.Combine("..", "target", "file");
+
+        await Assert.That(result).IsEqualTo(LinkResult.Created);
+        await Assert.That(new FileInfo(path).LinkTarget).IsEqualTo(expected);
+        await Assert.That(OutputFiles.WriteLink(job, path, "..\\target\\file", isDirectory: false)).IsEqualTo(LinkResult.AlreadyValid);
+    }
+
+    [Test]
     public async Task IsFileErrorCoversIoAndPathErrorsOnly()
     {
         await Assert.That(OutputFiles.IsFileError(new IOException())).IsTrue();

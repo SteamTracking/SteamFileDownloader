@@ -58,6 +58,8 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         Success,
         AlreadyValid,
         Copied,
+        Linked,
+        LinkSkipped,
         DownloadFailed,
     }
 
@@ -81,6 +83,10 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
     private readonly ConcurrentDictionary<string, int> ChunkErrorReasons = new();
     private readonly ConcurrentDictionary<string, int> ChunkErrorServers = new();
     private int FailedChunks;
+
+    // Links that were not written, summed up after each download instead of a line each
+    private readonly ConcurrentBag<string> LinksOutsideFolder = [];
+    private int LinksWithoutPrivilege;
 
     // When a chunk last completed, while chunks are downloading. It restarts with the first chunk after an idle time
     private long LastProgress;
@@ -141,6 +147,12 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
                 return null;
             }
 
+            if (fileState is DownloadResult.LinkSkipped)
+            {
+                Interlocked.Increment(ref resultCounts[(int)fileState]);
+                return null;
+            }
+
             downloadedFiles.Add(new DownloadedFile(fileJob.Job, fileJob.File, finalPath));
             Interlocked.Increment(ref resultCounts[(int)fileState]);
 
@@ -192,6 +204,7 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         var downloaded = resultCounts[(int)DownloadResult.Success];
         var copied = resultCounts[(int)DownloadResult.Copied];
         var alreadyPresent = resultCounts[(int)DownloadResult.AlreadyValid];
+        var linked = resultCounts[(int)DownloadResult.Linked];
         var counts = new List<string>();
 
         if (downloaded > 0)
@@ -207,6 +220,11 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
             counts.Add($"{copied} copied from identical files");
         }
 
+        if (linked > 0)
+        {
+            counts.Add($"{Log.Plural(linked, "link")} created");
+        }
+
         if (alreadyPresent > 0)
         {
             counts.Add($"{alreadyPresent} already present");
@@ -217,6 +235,7 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
             Log.Info($"Files: {string.Join(", ", counts)}.");
         }
 
+        LogSkippedLinks();
         LogChunkErrors();
 
         LogFailures("files", failedFiles.Select(static f => $"{f.Job}/{FileFilter.NormalizePath(f.File.FileName)}"), "Running the same command again retries only those.");
@@ -335,6 +354,11 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
 
         Directory.CreateDirectory(Path.GetDirectoryName(finalPath)!);
 
+        if ((file.Flags & EDepotFileFlag.Symlink) != 0)
+        {
+            return (DownloadLink(job, file, finalPath), finalPath);
+        }
+
         // Manifests list empty files with an all-zero hash, so only their size is checked
         if (file.TotalSize == 0)
         {
@@ -385,6 +409,51 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         {
             // Left over when anything failed, including cancellation
             File.Delete(partialPath);
+        }
+    }
+
+    private DownloadResult DownloadLink(ManifestJob job, DepotManifest.FileData file, string finalPath)
+    {
+        if (string.IsNullOrEmpty(file.LinkTarget))
+        {
+            throw new InvalidDataException($"Link has no target: {file.FileName}");
+        }
+
+        var isDirectory = (file.Flags & EDepotFileFlag.Directory) != 0;
+
+        switch (OutputFiles.WriteLink(job, finalPath, file.LinkTarget, isDirectory))
+        {
+            case LinkResult.AlreadyValid:
+                return DownloadResult.AlreadyValid;
+
+            case LinkResult.OutsideFolder:
+                LinksOutsideFolder.Add($"{job}/{FileFilter.NormalizePath(file.FileName)}");
+                return DownloadResult.LinkSkipped;
+
+            case LinkResult.NoPrivilege:
+                Interlocked.Increment(ref LinksWithoutPrivilege);
+                return DownloadResult.LinkSkipped;
+
+            default:
+                return DownloadResult.Linked;
+        }
+    }
+
+    private void LogSkippedLinks()
+    {
+        var withoutPrivilege = Interlocked.Exchange(ref LinksWithoutPrivilege, 0);
+
+        if (withoutPrivilege > 0)
+        {
+            Log.Warn($"{Log.Plural(withoutPrivilege, "symbolic link")} skipped, since Windows doesn't allow this account to create them. Turn on Developer Mode in the Windows settings, or run in an elevated terminal.");
+        }
+
+        var outside = LinksOutsideFolder.Order(StringComparer.Ordinal).ToList();
+        LinksOutsideFolder.Clear();
+
+        if (outside.Count > 0)
+        {
+            Log.Warn($"{Log.Plural(outside.Count, "symbolic link")} skipped, since they point outside the output folder: {Log.JoinFirst(outside, 20)}.");
         }
     }
 
@@ -445,7 +514,8 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         long length,
         string path)
     {
-        using var handle = File.OpenHandle(path, FileMode.Create, FileAccess.ReadWrite, FileShare.None, FileOptions.Asynchronous, length);
+        using var stream = OutputFiles.Open(path, FileMode.Create, FileAccess.ReadWrite, FileOptions.Asynchronous, length);
+        var handle = stream.SafeFileHandle;
         RandomAccess.SetLength(handle, length);
 
         if (!await DownloadChunks(job, placements, handle))
@@ -567,7 +637,8 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 
         // Not asynchronous, which marking it sparse needs
-        using var handle = File.OpenHandle(path, FileMode.OpenOrCreate, FileAccess.ReadWrite);
+        using var stream = OutputFiles.Open(path, FileMode.OpenOrCreate, FileAccess.ReadWrite);
+        var handle = stream.SafeFileHandle;
         var existingLength = RandomAccess.GetLength(handle);
 
         // Linux leaves the gaps unallocated on its own, NTFS only in a sparse file

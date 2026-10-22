@@ -25,6 +25,7 @@ SteamFileDownloader helps with datamining and reverse engineering of Source 2 ga
 - **File lists**: SteamFileDownloader can list the names, sizes and SHA-1 hashes of files. It does not download the files. Use these lists to compare builds.
 - **Parts of VPK archives**: list the entries of a VPK. You can also extract entries, and SteamFileDownloader downloads only the chunks that contain them.
 - **No second download of a file**: SteamFileDownloader does a check of each file that is already on the disk, and keeps the correct files. If a file is the same in another build, SteamFileDownloader copies it. If a command fails and you run it again, it downloads only the files that failed.
+- **Same files as Steam**: if you give no patterns, `get` creates the empty folders of the depot. It creates symbolic links as links. On Windows, links need Developer Mode or an elevated terminal, and SteamFileDownloader skips them with a warning if it cannot create them. It skips a link that points outside the output folder. On Linux and macOS, files get the permissions 0777 and the umask removes some of them, the same as Steam.
 - **Workshop items**: show the details and the version history of items, and search for items. List or download the files of an item from any version. This also applies to collections.
 - **Saved logins**: log in one time with a QR code from the Steam mobile app. SteamFileDownloader encrypts the tokens for the Windows user.
 - **Compatible with DepotDownloader**: `dd` runs your current DepotDownloader command lines.
