@@ -810,6 +810,7 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
         return null;
     }
 
+    // Throws when Steam answers with an error
     public async Task<List<PublishedFileDetails>> GetPublishedFileDetailsAsync(IReadOnlyCollection<ulong> itemIDs)
     {
         var request = new CPublishedFile_GetDetails_Request
@@ -818,25 +819,40 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
         };
         request.publishedfileids.AddRange(itemIDs);
 
-        return (await CallServiceAsync("workshop item details", () => PublishedFiles.GetDetails(request))).publishedfiledetails;
+        var response = await RequestFromSteamAsync("workshop item details", async () => await PublishedFiles.GetDetails(request));
+
+        if (response.Result != EResult.OK)
+        {
+            throw new InvalidOperationException($"Steam answered {response.Result}");
+        }
+
+        return response.Body.publishedfiledetails;
     }
 
-    public Task<CPublishedFile_GetChangeHistory_Response> GetChangeHistoryAsync(ulong itemID, uint startIndex, uint count) =>
-        CallServiceAsync("workshop change history", () => PublishedFiles.GetChangeHistory(new CPublishedFile_GetChangeHistory_Request
+    // Throws when Steam answers with an error
+    public async Task<CPublishedFile_GetChangeHistory_Response> GetChangeHistoryAsync(ulong itemID, uint startIndex, uint count)
+    {
+        var request = new CPublishedFile_GetChangeHistory_Request
         {
             publishedfileid = itemID,
             startindex = startIndex,
             count = count,
-        }));
+        };
 
-    public Task<CPublishedFile_QueryFiles_Response> QueryFilesAsync(CPublishedFile_QueryFiles_Request request) =>
-        CallServiceAsync("workshop search", () => PublishedFiles.QueryFiles(request));
+        var response = await RequestFromSteamAsync("workshop change history", async () => await PublishedFiles.GetChangeHistory(request));
+
+        if (response.Result != EResult.OK)
+        {
+            throw new InvalidOperationException($"Steam answered {response.Result}");
+        }
+
+        return response.Body;
+    }
 
     // Throws when Steam answers with an error
-    private async Task<T> CallServiceAsync<T>(string what, Func<AsyncJob<SteamUnifiedMessages.ServiceMethodResponse<T>>> call)
-        where T : ProtoBuf.IExtensible, new()
+    public async Task<CPublishedFile_QueryFiles_Response> QueryFilesAsync(CPublishedFile_QueryFiles_Request request)
     {
-        var response = await RequestFromSteamAsync(what, async () => await call());
+        var response = await RequestFromSteamAsync("workshop search", async () => await PublishedFiles.QueryFiles(request));
 
         if (response.Result != EResult.OK)
         {
