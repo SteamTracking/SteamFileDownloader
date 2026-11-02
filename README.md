@@ -120,6 +120,16 @@ Logging in needs a person to scan the QR code or type the password, so agents sh
 
 Steam rate limits logins, so put many targets into one run rather than making many runs. Parallel runs on one account don't disconnect each other.
 
+## Firewalls
+
+Only HTTPS on port 443 needs to get out, and CDN servers without HTTPS use port 80. A domain allowlist needs:
+
+```
+api.steampowered.com
+*.steamserver.net
+*.steamcontent.com
+```
+
 ## DepotDownloader compatibility
 
 ```bash

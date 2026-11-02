@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using SteamKit2;
 using SteamKit2.Authentication;
 using SteamKit2.CDN;
+using SteamKit2.Discovery;
 using SteamKit2.Internal;
 
 namespace SteamFileDownloader;
@@ -43,7 +44,11 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     // Up to this many manifests get a line each, more get one line once all are done
     private const int MaxManifestLines = 3;
 
-    private readonly SteamClient SteamClient = new(SteamConfiguration.Create(static b => b.WithHttpClientFactory(CreateHttpClient)));
+    private readonly SteamClient SteamClient = new(SteamConfiguration.Create(static b => b
+        .WithHttpClientFactory(CreateHttpClient)
+        .WithProtocolTypes(ProtocolTypes.WebSocket)
+        .WithDirectoryFetch(false)
+        .WithServerListProvider(new Port443ServerListProvider())));
     private readonly CallbackManager Manager;
     private readonly SteamUser User;
     private readonly SteamApps Apps;
@@ -190,6 +195,26 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
 
             return base.SendAsync(request, cancellationToken);
         }
+    }
+
+    // Steam's server list cut to the WebSocket servers on port 443, for networks that drop other ports without a reply
+    private sealed class Port443ServerListProvider : IServerListProvider
+    {
+        private static readonly SteamConfiguration DirectoryConfiguration = SteamConfiguration.Create(static b => b.WithHttpClientFactory(CreateHttpClient));
+
+        public DateTime LastServerListRefresh { get; private set; }
+
+        public async Task<IEnumerable<ServerRecord>> FetchServerListAsync()
+        {
+            var servers = await SteamDirectory.LoadAsync(DirectoryConfiguration);
+
+            LastServerListRefresh = DateTime.UtcNow;
+
+            // The client asks only for WebSocket servers, so the port is all that is left to check
+            return servers.Where(static server => server.GetPort() == 443);
+        }
+
+        public Task UpdateServerListAsync(IEnumerable<ServerRecord> endpoints) => Task.CompletedTask;
     }
 
     private bool IsError(Exception e) => IsError(e, CancellationToken);
