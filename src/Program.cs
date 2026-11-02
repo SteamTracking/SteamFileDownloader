@@ -9,7 +9,7 @@ using System.Threading.Tasks;
 
 namespace SteamFileDownloader;
 
-internal static class Program
+internal static partial class Program
 {
     private static readonly (string Version, string? Commit) VersionInfo = ParseVersion(
         Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "");
@@ -32,6 +32,12 @@ internal static class Program
 
         if (helpExitCode != null)
         {
+            // A double click in Explorer opens a console that closes as soon as the help is printed
+            if (args.Length == 0 && OperatingSystem.IsWindows() && IsOnlyProcessOnConsole())
+            {
+                ShowRunFromTerminalMessage();
+            }
+
             return helpExitCode.Value;
         }
 
@@ -210,4 +216,29 @@ internal static class Program
         Log.Error($"Unknown command \"{argument}\".{hint} {Help.UsageHint()}");
         return ExitCodes.UsageError;
     }
+
+    // A shell that started the process shares its console, so the list has at least two processes
+    private static bool IsOnlyProcessOnConsole()
+    {
+        var processIds = new uint[2];
+
+        return GetConsoleProcessList(processIds, (uint)processIds.Length) == 1;
+    }
+
+    private static void ShowRunFromTerminalMessage()
+    {
+        const uint MessageBoxIconInformation = 0x40;
+
+        var text = $"{nameof(SteamFileDownloader)} is a command-line program. Open a terminal and run it from there, like:\n\n{Help.ExeName} --help";
+
+        _ = MessageBox(0, text, nameof(SteamFileDownloader), MessageBoxIconInformation);
+    }
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static partial uint GetConsoleProcessList([Out] uint[] processList, uint processCount);
+
+    [LibraryImport("user32.dll", EntryPoint = "MessageBoxW", StringMarshalling = StringMarshalling.Utf16)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static partial int MessageBox(nint window, string text, string caption, uint type);
 }
