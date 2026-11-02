@@ -341,7 +341,8 @@ internal static class LoginCommand
                 {
                     token = refreshToken,
                     revoke_action = action,
-                }).WaitAsync(cancellationToken);
+                },
+                SteamKitProtobuf.Model).WaitAsync(cancellationToken);
 
             return response.Result == EResult.OK ? null : response.Result.ToString();
         }
