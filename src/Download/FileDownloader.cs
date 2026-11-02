@@ -665,7 +665,16 @@ internal sealed class FileDownloader(IChunkSource session, CancellationToken can
             .GroupBy(static f => (f.Job, f.File))
             .Select(static g => new PartialFile(g.Key.Job, g.Key.File, [.. g.SelectMany(static f => f.Chunks).Distinct()]))];
 
-        var totalBytes = partialFiles.Sum(static f => f.Chunks.Sum(static c => c.UncompressedLength));
+        var totalBytes = 0L;
+
+        foreach (var archive in partialFiles)
+        {
+            foreach (var chunk in archive.Chunks)
+            {
+                totalBytes += chunk.UncompressedLength;
+            }
+        }
+
         var skippedBytes = 0L;
         var doneFiles = 0;
         var failedFiles = new ConcurrentBag<string>();
