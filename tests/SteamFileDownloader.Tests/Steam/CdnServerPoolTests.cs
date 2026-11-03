@@ -107,6 +107,18 @@ public class CdnServerPoolTests
     }
 
     [Test]
+    public async Task ResultOfAReplacedServerIsIgnored()
+    {
+        var (pool, _, servers) = Create(2);
+
+        pool.SetServers(MakeServers(2));
+        Fail(pool, servers[0], 3);
+        pool.MarkGood(servers[1]);
+
+        await Assert.That(TakeAndRelease(pool, 2).Distinct().Count()).IsEqualTo(2);
+    }
+
+    [Test]
     public async Task LeastBusyIsPickedWhenAllAreBenched()
     {
         var (pool, _, servers) = Create(3);

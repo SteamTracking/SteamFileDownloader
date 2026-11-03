@@ -130,7 +130,15 @@ internal sealed class CdnServerPool(TimeProvider timeProvider)
     {
         lock (ServerLock)
         {
-            ref var health = ref Health[Servers.IndexOf(server)];
+            var index = Servers.IndexOf(server);
+
+            // The servers may have been replaced meanwhile, along with their health
+            if (index < 0)
+            {
+                return;
+            }
+
+            ref var health = ref Health[index];
             var now = timeProvider.GetTimestamp();
 
             // Requests that were under way when it was benched don't count towards the next time
@@ -147,7 +155,12 @@ internal sealed class CdnServerPool(TimeProvider timeProvider)
     {
         lock (ServerLock)
         {
-            Health[Servers.IndexOf(server)].Failures = 0;
+            var index = Servers.IndexOf(server);
+
+            if (index >= 0)
+            {
+                Health[index].Failures = 0;
+            }
         }
     }
 }
