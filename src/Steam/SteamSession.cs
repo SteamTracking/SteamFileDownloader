@@ -72,6 +72,9 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     private TaskCompletionSource<bool> ConnectedTcs = new();
     private TaskCompletionSource<SteamUser.LoggedOnCallback?> LoggedOnTcs = new();
 
+    // Pending from a connection's ConnectedCallback until its DisconnectedCallback has been handled
+    private TaskCompletionSource DisconnectedTcs = new();
+
     public CdnServerPool CdnServers { get; } = new(TimeProvider.System);
 
     // The get and ls commands take any number of targets, so a run per target only adds logins
@@ -101,7 +104,13 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
         Client.RequestTimeout = TimeSpan.FromMinutes(1);
         Client.ResponseBodyTimeout = TimeSpan.FromMinutes(5);
 
-        Manager.Subscribe<SteamClient.ConnectedCallback>(_ => ConnectedTcs.TrySetResult(true));
+        DisconnectedTcs.SetResult();
+
+        Manager.Subscribe<SteamClient.ConnectedCallback>(_ =>
+        {
+            DisconnectedTcs = new TaskCompletionSource();
+            ConnectedTcs.TrySetResult(true);
+        });
         Manager.Subscribe<SteamClient.DisconnectedCallback>(cb =>
         {
             ConnectedTcs.TrySetResult(false);
@@ -112,6 +121,9 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
                 IsLoggedOn = false;
                 Log.Warn("Lost the Steam connection.");
             }
+
+            // Last, since a waiting ConnectAsync continues inline and replaces the waits completed above
+            DisconnectedTcs.TrySetResult();
         });
         Manager.Subscribe<SteamUser.LoggedOnCallback>(cb => LoggedOnTcs.TrySetResult(cb));
 
@@ -144,6 +156,7 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     {
         ConnectedTcs.TrySetException(e);
         LoggedOnTcs.TrySetException(e);
+        DisconnectedTcs.TrySetException(e);
     }
 
     public void Dispose()
@@ -225,7 +238,18 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     /// </summary>
     public async Task<bool> ConnectAsync(int attempt = 0, string? failure = null)
     {
+        // After Disconnect the callback pump is stopped, so nothing would handle a new connection
+        if (PumpCts.IsCancellationRequested)
+        {
+            return false;
+        }
+
         await DelayBeforeRetryAsync("connection", attempt, failure: failure);
+
+        // Disconnecting queues the DisconnectedCallback, which would complete the waits of the next connection if it
+        // were still queued when they are replaced
+        SteamClient.Disconnect();
+        await DisconnectedTcs.Task.WaitAsync(PumpCts.Token);
 
         ConnectedTcs = new TaskCompletionSource<bool>();
         LoggedOnTcs = new TaskCompletionSource<SteamUser.LoggedOnCallback?>();
@@ -238,8 +262,8 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
 
         SteamClient.Connect();
 
-        // The callback pump stops on cancellation, so the callbacks would never come
-        return await ConnectedTcs.Task.WaitAsync(CancellationToken);
+        // The callback pump stops with its token, on cancellation or Disconnect, so the callbacks would never come
+        return await ConnectedTcs.Task.WaitAsync(PumpCts.Token);
     }
 
     /// <summary>
@@ -431,7 +455,7 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
                 });
             }
 
-            var logOnResult = await LoggedOnTcs.Task.WaitAsync(CancellationToken);
+            var logOnResult = await LoggedOnTcs.Task.WaitAsync(PumpCts.Token);
             result = logOnResult?.Result ?? EResult.NoConnection;
 
             if (result == EResult.OK)
