@@ -24,15 +24,18 @@ internal record struct ChunkPlacement(DepotManifest.ChunkData Chunk, long Positi
 // Some chunks of a file, written at their own offsets with the rest of the file left empty
 internal sealed record PartialFile(ManifestJob Job, DepotManifest.FileData File, IReadOnlyCollection<DepotManifest.ChunkData> Chunks);
 
-/// <summary>
-/// The CDN servers that chunks download from, and the downloads themselves.
-/// </summary>
-internal interface IChunkSource
+internal interface ICdnServers
 {
     Task<bool> EnsureCdnServersAsync();
 
     CdnServerPool CdnServers { get; }
+}
 
+/// <summary>
+/// The CDN servers that chunks download from, and the downloads themselves.
+/// </summary>
+internal interface IChunkSource : ICdnServers
+{
     /// <summary>
     /// Downloads a chunk of the job's depot into the buffer. Returns its length.
     /// </summary>

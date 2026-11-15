@@ -17,14 +17,14 @@ public class SharedProblemsTests
     {
         const string NoKey = "Steam gave no depot key in app 730 (AccessDenied): this account may not own the depot, or it belongs to another app.";
 
-        SteamSession.ReportSharedProblems([
+        ManifestFetcher.ReportSharedProblems([
             (Job(1, 11), NoKey, true),
             (Job(1, 12), NoKey, true),
             (Job(3, 31, optional: true), NoKey, true),
             (Job(2, 21, failureIsFine: true), "Failed to get the depot key: timed out", false),
         ]);
 
-        var lines = TestContext.Current!.GetErrorOutput().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        var lines = TestLog.GetProblemLines();
 
         // Log writes problems as workflow commands when CI is set
         var isCI = Environment.GetEnvironmentVariable("CI") != null;

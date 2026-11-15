@@ -32,6 +32,17 @@ internal static class TestManifests
     public static DepotManifest.FileData Symlink(string name, string target, bool isDirectory = false) =>
         new(name, [], EDepotFileFlag.Symlink | (isDirectory ? EDepotFileFlag.Directory : 0), 0, new byte[20], target, false, 0);
 
+    // A job whose manifest is not got yet, which saves to the output folder's manifest cache
+    public static ManifestJob PendingJob(string outputFolder, uint depotID, ulong manifestID)
+    {
+        var job = Job(outputFolder, depotID);
+        job.ManifestID = manifestID;
+        job.Manifest = null;
+        job.ManifestFile = ManifestCache.GetPath(Path.Combine(outputFolder, "manifests"), depotID, manifestID);
+
+        return job;
+    }
+
     public static ManifestJob Job(string outputFolder, uint depotID, params DepotManifest.FileData[] files) => new()
     {
         AppID = 1,

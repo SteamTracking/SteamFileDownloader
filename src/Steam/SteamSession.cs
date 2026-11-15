@@ -32,17 +32,10 @@ internal sealed record LogOnCredentials(string Username, string? Password = null
 /// One Steam connection, used to get depot keys and manifests, and the CDN client that manifests download from. As an
 /// <see cref="IChunkSource"/> it also downloads the chunks of files, which doesn't need the Steam connection.
 /// </summary>
-internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
+internal sealed class SteamSession : IDisposable, IChunkSource, IManifestSource, IWorkshopSource
 {
     private const int MaxRetries = 7;
-    private const int MaxCdnRetries = 5;
     private const int MaxRelogons = 2;
-
-    // Each manifest mostly waits on a Steam request code and a CDN download
-    private const int ManifestConcurrency = 16;
-
-    // Up to this many manifests get a line each, more get one line once all are done
-    private const int MaxManifestLines = 3;
 
     private readonly SteamClient SteamClient = new(SteamConfiguration.Create(static b => b
         .WithHttpClientFactory(CreateHttpClient)
@@ -56,7 +49,6 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     private readonly PublishedFile PublishedFiles;
     private readonly CancellationTokenSource PumpCts;
     private readonly CancellationToken CancellationToken;
-    private readonly Dictionary<(uint DepotID, uint KeyAppID), Task<(byte[]? Key, bool NoAccess, string? Problem)>> DepotKeys = [];
     private readonly Dictionary<uint, Dictionary<string, byte[]>> BranchKeys = [];
     private readonly Dictionary<uint, Task<bool>> FreeLicenses = [];
     private readonly Lock LazyLock = new();
@@ -77,6 +69,8 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
 
     public CdnServerPool CdnServers { get; } = new(TimeProvider.System);
 
+    public ManifestFetcher Manifests { get; }
+
     // The get and ls commands take any number of targets, so a run per target only adds logins
     public bool TakesTargets { get; init; }
 
@@ -91,6 +85,7 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
     public SteamSession(CancellationToken cancellationToken)
     {
         CancellationToken = cancellationToken;
+        Manifests = new ManifestFetcher(this, new DepotCache(), cancellationToken);
         Manager = new CallbackManager(SteamClient);
         User = SteamClient.GetHandler<SteamUser>()!;
         Apps = SteamClient.GetHandler<SteamApps>()!;
@@ -911,241 +906,17 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
         return response.Body;
     }
 
-    private enum ManifestSource
+    public async Task<ulong> GetManifestRequestCodeAsync(ManifestJob job)
     {
-        None,
-        Saved,
-        Downloaded,
+        var branchPasswordHash = GetBranchPasswordHash(job.AppID, job.Branch);
+
+        var code = await RequestFromSteamAsync("manifest request code", () => Content.GetManifestRequestCode(job.DepotID, job.KeyAppID, job.ManifestID, job.Branch, branchPasswordHash));
+
+        return code;
     }
 
-    // Where a job's manifest came from, if it got one, and the problem it shares with the other jobs of its depot, which
-    // is reported once for all of them
-    private readonly record struct ManifestResult(ManifestSource Source, string? SharedProblem = null, bool NoAccess = false);
-
-    /// <summary>
-    /// Gets the depot keys and manifests of jobs, storing both on them. Failed jobs are left without a manifest, after a report.
-    /// </summary>
-    public async Task DownloadManifestsAsync(IReadOnlyList<ManifestJob> jobs)
-    {
-        if (jobs.Count == 0)
-        {
-            return;
-        }
-
-        // Old manifests can take a while, so each gets a line once all are done, or with many, there is one line for all
-        Log.Info($"Getting {Log.Plural(jobs.Count, "manifest")}...");
-
-        var results = new ManifestResult[jobs.Count];
-
-        var options = new ParallelOptions { MaxDegreeOfParallelism = ManifestConcurrency, CancellationToken = CancellationToken };
-
-        await Parallel.ForAsync(0, jobs.Count, options, async (i, _) => results[i] = await DownloadManifestAsync(jobs[i]));
-
-        if (jobs.Count <= MaxManifestLines)
-        {
-            for (var i = 0; i < jobs.Count; i++)
-            {
-                if (results[i].Source != ManifestSource.None)
-                {
-                    var manifest = jobs[i].Manifest!;
-                    var action = results[i].Source == ManifestSource.Saved ? "Read the saved manifest" : "Downloaded the manifest";
-                    Log.Info($"[{jobs[i]}] {action}: {manifest.CreationTime:yyyy-MM-dd HH:mm:ss}, {manifest.Files?.Count} files.");
-                }
-            }
-        }
-
-        var problems = new List<(ManifestJob Job, string Problem, bool NoAccess)>();
-
-        for (var i = 0; i < jobs.Count; i++)
-        {
-            var result = results[i];
-
-            if (result.SharedProblem != null)
-            {
-                problems.Add((jobs[i], result.SharedProblem, result.NoAccess));
-            }
-        }
-
-        ReportSharedProblems(problems);
-
-        if (jobs.Count > MaxManifestLines)
-        {
-            var saved = results.Count(static r => r.Source == ManifestSource.Saved);
-            var downloaded = results.Count(static r => r.Source == ManifestSource.Downloaded);
-            var sources = new List<string>();
-
-            if (saved > 0)
-            {
-                sources.Add($"{saved} saved");
-            }
-
-            if (downloaded > 0)
-            {
-                sources.Add($"{downloaded} downloaded");
-            }
-
-            var got = Log.PluralOf(saved + downloaded, jobs.Count, "manifest");
-            var sourcesNote = sources.Count > 0 ? $" ({string.Join(", ", sources)})" : "";
-            Log.Info($"Got {got}{sourcesNote}.");
-        }
-    }
-
-    private async Task<ManifestResult> DownloadManifestAsync(ManifestJob job)
-    {
-        try
-        {
-            return await DownloadManifestFromSteamAsync(job);
-        }
-        catch (Exception e) when (IsError(e))
-        {
-            // Mostly a lost Steam connection, which fails the pending requests
-            Report(job, $"[{job}] Failed to get the manifest: {DescribeError(e)}");
-            return default;
-        }
-    }
-
-    private async Task<ManifestResult> DownloadManifestFromSteamAsync(ManifestJob job)
-    {
-        (job.DepotKey, job.NoAccess, var keyProblem) = await GetDepotKeyAsync(job);
-
-        // Jobs that share the key request share the problem too
-        if (job.DepotKey == null)
-        {
-            return new ManifestResult(ManifestSource.None, keyProblem, job.NoAccess);
-        }
-
-        // A saved manifest needs no request code, which Steam may refuse for old manifests. Reading and parsing it
-        // blocks, so it is off the loop's threads
-        var saved = await Task.Run(() => ManifestCache.Load(job));
-
-        if (saved != null)
-        {
-            job.Manifest = saved;
-            return new ManifestResult(ManifestSource.Saved);
-        }
-
-        if (!await EnsureCdnServersAsync())
-        {
-            return default;
-        }
-
-        var (manifestRequestCode, codeProblem) = await GetManifestRequestCodeAsync(job);
-
-        if (manifestRequestCode == 0)
-        {
-            return new ManifestResult(ManifestSource.None, codeProblem, NoAccess: true);
-        }
-
-        Server? lastServer = null;
-        Server? refusedBy = null;
-        Exception? lastError = null;
-
-        for (var attempt = 0; attempt <= MaxCdnRetries; attempt++)
-        {
-            // Each attempt goes to another server than the last
-            var lease = CdnServers.Rent(lastServer);
-            var server = lease.Server;
-            lastServer = server;
-
-            try
-            {
-                // Busy only while downloading, not while waiting to retry
-                using (lease)
-                {
-                    // Without the key the file names stay encrypted, so the saved manifest keeps them as served
-                    job.Manifest = await CdnClient.DownloadManifestAsync(job.DepotID, job.ManifestID, manifestRequestCode, server);
-                }
-            }
-            catch (Exception e) when (IsError(e))
-            {
-                // Only the last error is reported, once retries run out
-                CdnServers.MarkBad(server);
-                lastError = e;
-
-                if (!IsRefusal(e))
-                {
-                    if (attempt < MaxCdnRetries)
-                    {
-                        await Task.Delay(ExponentialBackoff(attempt + 1), CancellationToken);
-                    }
-
-                    continue;
-                }
-
-                // Refused by a second server too, so the CDN doesn't serve it, rather than one server
-                if (refusedBy != null && refusedBy != server)
-                {
-                    Report(job, $"[{job}] The CDN refused the manifest ({DescribeError(e)}); some old manifests are no longer served.");
-                    return default;
-                }
-
-                // An expired request code or one bad server can cause this, so another server gets a new code
-                if (refusedBy == null)
-                {
-                    refusedBy = server;
-                    (manifestRequestCode, codeProblem) = await GetManifestRequestCodeAsync(job);
-
-                    if (manifestRequestCode == 0)
-                    {
-                        return new ManifestResult(ManifestSource.None, codeProblem, NoAccess: true);
-                    }
-                }
-
-                continue;
-            }
-
-            CdnServers.MarkGood(server);
-
-            // Writing it blocks, so it is off the loop's threads
-            await Task.Run(() => ManifestCache.Save(job));
-
-            if (job.Manifest.FilenamesEncrypted && !job.Manifest.DecryptFilenames(job.DepotKey))
-            {
-                job.Manifest = null;
-                Report(job, $"[{job}] Failed to decrypt the file names of the manifest with the depot key.");
-                return default;
-            }
-
-            return new ManifestResult(ManifestSource.Downloaded);
-        }
-
-        var reason = lastError != null ? DescribeError(lastError) : "no server answered";
-        Report(job, $"[{job}] Failed to download the manifest after all retries: {reason}.");
-        return default;
-    }
-
-    // Request codes expire after a few minutes. Returns 0 after reporting why there is none, or with the problem when
-    // Steam gave none, which often goes for every manifest of the depot, so it is reported once for them
-    private async Task<(ulong Code, string? Problem)> GetManifestRequestCodeAsync(ManifestJob job)
-    {
-        ulong code;
-
-        try
-        {
-            var branchPasswordHash = GetBranchPasswordHash(job.AppID, job.Branch);
-
-            code = await RequestFromSteamAsync("manifest request code", () => Content.GetManifestRequestCode(job.DepotID, job.KeyAppID, job.ManifestID, job.Branch, branchPasswordHash));
-        }
-        catch (Exception e) when (IsError(e))
-        {
-            Report(job, $"[{job}] Failed to get a manifest request code: {DescribeError(e)}");
-            return (0, null);
-        }
-
-        if (code != 0)
-        {
-            return (code, null);
-        }
-
-        job.NoAccess = true;
-
-        if (job.ItemID != null)
-        {
-            return (0, "Steam gave no manifest request code: this account may have no access to the item, or the manifest isn't one of the item's.");
-        }
-
-        return (0, "Steam gave no manifest request code: the manifest may be on another branch (set it with --branch, or @<branch> in a target) or in another app, or this account has no access to it. Steam also stops giving codes for many old manifests, so one that isn't the latest of its branch may not be downloadable.");
-    }
+    public Task<DepotManifest> DownloadManifestAsync(ManifestJob job, ulong requestCode, Server server) =>
+        CdnClient.DownloadManifestAsync(job.DepotID, job.ManifestID, requestCode, server);
 
     /// <summary>
     /// Logs on if needed and sends a request, retrying once since a lost connection fails the requests in flight.
@@ -1174,69 +945,17 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
 
     public static string DescribeError(Exception e) => e is TaskCanceledException ? "timed out" : e.Message;
 
-    // Concurrent jobs of one depot share a single key request. Returns the key, or why there is none
-    private Task<(byte[]? Key, bool NoAccess, string? Problem)> GetDepotKeyAsync(ManifestJob job)
+    public async Task<DepotKeyAnswer> RequestDepotKeyAsync(ManifestJob job)
     {
-        lock (DepotKeys)
-        {
-            var key = (job.DepotID, job.KeyAppID);
+        var keyResult = await RequestDepotKeyFromSteamAsync(job);
 
-            if (!DepotKeys.TryGetValue(key, out var keyTask))
-            {
-                keyTask = RequestDepotKeyAsync(job);
-                DepotKeys[key] = keyTask;
-            }
-
-            return keyTask;
-        }
-    }
-
-    private async Task<(byte[]? Key, bool NoAccess, string? Problem)> RequestDepotKeyAsync(ManifestJob job)
-    {
-        var depotKey = DepotCache.LoadDepotKey(job.DepotID);
-
-        if (depotKey != null)
-        {
-            return (depotKey, false, null);
-        }
-
-        SteamApps.DepotKeyCallback keyResult;
-
-        try
+        // Free apps and DLC are denied until their license is on the account, which Steam adds when asked
+        if (keyResult.Result == EResult.AccessDenied && !IsAnonymous && await GetFreeLicenseAsync(job.KeyAppID))
         {
             keyResult = await RequestDepotKeyFromSteamAsync(job);
-
-            // Free apps and DLC are denied until their license is on the account, which Steam adds when asked
-            if (keyResult.Result == EResult.AccessDenied && !IsAnonymous && await GetFreeLicenseAsync(job.KeyAppID))
-            {
-                keyResult = await RequestDepotKeyFromSteamAsync(job);
-            }
-        }
-        catch (Exception e) when (IsError(e))
-        {
-            return (null, false, $"Failed to get the depot key: {DescribeError(e)}");
         }
 
-        // Steam denies a depot the account doesn't own or that is blocked, and doesn't find one that isn't in the app.
-        // Other results, like a busy Steam, are failures that running again can fix
-        if (keyResult.Result is EResult.AccessDenied or EResult.FileNotFound or EResult.Blocked)
-        {
-            if (job.ItemID != null)
-            {
-                return (null, true, $"Steam gave no key for the workshop depot {job.DepotID} of app {job.KeyAppID} ({keyResult.Result}): this account may need to own the app.");
-            }
-
-            return (null, true, $"Steam gave no depot key in app {job.KeyAppID} ({keyResult.Result}): this account may not own the depot, or it belongs to another app.");
-        }
-
-        if (keyResult.Result != EResult.OK)
-        {
-            return (null, false, $"Failed to get the depot key: Steam answered {keyResult.Result}.");
-        }
-
-        DepotCache.SaveDepotKey(job.DepotID, keyResult.DepotKey);
-
-        return (keyResult.DepotKey, false, null);
+        return new DepotKeyAnswer(keyResult.Result, keyResult.DepotKey);
     }
 
     private Task<SteamApps.DepotKeyCallback> RequestDepotKeyFromSteamAsync(ManifestJob job) =>
@@ -1290,54 +1009,6 @@ internal sealed class SteamSession : IDisposable, IChunkSource, IWorkshopSource
         Log.Info($"Added the free license of app {appID} to {Credentials!.Username}.");
 
         return true;
-    }
-
-    // Any failure of a job whose manifest isn't needed is only a warning. Everything else fails the run, so it's an error
-    private static void Report(ManifestJob job, string message) => Report([job], message);
-
-    private static void Report(IReadOnlyCollection<ManifestJob> jobs, string message)
-    {
-        if (jobs.All(static j => j.FailureIsFine))
-        {
-            Log.Warn(message);
-        }
-        else
-        {
-            Log.Error(message);
-        }
-    }
-
-    // Jobs of one depot share its key, and often the reason Steam gave no request code, so each problem is reported once
-    // per depot. Lacking access to an optional depot, like one of every depot of an app, is expected and goes unsaid,
-    // since get and ls list those as skipped
-    internal static void ReportSharedProblems(IEnumerable<(ManifestJob Job, string Problem, bool NoAccess)> problems)
-    {
-        var groups = problems
-            .Where(static p => !(p.Job.Optional && p.NoAccess))
-            .GroupBy(static p => (p.Job.DepotID, p.Problem))
-            .OrderBy(static g => g.Key.DepotID);
-
-        foreach (var group in groups)
-        {
-            var jobs = group.Select(static p => p.Job).OrderBy(static j => j.ToString(), StringComparer.Ordinal).ToList();
-            string where;
-
-            if (jobs.Count == 1)
-            {
-                where = $"[{jobs[0]}]";
-            }
-            else if (jobs[0].ItemID != null)
-            {
-                List<string> itemIDs = [.. jobs.Select(static j => j.ItemID!.Value.ToString(CultureInfo.InvariantCulture))];
-                where = $"Items {Log.JoinFirst(itemIDs)}:";
-            }
-            else
-            {
-                where = $"Depot {group.Key.DepotID} ({Log.Plural(jobs.Count, "manifest")}):";
-            }
-
-            Report(jobs, $"{where} {group.Key.Problem}");
-        }
     }
 
     // With a failure, the line says what failed and that it's retried, like "Connecting to Steam failed, retrying in 2.1s (2/8)"

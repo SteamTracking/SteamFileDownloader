@@ -11,8 +11,6 @@ internal sealed class FakeChunkSource : IChunkSource
     private readonly Dictionary<string, byte[]> Data = [];
     private readonly List<(DepotManifest.ChunkData Chunk, Server Server)> CallList = [];
 
-    public FakeChunkSource() => CdnServers.SetServers([.. Enumerable.Range(0, 3).Select(static i => (Server)new DnsEndPoint($"cache{i}.example.com", 80))]);
-
     public Func<int, byte[], byte[]> Serve { get; set; } = static (_, data) => data;
 
     // Chunks whose every attempt fails, whatever Serve does
@@ -44,7 +42,7 @@ internal sealed class FakeChunkSource : IChunkSource
 
     public Task<bool> EnsureCdnServersAsync() => Task.FromResult(true);
 
-    public CdnServerPool CdnServers { get; } = new(TimeProvider.System);
+    public CdnServerPool CdnServers { get; } = FakeCdn.CreatePool();
 
     public async Task<int> DownloadChunkAsync(ManifestJob job, DepotManifest.ChunkData chunk, Server server, byte[] destination)
     {

@@ -10,11 +10,12 @@ namespace SteamFileDownloader;
 /// <summary>
 /// Caches depot keys, which never change, so each depot's key is only requested once.
 /// </summary>
-internal static partial class DepotCache
+internal sealed partial class DepotCache(string? path = null)
 {
-    private static readonly string DepotKeysPath = Path.Combine(Secrets.AppDataFolder, "depot_keys.json");
-    private static readonly Lock DepotKeysLock = new();
-    private static SortedDictionary<uint, string>? DepotKeys;
+    private readonly Lock DepotKeysLock = new();
+
+    private readonly string DepotKeysPath = path ?? Path.Combine(Secrets.AppDataFolder, "depot_keys.json");
+    private SortedDictionary<uint, string>? DepotKeys;
 
     [JsonSourceGenerationOptions(WriteIndented = true)]
     [JsonSerializable(typeof(SortedDictionary<uint, string>))]
@@ -24,7 +25,7 @@ internal static partial class DepotCache
 
     private static JsonTypeInfo<SortedDictionary<uint, string>> DepotKeysTypeInfo => DepotKeysJsonContext.Default.SortedDictionaryUInt32String;
 
-    public static byte[]? LoadDepotKey(uint depotID)
+    public byte[]? LoadDepotKey(uint depotID)
     {
         lock (DepotKeysLock)
         {
@@ -47,7 +48,7 @@ internal static partial class DepotCache
         }
     }
 
-    public static void SaveDepotKey(uint depotID, byte[] depotKey)
+    public void SaveDepotKey(uint depotID, byte[] depotKey)
     {
         lock (DepotKeysLock)
         {
