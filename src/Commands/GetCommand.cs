@@ -16,14 +16,6 @@ namespace SteamFileDownloader;
 /// </summary>
 internal static class GetCommand
 {
-    // A matching manifest file with its normalized path. Requested is false for directory VPKs only needed for their entries,
-    // and VpkPatterns are the VPK patterns that read entries from it
-    internal sealed record MatchedFile(
-        DepotManifest.FileData File,
-        string Path,
-        bool Requested,
-        IReadOnlyList<VpkPattern> VpkPatterns);
-
     internal sealed class Run
     {
         public required FileFilter Filter;
@@ -60,18 +52,7 @@ internal static class GetCommand
         public Dictionary<string, List<ManifestJob>> AllTargets = [];
         public int Rows;
 
-        // Each failure: the target it failed, if it was one, and whether only for lack of access
-        private readonly List<(string? Target, bool NoAccess)> Failures = [];
-
-        public bool Failed => Failures.Count > 0;
-
-        // Something failed other than Steam giving no access
-        public bool FailedOtherwise => Failures.Exists(static f => !f.NoAccess);
-
-        // A target failed for lack of access, which another saved login may have
-        public bool FailedForAccess => Failures.Exists(static f => f.Target != null && f.NoAccess);
-
-        public List<string> FailedTargets => [.. Failures.Where(static f => f.Target != null).Select(static f => f.Target!)];
+        public readonly FailureLog Failures = new();
 
         // VPK patterns of directory files that failed to download or read, which were reported then, so they don't
         // count as matching nothing
@@ -92,7 +73,7 @@ internal static class GetCommand
         /// Adds the job of a manifest, or returns the one already added for it. Its files go to &lt;parentFolder&gt;/&lt;manifest&gt;,
         /// or to the install folder when there is one.
         /// </summary>
-        public ManifestJob AddJob(uint appID, KeyValue? depot, uint depotID, ulong manifestID, string branch, bool optional, string parentFolder)
+        public ManifestJob AddJob(uint appID, uint keyAppID, uint depotID, ulong manifestID, string branch, bool optional, string parentFolder)
         {
             if (JobsByManifest.TryGetValue((depotID, manifestID), out var existing))
             {
@@ -112,7 +93,7 @@ internal static class GetCommand
                 job = ManifestJob.Create(appID, depotID, manifestID, branch, parentFolder);
             }
 
-            job.KeyAppID = AppInfo.GetKeyAppID(depot, appID);
+            job.KeyAppID = keyAppID;
             job.Optional = optional;
             job.ManifestFile = ManifestCache.GetPath(Path.Combine(OutputRoot, "manifests"), depotID, manifestID);
 
@@ -122,7 +103,35 @@ internal static class GetCommand
             return job;
         }
 
-        public void Fail(string? target = null, bool noAccess = false) => Failures.Add((target, noAccess));
+        /// <summary>
+        /// Adds the jobs of resolved depots, whose files go to each depot's folder in the output root.
+        /// </summary>
+        public List<ManifestJob> AddJobs(List<ResolvedDepot> depots)
+        {
+            var jobs = new List<ManifestJob>(depots.Count);
+
+            foreach (var depot in depots)
+            {
+                var parentFolder = Path.Combine(OutputRoot, depot.DepotID.ToString(CultureInfo.InvariantCulture));
+
+                jobs.Add(AddJob(depot.AppID, depot.KeyAppID, depot.DepotID, depot.ManifestID, depot.Branch, depot.Optional, parentFolder));
+            }
+
+            return jobs;
+        }
+
+        public void AddTargets(List<ResolvedTarget> targets)
+        {
+            foreach (var resolved in targets)
+            {
+                var jobs = AddJobs(resolved.Depots);
+
+                if (resolved.WholeApp)
+                {
+                    AllTargets[resolved.Target.Source] = jobs;
+                }
+            }
+        }
 
         public void WriteRow(ManifestJob job, params string[] columns)
         {
@@ -239,12 +248,12 @@ internal static class GetCommand
             return run.AbortExitCode.Value;
         }
 
-        await session.DownloadManifestsAsync(run.Jobs);
+        await session.Manifests.GetManifestsAsync(run.Jobs);
 
         // Depots of all targets that the account can't access are expected, errors are not
         foreach (var job in run.Jobs.Where(static j => j.Manifest == null && !(j.Optional && j.NoAccess)))
         {
-            run.Fail(job.ToString(), job.NoAccess);
+            run.Failures.Add(job.ToString(), job.NoAccess);
         }
 
         if (options.ManifestNotFoundHint != null && run.Jobs.Exists(static j => j.Manifest == null && j.NoAccess))
@@ -255,7 +264,9 @@ internal static class GetCommand
         // Files come from the CDN, which does not need the Steam connection
         session.Disconnect();
 
-        MatchFiles(run);
+        var matched = RunAccounting.MatchFiles(run.Filter, run.Jobs, run.LegacyItems);
+        run.Matches = matched.Matches;
+        run.MatchCounts = matched.Counts;
 
         return downloads ? await GetFilesAsync(run, cancellationToken) : await ListFilesAsync(run, cancellationToken);
     }
@@ -293,7 +304,7 @@ internal static class GetCommand
 
         if (!success)
         {
-            run.Fail();
+            run.Failures.Add();
         }
 
         // Without patterns the whole depot is wanted, including its empty directories. With patterns only the folders of matched files exist
@@ -307,7 +318,7 @@ internal static class GetCommand
 
                 if (!OutputFiles.CreateDirectories(job, created))
                 {
-                    run.Fail();
+                    run.Failures.Add();
                 }
 
                 folders.AddRange(created.Select(path => (job, path)));
@@ -350,7 +361,7 @@ internal static class GetCommand
             {
                 if (!results[i].Success)
                 {
-                    run.Fail();
+                    run.Failures.Add();
                 }
 
                 foreach (var path in results[i].Paths.Order(StringComparer.Ordinal))
@@ -408,7 +419,7 @@ internal static class GetCommand
 
         if (!success)
         {
-            run.Fail();
+            run.Failures.Add();
         }
 
         var pathsByItem = files.ToDictionary(static f => f.Item, static f => f.Path);
@@ -505,7 +516,7 @@ internal static class GetCommand
 
         if (!success)
         {
-            run.Fail();
+            run.Failures.Add();
         }
 
         foreach (var (job, dirFileName, package, matches) in OpenVpkDirectories(run, dirFiles))
@@ -578,117 +589,7 @@ internal static class GetCommand
 
         run.SearchAllHint = GetSearchAllHint(targets);
 
-        // Depots without a manifest on the target's branch that use public's instead, said once per app and branch
-        var publicFallbacks = new PublicFallbacks();
-
-        // Earlier runs of other manifests of the depot may already have identical files
-        ManifestJob AddJob(Target target, KeyValue? depot, uint depotID, ulong manifestID, string branch, bool optional)
-        {
-            var parentFolder = Path.Combine(run.OutputRoot, depotID.ToString(CultureInfo.InvariantCulture));
-
-            return run.AddJob(target.AppID, depot, depotID, manifestID, branch, optional, parentFolder);
-        }
-
-        foreach (var target in targets)
-        {
-            if (target.DepotID != null && target.ManifestID != null)
-            {
-                // The depot may be missing from the app's info, like a removed one, which is fine for a known manifest
-                var depotName = target.DepotID.Value.ToString(CultureInfo.InvariantCulture);
-                var explicitDepot = appInfos.GetValueOrDefault(target.AppID)?["depots"][depotName];
-
-                AddJob(target, explicitDepot, target.DepotID.Value, target.ManifestID.Value, target.Branch, optional: false);
-                continue;
-            }
-
-            var depots = appInfos.GetValueOrDefault(target.AppID)?["depots"];
-
-            if (depots == null)
-            {
-                // A lone depot id reads as the app id
-                if (target.DepotID == null)
-                {
-                    Log.Info($"If {target.AppID} is a depot, put its app id before it, like <app> {target.AppID}.");
-                }
-
-                run.Fail($"{target.Source} (no app info for {target.AppID})");
-                continue;
-            }
-
-            if (!AppInfo.CheckBranch(depots, target.AppID, target.Branch, run.UnlockedBranches.GetValueOrDefault(target.AppID)))
-            {
-                run.Fail($"{target.Source} (branch {target.Branch})");
-                continue;
-            }
-
-            if (target.DepotID == null)
-            {
-                var allJobs = new List<ManifestJob>();
-
-                // Shared installs are listed under the app that owns them
-                foreach (var (depotID, depot) in AppInfo.GetDepots(depots).Where(static d => AppInfo.GetSharedInstallApp(d.Depot) == null))
-                {
-                    var (manifestID, branch) = publicFallbacks.Resolve(target.AppID, depotID, depot, target.Branch);
-
-                    if (manifestID != 0)
-                    {
-                        allJobs.Add(AddJob(target, depot, depotID, manifestID, branch, optional: true));
-                    }
-                }
-
-                if (allJobs.Count == 0)
-                {
-                    Log.Error($"App {target.AppID} has no depots with a manifest on \"{target.Branch}\", see \"{Help.ExeName} depots {target.AppID}\".");
-                    run.Fail($"{target.Source} (no depots)");
-                }
-                else
-                {
-                    Log.Info($"App {target.AppID}: {allJobs.Count} depots with a manifest on \"{target.Branch}\".");
-                    run.AllTargets[target.Source] = allJobs;
-                }
-
-                continue;
-            }
-
-            var depotInfo = depots[target.DepotID.Value.ToString(CultureInfo.InvariantCulture)];
-
-            if (depotInfo == KeyValue.Invalid && Workshop.GetWorkshopDepot(appInfos[target.AppID]) == target.DepotID)
-            {
-                Log.Error($"Depot {target.DepotID} is the workshop depot of app {target.AppID}, whose manifests are workshop items. Use \"{Help.ExeName} workshop ls <item>\" or \"workshop get\", or give <depot>:<manifest>.");
-                run.Fail($"{target.Source} (workshop depot)");
-                continue;
-            }
-
-            if (depotInfo == KeyValue.Invalid)
-            {
-                Log.Error($"Depot {target.DepotID} is not in app {target.AppID}, so its latest manifest is unknown. Check with \"{Help.ExeName} depots {target.AppID}\", name its app as <app>/<depot>, or give <depot>:<manifest>.");
-                run.Fail($"{target.Source} (not in app {target.AppID})");
-                continue;
-            }
-
-            var (latestID, manifestBranch) = publicFallbacks.Resolve(target.AppID, target.DepotID.Value, depotInfo, target.Branch);
-
-            if (latestID == 0)
-            {
-                var fromApp = AppInfo.GetSharedInstallApp(depotInfo);
-
-                if (fromApp != null)
-                {
-                    Log.Error($"Depot {target.DepotID} is shared from app {fromApp}, use {fromApp}/{target.DepotID} as the target instead.");
-                }
-                else
-                {
-                    Log.Error($"Depot {target.DepotID} has no manifest on branch \"{target.Branch}\" (it may be a DLC or another branch's depot), see \"{Help.ExeName} depots {target.AppID}\".");
-                }
-
-                run.Fail($"{target.Source} (no manifest)");
-                continue;
-            }
-
-            AddJob(target, depotInfo, target.DepotID.Value, latestID, manifestBranch, optional: false);
-        }
-
-        publicFallbacks.Log();
+        run.AddTargets(JobResolver.ResolveTargets(targets, appInfos, run.UnlockedBranches, run.Failures));
     }
 
     /// <summary>
@@ -718,56 +619,6 @@ internal static class GetCommand
         var branch = needsBranch ? $" --branch {Help.QuoteArgument(branches[0])}" : "";
 
         return $"To search {what}: {Help.ExeName} ls {targets[0].AppID}{branch} --";
-    }
-
-    // One pass over every manifest: which files match, and how often each pattern matched
-    private static void MatchFiles(Run run)
-    {
-        var filter = run.Filter;
-        var listAll = filter.Patterns.Count == 0 && filter.VpkPatterns.Count == 0;
-
-        foreach (var pattern in filter.Patterns.Select(static p => p.Source).Concat(filter.VpkPatterns.Select(static p => p.Source)))
-        {
-            run.MatchCounts[pattern] = 0;
-        }
-
-        foreach (var job in run.Jobs.Where(static j => j.Manifest != null))
-        {
-            var matches = new List<MatchedFile>();
-
-            foreach (var (file, path) in job.GetFiles())
-            {
-                var matching = filter.GetMatchingPatterns(path);
-                var requested = listAll || matching.Count > 0;
-
-                foreach (var pattern in matching)
-                {
-                    run.MatchCounts[pattern.Source]++;
-                }
-
-                var vpkPatterns = filter.GetVpkPatterns(path);
-
-                if (requested || vpkPatterns.Count > 0)
-                {
-                    matches.Add(new MatchedFile(file, path, requested, vpkPatterns));
-                }
-            }
-
-            run.Matches[job] = matches;
-        }
-
-        // A legacy item has one file, which only patterns that match its name select
-        foreach (var item in run.LegacyItems)
-        {
-            var matching = filter.GetMatchingPatterns(item.FileName);
-
-            foreach (var pattern in matching)
-            {
-                run.MatchCounts[pattern.Source]++;
-            }
-
-            item.Requested = listAll || matching.Count > 0;
-        }
     }
 
     /// <summary>
@@ -810,7 +661,7 @@ internal static class GetCommand
             if (package == null)
             {
                 run.FailedVpkPatterns.UnionWith(directory.VpkPatterns.Select(static p => p.Source));
-                run.Fail();
+                run.Failures.Add();
                 continue;
             }
 
@@ -827,140 +678,46 @@ internal static class GetCommand
 
     private static int Finish(Run run, bool downloads)
     {
-        // A target whose manifests all failed fails as a whole, and the closing error names it. Its jobs aren't also
-        // listed as skipped
-        var failedWhole = new HashSet<ManifestJob>();
+        var summary = RunAccounting.Summarize(
+            run.Jobs,
+            run.Matches,
+            run.LegacyItems,
+            run.MatchCounts,
+            run.FailedVpkPatterns,
+            run.AllTargets,
+            run.Failures,
+            run.SearchAllHint);
 
-        foreach (var (source, jobs) in run.AllTargets)
+        if (summary.UnmatchedError != null)
         {
-            if (jobs.All(static j => j.Manifest == null))
-            {
-                var noun = jobs[0].ItemID != null ? "item" : "depot";
-
-                run.Fail($"{source} ({Log.Plural(jobs.Count, noun)})", jobs.All(static j => j.NoAccess));
-                failedWhole.UnionWith(jobs);
-            }
-        }
-
-        // Patterns can only be judged against manifests that were downloaded, and VPK patterns against directory files
-        // that were read
-        List<string> unmatched;
-
-        var searched = run.Matches.Count + run.LegacyItems.Count;
-
-        if (searched > 0)
-        {
-            unmatched = run.MatchCounts
-                .Where(p => p.Value == 0 && !run.FailedVpkPatterns.Contains(p.Key))
-                .Select(static p => p.Key)
-                .ToList();
-        }
-        else
-        {
-            unmatched = [];
-        }
-
-        var skippedJobs = run.Jobs.Where(j => j.Optional && j.NoAccess && !failedWhole.Contains(j)).ToList();
-        var skipped = skippedJobs.Select(static j => j.ItemID != null ? j.ToString() : j.DepotID.ToString(CultureInfo.InvariantCulture)).ToList();
-
-        if (unmatched.Count > 0)
-        {
-            var skippedWhat = skippedJobs.Any(static j => j.ItemID != null) ? "item" : "depot";
-            string? where = null;
-
-            if (run.Matches.Count == 1 && searched == 1)
-            {
-                where = run.Matches.Keys.First().ToString();
-            }
-            else if (run.LegacyItems.Count == 1 && searched == 1)
-            {
-                where = run.LegacyItems[0].Label;
-            }
-
-            Log.Error(DescribeUnmatched(unmatched, searched, where, skipped.Count, skippedWhat, run.SearchAllHint));
+            Log.Error(summary.UnmatchedError);
         }
 
         // One closing line, so the outcome is clear without reading the whole log
-        var notes = new List<string>();
+        string? filesFolder = null;
 
-        if (skipped.Count > 0)
+        if (downloads)
         {
-            notes.Add($"skipped without access: {Log.JoinFirst(skipped)}");
+            filesFolder = run.InstallFolder ?? run.OutputRoot;
         }
 
-        // A target without a match is fine, like a build from before the file existed. When no pattern matched at all, the error says so already
-        var withoutMatches = run.Matches.Where(static m => m.Value.Count == 0 && !m.Key.Optional).Select(static m => m.Key.ToString()).ToList();
-
-        withoutMatches.AddRange(run.LegacyItems.Where(static i => !i.Requested).Select(static i => i.Label));
-
-        var someMatched = unmatched.Count == 0 || unmatched.Count < run.MatchCounts.Count;
-
-        if (withoutMatches.Count > 0 && someMatched)
-        {
-            notes.Add($"nothing matched in {Log.JoinFirst(withoutMatches)}");
-        }
-
-        var counted = new List<string>();
-
-        if (run.Jobs.Count > 0 || run.LegacyItems.Count == 0)
-        {
-            counted.Add(Log.PluralOf(run.Matches.Count, run.Jobs.Count, "manifest"));
-        }
-
-        if (run.LegacyItems.Count > 0)
-        {
-            counted.Add(Log.Plural(run.LegacyItems.Count, "legacy item"));
-        }
-
-        var manifests = string.Join(" and ", counted);
-
-        string rows;
-
-        if (run.HideRows)
-        {
-            rows = Log.Plural(run.Rows, "file");
-        }
-        else if (run.VpkOnly)
-        {
-            rows = Log.Plural(run.Rows, "VPK entry", "VPK entries");
-        }
-        else
-        {
-            rows = Log.Plural(run.Rows, "row");
-        }
-
-        var notesText = notes.Count > 0 ? $" ({string.Join("; ", notes)})" : "";
-        var filesFolder = run.InstallFolder ?? run.OutputRoot;
-        var outputNote = downloads ? $" Files are in {filesFolder}" : "";
-
-        Log.Info($"Done: {rows} from {manifests}{notesText}.{outputNote}");
+        Log.Info(RunAccounting.DescribeDone(
+            run.Rows,
+            run.HideRows,
+            run.VpkOnly,
+            jobCount: run.Jobs.Count,
+            manifestCount: run.Matches.Count,
+            legacyCount: run.LegacyItems.Count,
+            summary.Notes,
+            filesFolder));
 
         // Another login only helps targets that failed for lack of access
-        if (run.FailedForAccess)
+        if (run.Failures.FailedForAccess)
         {
             Log.Info(Help.AccessHint(run.Session.IsAnonymous, AccountStore.GetUsernames()));
         }
 
         // The failed targets are named in the error that explains the exit code
-        return ExitCodes.Report(new RunOutcome(run.Failed, run.FailedOtherwise, run.Session.FailureExitCode, unmatched.Count > 0, run.FailedTargets));
-    }
-
-    /// <summary>
-    /// The error for patterns that matched nothing: in which manifests, how many were skipped without access, and how to
-    /// search every depot. onlyManifest names the one manifest searched, if there was one, and skippedNoun is depot or item.
-    /// </summary>
-    internal static string DescribeUnmatched(
-        IReadOnlyList<string> unmatched,
-        int manifests,
-        string? onlyManifest,
-        int skipped,
-        string skippedNoun,
-        string? searchAllHint)
-    {
-        var where = onlyManifest ?? $"any of the {manifests} manifests";
-        var skippedNote = skipped > 0 ? $" ({Log.Plural(skipped, skippedNoun)} skipped without access)" : "";
-        var hint = searchAllHint != null ? $" {searchAllHint} {string.Join(' ', unmatched.Select(Help.QuoteArgument))}" : "";
-
-        return $"{string.Join(", ", unmatched.Select(static p => $"\"{p}\""))} matched nothing in {where}{skippedNote}.{hint}";
+        return ExitCodes.Report(run.Failures.ToOutcome(run.Session.FailureExitCode, summary.UnmatchedError != null));
     }
 }

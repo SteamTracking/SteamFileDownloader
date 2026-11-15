@@ -15,7 +15,7 @@ public class WorkshopTests
 
     private static List<string> RowKeys() => [.. Rows().Keys];
 
-    private static WorkshopArguments Info(string commandLine) => WorkshopArgumentParser.Parse(["info", .. commandLine.Split(' ')])!;
+    private static WorkshopArguments Info(string commandLine) => WorkshopArgumentParser.Parse(["info", .. commandLine.Split(' ')]);
 
     [Test]
     [Arguments("3070715607", 3070715607ul, null)]
@@ -30,8 +30,7 @@ public class WorkshopTests
     {
         var target = WorkshopArgumentParser.ParseTarget(arg);
 
-        await Assert.That(target).IsNotNull();
-        await Assert.That(target!.ItemID).IsEqualTo(itemID);
+        await Assert.That(target.ItemID).IsEqualTo(itemID);
         await Assert.That(target.ManifestID).IsEqualTo(manifestID);
     }
 
@@ -44,7 +43,7 @@ public class WorkshopTests
     [Arguments("https://steamcommunity.com/app/730/workshop/")]
     public async Task OtherItemsAreRejected(string arg)
     {
-        await Assert.That(WorkshopArgumentParser.ParseTarget(arg)).IsNull();
+        await Assert.That(() => WorkshopArgumentParser.ParseTarget(arg)).Throws<UsageException>();
     }
 
     [Test]
@@ -57,7 +56,7 @@ public class WorkshopTests
     [Arguments("bogus 3070715607")]
     public async Task InvalidCommandLinesAreRejected(string commandLine)
     {
-        await Assert.That(WorkshopArgumentParser.Parse(commandLine.Split(' '))).IsNull();
+        await Assert.That(() => WorkshopArgumentParser.Parse(commandLine.Split(' '))).Throws<UsageException>();
     }
 
     [Test]
@@ -200,7 +199,7 @@ public class WorkshopTests
                 Item(20, manifest: 2000, app: 550, flags: 0))
             .AddApp(730, 730);
         source.Histories[11] = [Change(1100, 50)];
-        var outcome = new WorkshopCommands.Outcome();
+        var outcome = new FailureLog();
 
         await WorkshopCommands.WriteInfoAsync(source, Info("1 20"), outcome);
 
@@ -218,7 +217,7 @@ public class WorkshopTests
     public async Task PrivateItemFailsForLackOfAccess()
     {
         var source = new FakeWorkshopSource().Add(Item(10, manifest: 1000), Unavailable(12, EResult.AccessDenied)).AddApp(730, 730);
-        var outcome = new WorkshopCommands.Outcome();
+        var outcome = new FailureLog();
 
         await WorkshopCommands.WriteInfoAsync(source, Info("10 12"), outcome);
 
@@ -232,7 +231,7 @@ public class WorkshopTests
     {
         var source = new FakeWorkshopSource().Add(Item(10, manifest: 3), Collection(1, (10, 1)));
         source.Histories[10] = [Change(3, 300, "new\nmap"), Change(2, 200), Change(1, 100)];
-        var outcome = new WorkshopCommands.Outcome();
+        var outcome = new FailureLog();
 
         await WorkshopCommands.WriteInfoAsync(source, Info("10 1 --history --limit 2"), outcome);
 
@@ -245,15 +244,13 @@ public class WorkshopTests
     [Test]
     public async Task InfoHasNoJsonOption()
     {
-        await Assert.That(WorkshopArgumentParser.Parse(["info", "3070715607", "--json"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("Unknown option \"--json\"");
+        await Assert.That(() => WorkshopArgumentParser.Parse(["info", "3070715607", "--json"])).Throws<UsageException>().WithMessageContaining("Unknown option \"--json\"");
     }
 
     [Test]
     public async Task MistypedSubcommandGetsAHint()
     {
-        await Assert.That(WorkshopArgumentParser.Parse(["inof", "3070715607"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("Unknown workshop subcommand \"inof\". Did you mean info? Expected info, search, ls, get.");
+        await Assert.That(() => WorkshopArgumentParser.Parse(["inof", "3070715607"])).Throws<UsageException>().WithMessageContaining("Unknown workshop subcommand \"inof\". Did you mean info? Expected info, search, ls, get.");
     }
 
     [Test]
@@ -261,12 +258,11 @@ public class WorkshopTests
     {
         var arguments = WorkshopArgumentParser.Parse(["search", "730", "de", "dust", "--limit", "all"]);
 
-        await Assert.That(arguments).IsNotNull();
-        await Assert.That(arguments!.SearchApp).IsEqualTo(730u);
+        await Assert.That(arguments.SearchApp).IsEqualTo(730u);
         await Assert.That(arguments.SearchText).IsEqualTo("de dust");
         await Assert.That(arguments.Limit).IsEqualTo(int.MaxValue);
-        await Assert.That(WorkshopArgumentParser.Parse(["search", "de_dust2"])).IsNull();
-        await Assert.That(WorkshopArgumentParser.Parse(["search", "730"])).IsNull();
+        await Assert.That(() => WorkshopArgumentParser.Parse(["search", "de_dust2"])).Throws<UsageException>();
+        await Assert.That(() => WorkshopArgumentParser.Parse(["search", "730"])).Throws<UsageException>();
     }
 
     private static FakeWorkshopSource SearchSource(int results) => new FakeWorkshopSource { SearchResults = [.. Enumerable.Range(1, results).Select(static i => Item((ulong)i, manifest: (ulong)(i * 10)))] }.AddApp(730, 730);
@@ -276,7 +272,7 @@ public class WorkshopTests
     {
         var source = SearchSource(250);
 
-        await WorkshopCommands.WriteSearchAsync(source, WorkshopArgumentParser.Parse(["search", "730", "map", "--limit", "230"])!);
+        await WorkshopCommands.WriteSearchAsync(source, WorkshopArgumentParser.Parse(["search", "730", "map", "--limit", "230"]));
 
         await Assert.That(RowKeys().Count).IsEqualTo(230);
         await Assert.That(RowKeys()[0]).IsEqualTo("1");
@@ -289,7 +285,7 @@ public class WorkshopTests
     {
         var source = SearchSource(150);
 
-        await WorkshopCommands.WriteSearchAsync(source, WorkshopArgumentParser.Parse(["search", "730", "map", "--limit", "all"])!);
+        await WorkshopCommands.WriteSearchAsync(source, WorkshopArgumentParser.Parse(["search", "730", "map", "--limit", "all"]));
 
         await Assert.That(RowKeys().Count).IsEqualTo(150);
     }
@@ -301,7 +297,7 @@ public class WorkshopTests
         withManifest.subscriptions = 1234;
         var source = new FakeWorkshopSource { SearchResults = [withManifest, Item(2, manifest: 0), Item(3, manifest: 30, flags: 0)] }.AddApp(730, 730);
 
-        await WorkshopCommands.WriteSearchAsync(source, WorkshopArgumentParser.Parse(["search", "730", "map"])!);
+        await WorkshopCommands.WriteSearchAsync(source, WorkshopArgumentParser.Parse(["search", "730", "map"]));
 
         var rows = Rows();
         await Assert.That(rows["1"][2..4]).IsEquivalentTo(["730", "10"], TUnit.Assertions.Enums.CollectionOrdering.Matching);
@@ -322,29 +318,27 @@ public class WorkshopTests
     [Test]
     public async Task SearchWithoutTextNamesTheApp()
     {
-        await Assert.That(WorkshopArgumentParser.Parse(["search", "730"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("workshop search 730 needs text after the app id");
+        await Assert.That(() => WorkshopArgumentParser.Parse(["search", "730"])).Throws<UsageException>().WithMessageContaining("workshop search 730 needs text after the app id");
     }
 
     [Test]
     public async Task SearchWithTextFirstSaysTheAppGoesFirst()
     {
-        await Assert.That(WorkshopArgumentParser.Parse(["search", "de", "dust2"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("The app id goes first, like: ").And.Contains("workshop search 730 de dust2.");
+        var exception = await Assert.That(() => WorkshopArgumentParser.Parse(["search", "de", "dust2"])).Throws<UsageException>();
+
+        await Assert.That(exception?.Message).Contains("The app id goes first, like: ").And.Contains("workshop search 730 de dust2.");
     }
 
     [Test]
     public async Task SearchWithTheAppAfterTheTextMovesItFirst()
     {
-        await Assert.That(WorkshopArgumentParser.Parse(["search", "de_dust2", "570"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("workshop search 570 de_dust2.");
+        await Assert.That(() => WorkshopArgumentParser.Parse(["search", "de_dust2", "570"])).Throws<UsageException>().WithMessageContaining("workshop search 570 de_dust2.");
     }
 
     [Test]
     public async Task MissingItemsPointAtSearch()
     {
-        await Assert.That(WorkshopArgumentParser.Parse(["info"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("workshop info needs item ids or URLs");
+        await Assert.That(() => WorkshopArgumentParser.Parse(["info"])).Throws<UsageException>().WithMessageContaining("workshop info needs item ids or URLs");
     }
 
     [Test]
@@ -352,21 +346,18 @@ public class WorkshopTests
     [Arguments("https://steamcommunity.com/sharedfiles/filedetails/?id=3070715607")]
     public async Task ItemInPlaceOfTheSubcommandIsExplained(string item)
     {
-        await Assert.That(WorkshopArgumentParser.Parse([item])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("workshop needs a subcommand before the item");
+        await Assert.That(() => WorkshopArgumentParser.Parse([item])).Throws<UsageException>().WithMessageContaining("workshop needs a subcommand before the item");
     }
 
     [Test]
     public async Task InvalidItemOfInfoPointsAtSearch()
     {
-        await Assert.That(WorkshopArgumentParser.Parse(["info", "abc"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("Invalid item \"abc\", expected an item id or URL");
+        await Assert.That(() => WorkshopArgumentParser.Parse(["info", "abc"])).Throws<UsageException>().WithMessageContaining("Invalid item \"abc\", expected an item id or URL");
     }
 
     [Test]
     public async Task InvalidItemOfLsKeepsTheTargetSyntax()
     {
-        await Assert.That(WorkshopArgumentParser.Parse(["ls", "abc"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("expected <item>[:<manifest>|:latest]");
+        await Assert.That(() => WorkshopArgumentParser.Parse(["ls", "abc"])).Throws<UsageException>().WithMessageContaining("expected <item>[:<manifest>|:latest]");
     }
 }

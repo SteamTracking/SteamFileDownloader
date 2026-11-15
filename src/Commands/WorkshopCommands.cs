@@ -17,21 +17,6 @@ internal static class WorkshopCommands
     // Steam returns up to this many items per search request
     private const int SearchPageSize = 100;
 
-    /// <summary>
-    /// Whether a run failed, and whether for something other than lack of access.
-    /// </summary>
-    internal sealed class Outcome
-    {
-        public bool Failed;
-        public bool FailedOtherwise;
-
-        public void Fail(bool noAccess = false)
-        {
-            Failed = true;
-            FailedOtherwise |= !noAccess;
-        }
-    }
-
     public static Task<int> InfoAsync(WorkshopArguments arguments, CancellationToken cancellationToken) => RunWithSessionAsync(
         arguments.Options,
         takesTargets: true,
@@ -53,7 +38,7 @@ internal static class WorkshopCommands
         DepotOptions options,
         bool takesTargets,
         string failure,
-        Func<SteamSession, Outcome, Task> write,
+        Func<SteamSession, FailureLog, Task> write,
         CancellationToken cancellationToken)
     {
         var (loggedOn, logOnExitCode) = await SteamSession.CreateLoggedOnAsync(options.Login, takesTargets, cancellationToken);
@@ -64,27 +49,27 @@ internal static class WorkshopCommands
         }
 
         using var session = loggedOn;
-        var outcome = new Outcome();
+        var failures = new FailureLog();
 
         try
         {
-            await write(session, outcome);
+            await write(session, failures);
         }
         catch (Exception e) when (SteamSession.IsError(e, cancellationToken))
         {
             Log.Error($"{failure}: {SteamSession.DescribeError(e)}. Retry later.");
-            outcome.Fail();
+            failures.Add();
         }
 
         session.Disconnect();
 
-        return ExitCodes.Report(new RunOutcome(outcome.Failed, outcome.FailedOtherwise, session.FailureExitCode));
+        return ExitCodes.Report(failures.ToOutcome(session.FailureExitCode));
     }
 
     /// <summary>
     /// Writes the rows of info. Items without details fail the outcome.
     /// </summary>
-    internal static async Task WriteInfoAsync(IWorkshopSource source, WorkshopArguments arguments, Outcome outcome)
+    internal static async Task WriteInfoAsync(IWorkshopSource source, WorkshopArguments arguments, FailureLog failures)
     {
         var details = await Workshop.GetDetailsAsync(source, arguments.Targets.Select(static t => t.ItemID));
         var items = new List<PublishedFileDetails>();
@@ -97,7 +82,7 @@ internal static class WorkshopCommands
             {
                 var problem = Workshop.GetProblem(target.ItemID, item)!;
                 Log.Error(problem.Message);
-                outcome.Fail(problem.NoAccess);
+                failures.Add(noAccess: problem.NoAccess);
                 continue;
             }
 
@@ -110,7 +95,7 @@ internal static class WorkshopCommands
             if (arguments.History)
             {
                 Log.Error($"Item {target.ItemID} is a collection, which has no versions of its own; give its items to --history instead.");
-                outcome.Fail();
+                failures.Add();
                 continue;
             }
 
@@ -280,7 +265,7 @@ internal static class WorkshopCommands
             catch (Exception e) when (SteamSession.IsError(e, cancellationToken))
             {
                 Log.Error($"Failed to get workshop items from Steam: {SteamSession.DescribeError(e)}. Retry later.");
-                run.Fail();
+                run.Failures.Add();
             }
         }, cancellationToken);
 
@@ -324,7 +309,7 @@ internal static class WorkshopCommands
                 if (target.ManifestID != null)
                 {
                     Log.Error($"Item {target.ItemID} is a collection, which has no manifest of its own; give it without one to get its items.");
-                    run.Fail(target.Source);
+                    run.Failures.Add(target.Source);
                     continue;
                 }
 
@@ -361,7 +346,7 @@ internal static class WorkshopCommands
                 var hint = itemProblem.SkipReason == "removed" && run.Options.ItemNotFoundHint != null ? $" {run.Options.ItemNotFoundHint}" : "";
 
                 Log.Error($"{itemProblem.Message}{hint}");
-                run.Fail(target.Source, itemProblem.NoAccess);
+                run.Failures.Add(target.Source, itemProblem.NoAccess);
                 continue;
             }
 
@@ -430,7 +415,7 @@ internal static class WorkshopCommands
                 else
                 {
                     Log.Error(problem.Message);
-                    run.Fail(candidate.Target.Source);
+                    run.Failures.Add(candidate.Target.Source);
                 }
 
                 continue;
@@ -438,7 +423,7 @@ internal static class WorkshopCommands
 
             var itemFolder = Path.Combine(run.OutputRoot, "workshop", candidate.ItemID.ToString(CultureInfo.InvariantCulture));
             var jobCount = run.Jobs.Count;
-            var job = run.AddJob(appID, null, depotID, manifestID, "public", candidate.FromCollection, itemFolder);
+            var job = run.AddJob(appID, appID, depotID, manifestID, "public", candidate.FromCollection, itemFolder);
             job.ItemID = candidate.ItemID;
 
             if (run.Jobs.Count > jobCount)
@@ -461,7 +446,7 @@ internal static class WorkshopCommands
             if (downloadable == 0)
             {
                 Log.Error($"None of the {collection.Items} items of collection {collection.ItemID} have files to download{skippedNote}.");
-                run.Fail(targetSource);
+                run.Failures.Add(targetSource);
                 continue;
             }
 
@@ -486,7 +471,7 @@ internal static class WorkshopCommands
         if (candidate.Target.ManifestID != null)
         {
             Log.Error($"Item {itemID} is a legacy workshop item, which has one file and no manifests; give it without one.");
-            run.Fail(candidate.Target.Source);
+            run.Failures.Add(candidate.Target.Source);
             return;
         }
 

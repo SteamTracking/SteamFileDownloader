@@ -29,18 +29,9 @@ internal sealed record TrackArguments(
 /// </summary>
 internal static class TrackCommand
 {
-    /// <summary>
-    /// Parses the options of track. Returns null after printing an error.
-    /// </summary>
-    public static TrackArguments? ParseArguments(string[] args)
+    public static TrackArguments ParseArguments(string[] args)
     {
         var parsed = ArgumentParser.Parse("track", args);
-
-        if (parsed == null)
-        {
-            return null;
-        }
-
         var options = parsed.Options;
 
         // A leading app id is the same as --appid
@@ -48,35 +39,28 @@ internal static class TrackCommand
         {
             if (options.ContainsKey("appid"))
             {
-                Log.Error($"The app is given twice, as {parsed.Positionals[0]} and as --appid; give one of them. {Help.UsageHint("track")}");
-                return null;
+                throw new UsageException($"The app is given twice, as {parsed.Positionals[0]} and as --appid; give one of them. {Help.UsageHint("track")}");
             }
 
             options["appid"] = parsed.Positionals[0];
             parsed = parsed with { Positionals = parsed.Positionals[1..] };
         }
 
-        if (!ArgumentParser.NoPositionals(parsed, "track"))
-        {
-            return null;
-        }
+        ArgumentParser.NoPositionals(parsed, "track");
 
         if (!options.TryGetValue("output", out var output))
         {
-            Log.Error($"track needs --output <dir>, like: {Help.ExeName} track {options.GetValueOrDefault("appid") ?? "<app>"} --output . {Help.UsageHint("track")}");
-            return null;
+            throw new UsageException($"track needs --output <dir>, like: {Help.ExeName} track {options.GetValueOrDefault("appid") ?? "<app>"} --output . {Help.UsageHint("track")}");
         }
 
         if (!options.TryGetValue("appid", out var appText))
         {
-            Log.Error($"track needs an app id, like: {Help.ExeName} track 730 --output . {Help.UsageHint("track")}");
-            return null;
+            throw new UsageException($"track needs an app id, like: {Help.ExeName} track 730 --output . {Help.UsageHint("track")}");
         }
 
         if (!uint.TryParse(appText, NumberStyles.None, CultureInfo.InvariantCulture, out var appID))
         {
-            Log.Error($"--appid needs a numeric app id, got \"{appText}\". {Help.UsageHint("track")}");
-            return null;
+            throw new UsageException($"--appid needs a numeric app id, got \"{appText}\". {Help.UsageHint("track")}");
         }
 
         return new TrackArguments(
@@ -184,67 +168,46 @@ internal static class TrackCommand
         var allManifests = saveAllManifests || filters.Values.Any(static f => f.VpkPatterns.Count > 0);
 
         // Find the tracked depots (in files.json), or all of them when saving all manifests or for VPK entries
-        var manifestJobs = new List<ManifestJob>();
         var publicFallbacks = new PublicFallbacks();
+        var trackedDepots = AppInfo.GetDepots(depots).Where(d => allManifests || filters.ContainsKey(d.ID));
+        var skippedDepots = new List<SkippedDepot>();
+        var resolved = JobResolver.ResolveDepots(appID, branch, trackedDepots, PickManifest, skippedDepots, optional: false);
 
-        foreach (var (depotID, depot) in AppInfo.GetDepots(depots))
+        (ulong ManifestID, string Branch) PickManifest(uint pickAppID, uint depotID, KeyValue depot, string pickBranch)
         {
-            var filter = filters.GetValueOrDefault(depotID);
-
-            if (filter == null && !allManifests)
-            {
-                continue;
-            }
-
-            // Shared installs are tracked in the app that owns them
-            var fromApp = AppInfo.GetSharedInstallApp(depot);
-
-            if (fromApp != null)
-            {
-                if (filter != null)
-                {
-                    Log.Warn($"Depot {depotID} in files.json is shared from app {fromApp}, track it there instead.");
-                }
-
-                continue;
-            }
-
-            ulong manifestID;
-            string manifestBranch;
-
             if (manifestIds != null)
             {
-                manifestID = manifestIds.GetValueOrDefault(depotID);
-                manifestBranch = branch;
+                return (manifestIds.GetValueOrDefault(depotID), pickBranch);
+            }
+
+            return publicFallbacks.Resolve(pickAppID, depotID, depot, pickBranch);
+        }
+
+        // Depots like DLC and other branches often have no manifest, which is only a problem for tracked ones
+        foreach (var skipped in skippedDepots.Where(s => filters.ContainsKey(s.ID)))
+        {
+            if (skipped.Reason == JobResolver.SharedReason)
+            {
+                Log.Warn($"Depot {skipped.ID} in files.json is shared from app {skipped.Value}, track it there instead.");
             }
             else
             {
-                (manifestID, manifestBranch) = publicFallbacks.Resolve(appID, depotID, depot, branch);
+                Log.Warn($"Depot {skipped.ID} in files.json has no manifest in {manifestSource}, so it is skipped.");
             }
+        }
 
-            // Depots like DLC and other branches often have no manifest, which is only a problem for tracked ones
-            if (manifestID == 0)
-            {
-                if (filter != null)
-                {
-                    Log.Warn($"Depot {depotID} in files.json has no manifest in {manifestSource}, so it is skipped.");
-                }
+        var manifestJobs = new List<ManifestJob>();
 
-                continue;
-            }
+        foreach (var depot in resolved)
+        {
+            var filter = filters.GetValueOrDefault(depot.DepotID);
+            var job = ManifestJob.CreateIn(appID, depot.DepotID, depot.ManifestID, depot.Branch, outputPath);
 
-            manifestJobs.Add(new ManifestJob
-            {
-                AppID = appID,
-                DepotID = depotID,
-                KeyAppID = AppInfo.GetKeyAppID(depot, appID),
-                ManifestID = manifestID,
-                Branch = manifestBranch,
-                OutputFolder = outputPath,
-                Filter = filter,
-                Optional = filter == null,
-                FailureIsFine = filter == null,
-            });
+            job.KeyAppID = depot.KeyAppID;
+            job.Filter = filter;
+            job.Optional = filter == null;
+            job.FailureIsFine = filter == null;
+            manifestJobs.Add(job);
         }
 
         publicFallbacks.Log();
@@ -260,7 +223,7 @@ internal static class TrackCommand
             return ExitCodes.Failed;
         }
 
-        await session.DownloadManifestsAsync(manifestJobs);
+        await session.Manifests.GetManifestsAsync(manifestJobs);
 
         var writeFailed = false;
 

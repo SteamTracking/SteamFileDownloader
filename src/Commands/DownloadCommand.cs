@@ -73,7 +73,7 @@ internal static class DownloadCommand
 
         if (!appInfos.TryGetValue(appID, out var appInfo))
         {
-            run.Fail($"{source} (no app info)");
+            run.Failures.Add($"{source} (no app info)");
             return;
         }
 
@@ -82,7 +82,7 @@ internal static class DownloadCommand
         if (!AppInfo.GetDepots(depots).Any())
         {
             Log.Error($"App {appID} has no depots. DLC and tools often keep their files in depots of their parent app.");
-            run.Fail($"{source} (no depots)");
+            run.Failures.Add($"{source} (no depots)");
             return;
         }
 
@@ -90,7 +90,7 @@ internal static class DownloadCommand
 
         if (!AppInfo.CheckBranch(depots, appID, branch, run.UnlockedBranches.GetValueOrDefault(appID)))
         {
-            run.Fail($"{source} (branch {branch})");
+            run.Failures.Add($"{source} (branch {branch})");
             return;
         }
 
@@ -140,42 +140,10 @@ internal static class DownloadCommand
         var skipped = selection.Skipped;
         var sourceInfos = await GetSharedInstallInfosAsync(run, appID, selection);
         var publicFallbacks = new PublicFallbacks();
-        var jobs = new List<ManifestJob>();
 
-        foreach (var (depotID, depot) in selection.Depots)
-        {
-            var depotName = depotID.ToString(CultureInfo.InvariantCulture);
-            var jobAppID = appID;
-            var jobDepot = depot;
-
-            // A shared install has the manifests and key of the app it comes from, and goes in the same folder
-            if (AppInfo.GetSharedInstallSourceApp(depot, appID) is { } sourceAppID)
-            {
-                var sourceDepot = AppInfo.GetSourceDepot(sourceInfos, sourceAppID, depotID);
-
-                if (sourceDepot == null)
-                {
-                    skipped.Add(new SkippedDepot(depotID, $"app {sourceAppID} unavailable"));
-                    continue;
-                }
-
-                jobAppID = sourceAppID;
-                jobDepot = sourceDepot;
-            }
-
-            var (manifestID, manifestBranch) = publicFallbacks.Resolve(jobAppID, depotID, jobDepot, branch);
-
-            if (manifestID == 0)
-            {
-                skipped.Add(new SkippedDepot(depotID, "no manifest"));
-                continue;
-            }
-
-            // Depots of DLC that the account doesn't own fail their key request, which is expected
-            var parentFolder = Path.Combine(run.OutputRoot, depotName);
-
-            jobs.Add(run.AddJob(jobAppID, jobDepot, depotID, manifestID, manifestBranch, optional: true, parentFolder));
-        }
+        // Depots of DLC that the account doesn't own fail their key request, which is expected
+        var resolved = JobResolver.ResolveDepots(appID, branch, selection.Depots, publicFallbacks.Resolve, skipped, optional: true, sharedSourceInfos: sourceInfos);
+        var jobs = run.AddJobs(resolved);
 
         publicFallbacks.Log();
 
@@ -192,7 +160,7 @@ internal static class DownloadCommand
         if (jobs.Count == 0)
         {
             Log.Error($"App {appID} has no depots with a manifest on \"{branch}\" for this platform and language. Name depots to install them whatever they are for, see \"{Help.ExeName} depots {appID}\".");
-            run.Fail($"{source} (no depots)");
+            run.Failures.Add($"{source} (no depots)");
             return;
         }
 

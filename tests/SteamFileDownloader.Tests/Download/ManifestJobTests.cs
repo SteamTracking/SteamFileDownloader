@@ -43,9 +43,9 @@ public class ManifestJobTests
         using var temp = new TempDirectory();
         var run = new GetCommand.Run { Filter = FileFilter.FromPatterns([]), Session = null!, OutputRoot = temp.Path };
 
-        var fromAll = run.AddJob(730, null, 731, 333, "public", optional: true, temp.Path);
-        var explicitJob = run.AddJob(730, null, 731, 333, "public", optional: false, temp.Path);
-        var fromAllAgain = run.AddJob(730, null, 731, 333, "public", optional: true, temp.Path);
+        var fromAll = run.AddJob(730, 730, 731, 333, "public", optional: true, temp.Path);
+        var explicitJob = run.AddJob(730, 730, 731, 333, "public", optional: false, temp.Path);
+        var fromAllAgain = run.AddJob(730, 730, 731, 333, "public", optional: true, temp.Path);
 
         await Assert.That(explicitJob).IsSameReferenceAs(fromAll);
         await Assert.That(fromAllAgain).IsSameReferenceAs(fromAll);
@@ -54,26 +54,14 @@ public class ManifestJobTests
     }
 
     [Test]
-    public async Task AddJobKeysADlcDepotWithItsDlc()
+    public async Task AddJobKeepsTheKeyApp()
     {
         using var temp = new TempDirectory();
         var run = new GetCommand.Run { Filter = FileFilter.FromPatterns([]), Session = null!, OutputRoot = temp.Path };
-        var depot = KeyValue.LoadFromString("\"4784\" { \"dlcappid\" \"4780\" }")!;
 
-        var job = run.AddJob(4700, depot, 4784, 333, "public", optional: true, temp.Path);
+        var job = run.AddJob(4700, 4780, 4784, 333, "public", optional: true, temp.Path);
 
         await Assert.That(job.AppID).IsEqualTo(4700u);
         await Assert.That(job.KeyAppID).IsEqualTo(4780u);
-    }
-
-    [Test]
-    public async Task AddJobKeysADepotWithoutInfoWithTheApp()
-    {
-        using var temp = new TempDirectory();
-        var run = new GetCommand.Run { Filter = FileFilter.FromPatterns([]), Session = null!, OutputRoot = temp.Path };
-
-        var job = run.AddJob(4700, null, 4784, 333, "public", optional: true, temp.Path);
-
-        await Assert.That(job.KeyAppID).IsEqualTo(4700u);
     }
 }

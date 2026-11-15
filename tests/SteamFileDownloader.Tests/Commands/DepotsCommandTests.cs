@@ -133,7 +133,7 @@ public class DepotsCommandTests
     public async Task TargetsParseAsTargets()
     {
         var (_, rows) = List(Depots, "public");
-        var arguments = DepotArgumentParser.ParseArguments("ls", ["730", "1"])!;
+        var arguments = DepotArgumentParser.ParseArguments("ls", ["730", "1"]);
 
         foreach (var columns in rows.Values)
         {
@@ -213,7 +213,7 @@ public class DepotsCommandTests
     [Test]
     public async Task ArgumentThatIsNotAnAppFailsBeforeLoggingIn()
     {
-        var arguments = DepotArgumentParser.ParseArguments("depots", ["730", "abc", "--anonymous"])!;
+        var arguments = DepotArgumentParser.ParseArguments("depots", ["730", "abc", "--anonymous"]);
 
         // Logging in would throw on the cancelled token
         var exitCode = await DepotsCommand.ListDepotsAsync(arguments, new CancellationToken(canceled: true));

@@ -10,7 +10,7 @@ public class WorkshopJobsTests
         // A folder that doesn't exist, so no earlier downloads are found to reuse
         var outputRoot = Path.Combine(Path.GetTempPath(), "SteamFileDownloader.Tests", Guid.NewGuid().ToString("N"));
         var run = new GetCommand.Run { Filter = FileFilter.FromPatterns([]), Session = null!, OutputRoot = outputRoot };
-        var targets = items.Select(static i => WorkshopArgumentParser.ParseTarget(i)!).ToList();
+        var targets = items.Select(static i => WorkshopArgumentParser.ParseTarget(i)).ToList();
 
         await WorkshopCommands.ResolveJobsAsync(run, source, targets, CancellationToken.None);
 
@@ -34,7 +34,7 @@ public class WorkshopJobsTests
         await Assert.That(job.ToString()).IsEqualTo("10:1000");
         await Assert.That(job.OutputFolder).IsEqualTo(Path.Combine(run.OutputRoot, "workshop", "10", "1000"));
         await Assert.That(job.Optional).IsFalse();
-        await Assert.That(run.Failed).IsFalse();
+        await Assert.That(run.Failures.Failed).IsFalse();
     }
 
     [Test]
@@ -88,7 +88,7 @@ public class WorkshopJobsTests
         await Assert.That(run.Jobs.Select(static j => j.ToString())).IsEquivalentTo(["10:1000", "13:1300"], TUnit.Assertions.Enums.CollectionOrdering.Matching);
         await Assert.That(run.Jobs.All(static j => j.Optional)).IsTrue();
         await Assert.That(run.AllTargets["1"].Select(static j => j.ToString())).IsEquivalentTo(run.Jobs.Select(static j => j.ToString()), TUnit.Assertions.Enums.CollectionOrdering.Matching);
-        await Assert.That(run.Failed).IsFalse();
+        await Assert.That(run.Failures.Failed).IsFalse();
 
         var output = TestContext.Current!.GetStandardOutput() + TestContext.Current.GetErrorOutput();
         await Assert.That(output).Contains("Collection 1: 2 of 4 items (2 skipped: 11 private, 12 without files).").And.DoesNotContain("Skipping");
@@ -115,7 +115,7 @@ public class WorkshopJobsTests
         var run = await Resolve(source, "1");
 
         await Assert.That(run.Jobs.Select(static j => j.ToString())).IsEquivalentTo(["10:1000"]);
-        await Assert.That(run.Failed).IsFalse();
+        await Assert.That(run.Failures.Failed).IsFalse();
 
         var output = TestContext.Current!.GetStandardOutput() + TestContext.Current.GetErrorOutput();
         await Assert.That(output).Contains("Collection 1: 1 of 4 items (3 skipped: 11 failed to look up, 12, 13 without files).");
@@ -129,7 +129,7 @@ public class WorkshopJobsTests
 
         var run = await Resolve(source, "13");
 
-        await Assert.That(run.FailedTargets).IsEquivalentTo(["13"]);
+        await Assert.That(run.Failures.FailedTargets).IsEquivalentTo(["13"]);
         await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("App 570 has no workshop depot, so item 13 has no files to download.");
     }
 
@@ -154,7 +154,7 @@ public class WorkshopJobsTests
         var run = await Resolve(source, "1");
 
         await Assert.That(run.Jobs).IsEmpty();
-        await Assert.That(run.FailedTargets).IsEquivalentTo(["1"]);
+        await Assert.That(run.Failures.FailedTargets).IsEquivalentTo(["1"]);
     }
 
     [Test]
@@ -165,7 +165,7 @@ public class WorkshopJobsTests
         var run = await Resolve(source, "1:1000");
 
         await Assert.That(run.Jobs).IsEmpty();
-        await Assert.That(run.FailedTargets).IsEquivalentTo(["1:1000"]);
+        await Assert.That(run.Failures.FailedTargets).IsEquivalentTo(["1:1000"]);
     }
 
     [Test]
@@ -175,8 +175,8 @@ public class WorkshopJobsTests
 
         var run = await Resolve(source, "11");
 
-        await Assert.That(run.FailedTargets).IsEquivalentTo(["11"]);
-        await Assert.That(run.FailedOtherwise).IsFalse();
+        await Assert.That(run.Failures.FailedTargets).IsEquivalentTo(["11"]);
+        await Assert.That(run.Failures.FailedOtherwise).IsFalse();
     }
 
     [Test]
@@ -193,7 +193,7 @@ public class WorkshopJobsTests
         await Assert.That(item.Size).IsEqualTo(55L);
         await Assert.That(item.TimeUpdated).IsEqualTo(1000u);
         await Assert.That(item.OutputFolder).IsEqualTo(Path.Combine(run.OutputRoot, "workshop", "30"));
-        await Assert.That(run.Failed).IsFalse();
+        await Assert.That(run.Failures.Failed).IsFalse();
     }
 
     [Test]
@@ -204,7 +204,7 @@ public class WorkshopJobsTests
         var run = await Resolve(source, "1", "30");
 
         await Assert.That(run.LegacyItems.Select(static i => i.ItemID)).IsEquivalentTo([30ul]);
-        await Assert.That(run.Failed).IsFalse();
+        await Assert.That(run.Failures.Failed).IsFalse();
         await Assert.That(TestContext.Current!.GetStandardOutput()).Contains("Collection 1: 1 of 2 items (1 skipped: 31 without files).");
     }
 
@@ -216,7 +216,7 @@ public class WorkshopJobsTests
         var run = await Resolve(source, "30:123");
 
         await Assert.That(run.LegacyItems).IsEmpty();
-        await Assert.That(run.FailedTargets).IsEquivalentTo(["30:123"]);
+        await Assert.That(run.Failures.FailedTargets).IsEquivalentTo(["30:123"]);
     }
 
     [Test]
@@ -230,7 +230,7 @@ public class WorkshopJobsTests
         var run = await Resolve(source, item);
 
         await Assert.That(run.Jobs).IsEmpty();
-        await Assert.That(run.FailedTargets).IsEquivalentTo([item]);
-        await Assert.That(run.FailedOtherwise).IsTrue();
+        await Assert.That(run.Failures.FailedTargets).IsEquivalentTo([item]);
+        await Assert.That(run.Failures.FailedOtherwise).IsTrue();
     }
 }
