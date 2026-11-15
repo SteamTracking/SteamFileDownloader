@@ -18,9 +18,9 @@ internal static class ExitCodes
     public const int NoMatch = 6;
 
     /// <summary>
-    /// The exit code of a wrong command line. GameTracking expects 1 for track's.
+    /// The exit code of a wrong command line, which a command can set apart from the usual one.
     /// </summary>
-    public static int ForUsageError(string command) => command == "track" ? Failed : UsageError;
+    public static int ForUsageError(string command) => CommandTable.Find(command)?.UsageErrorExitCode ?? UsageError;
 
     public static int FromLogOnResult(EResult result) => result switch
     {

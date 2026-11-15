@@ -70,17 +70,10 @@ internal static partial class DepotArgumentParser
 
     /// <summary>
     /// Parses "[app] [options] [targets] [-- patterns]" for get, ls, download and depots. Options can go anywhere before "--".
-    /// Returns null after printing an error.
     /// </summary>
-    public static DepotArguments? ParseArguments(string command, string[] args)
+    public static DepotArguments ParseArguments(string command, string[] args)
     {
         var parsed = ArgumentParser.Parse(command, args);
-
-        if (parsed == null)
-        {
-            return null;
-        }
-
         var targets = parsed.Positionals;
         uint? app = null;
 
@@ -94,19 +87,15 @@ internal static partial class DepotArgumentParser
         {
             if (targets.Count > 0)
             {
-                Log.Error($"\"{targets[0]}\" is not an app id, the number in the app's store page URL, like: {Help.ExeName} depots 730 570.");
-            }
-            else
-            {
-                Log.Error($"depots needs app ids, like: {Help.ExeName} depots 730 570.");
+                throw new UsageException($"\"{targets[0]}\" is not an app id, the number in the app's store page URL, like: {Help.ExeName} depots 730 570.");
             }
 
-            return null;
+            throw new UsageException($"depots needs app ids, like: {Help.ExeName} depots 730 570.");
         }
 
-        if (command is "depots" or "download" && !ArgumentParser.NoPatterns(parsed, command))
+        if (command is "depots" or "download")
         {
-            return null;
+            ArgumentParser.NoPatterns(parsed, command);
         }
 
         // A number first that no target uses was likely meant as a depot, which would otherwise be skipped silently
@@ -129,22 +118,17 @@ internal static partial class DepotArgumentParser
                 manifestHint = $"A manifest follows a colon, like: {Help.ExeName} {command} {app} {targetApp}:{targetDepot}.";
             }
 
-            Log.Error($"\"{targets[0]}\" reads as app {targetApp} and depot {targetDepot}, so the app id {app} is unused. {manifestHint} If {app} is a depot, give it as <app>/{app}.");
-            return null;
+            throw new UsageException($"\"{targets[0]}\" reads as app {targetApp} and depot {targetDepot}, so the app id {app} is unused. {manifestHint} If {app} is a depot, give it as <app>/{app}.");
         }
 
         if (command == "download")
         {
-            if (!CheckDownloadArguments(parsed, app, targets))
-            {
-                return null;
-            }
+            CheckDownloadArguments(parsed, app, targets);
         }
         else if (command is "get" or "ls" && app == null && targets.Count == 0)
         {
             // Get and ls can take the apps from their targets
-            Log.Error(DescribeMissingApp(command, parsed.Patterns));
-            return null;
+            throw new UsageException(DescribeMissingApp(command, parsed.Patterns));
         }
 
         foreach (var target in targets)
@@ -164,8 +148,7 @@ internal static partial class DepotArgumentParser
                 allApp = targetApp;
             }
 
-            Log.Error($"\"{target}\" is not a target: without targets, {command} takes every depot of the app, like: {SuggestCommand(command, allApp, [], parsed.Patterns)}.");
-            return null;
+            throw new UsageException($"\"{target}\" is not a target: without targets, {command} takes every depot of the app, like: {SuggestCommand(command, allApp, [], parsed.Patterns)}.");
         }
 
         // Without patterns, a target that isn't one is most likely a file name that belongs after --
@@ -188,15 +171,11 @@ internal static partial class DepotArgumentParser
 
             if (moved.Count > 0)
             {
-                Log.Error($"\"{moved[0]}\" is not a target; patterns go after --, like: {SuggestCommand(command, app, kept, moved)}.");
-                return null;
+                throw new UsageException($"\"{moved[0]}\" is not a target; patterns go after --, like: {SuggestCommand(command, app, kept, moved)}.");
             }
         }
 
-        if (!ArgumentParser.CheckPatterns(parsed))
-        {
-            return null;
-        }
+        ArgumentParser.CheckPatterns(parsed);
 
         // Whole depots can be tens of gigabytes, which a forgotten pattern shouldn't download unnoticed
         if (command == "get" && parsed.Patterns.Count == 0)
@@ -208,13 +187,12 @@ internal static partial class DepotArgumentParser
     }
 
     // Download takes one app, which has to come first, and depots of it as targets, on the branch of --branch.
-    // Returns false after printing an error
-    private static bool CheckDownloadArguments(ParsedArguments parsed, uint? app, List<string> targets)
+    // Throws UsageException for a command line that is wrong
+    private static void CheckDownloadArguments(ParsedArguments parsed, uint? app, List<string> targets)
     {
         if (app == null)
         {
-            Log.Error(DescribeMissingApp("download", parsed.Patterns));
-            return false;
+            throw new UsageException(DescribeMissingApp("download", parsed.Patterns));
         }
 
         foreach (var target in targets)
@@ -223,18 +201,14 @@ internal static partial class DepotArgumentParser
 
             if (match.Success && (match.Groups["app"].Success || match.Groups["branch"].Success))
             {
-                Log.Error($"\"{target}\" names an app or branch. download takes <depot>[:<manifest>] of its one app, and --branch for the branch. {Help.UsageHint("download")}");
-                return false;
+                throw new UsageException($"\"{target}\" names an app or branch. download takes <depot>[:<manifest>] of its one app, and --branch for the branch. {Help.UsageHint("download")}");
             }
         }
 
         if (targets.Count > 0 && parsed.Install.HasIncludeOrExclude)
         {
-            Log.Error($"--include and --exclude change the depots that download picks, so they can't be combined with depots as targets. {Help.UsageHint("download")}");
-            return false;
+            throw new UsageException($"--include and --exclude change the depots that download picks, so they can't be combined with depots as targets. {Help.UsageHint("download")}");
         }
-
-        return true;
     }
 
     /// <summary>

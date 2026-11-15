@@ -1,6 +1,4 @@
 using System;
-using System.Globalization;
-using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -17,8 +15,6 @@ internal static partial class Program
     public static string Version => VersionInfo.Version;
 
     public static string? Commit => VersionInfo.Commit;
-
-    private static readonly string[] Commands = ["get", "download", "ls", "depots", "workshop", "dd", "login", "config", "track"];
 
     private static async Task<int> Main(string[] args)
     {
@@ -61,15 +57,7 @@ internal static partial class Program
 
         try
         {
-            return args[0] switch
-            {
-                "get" or "download" or "ls" or "depots" or "dd" => await RunDepotCommandAsync(args[0], args[1..], cts.Token),
-                "login" => await RunLoginAsync(args[1..], cts.Token),
-                "config" => RunConfig(args[1..]),
-                "track" => await RunTrackAsync(args[1..], cts.Token),
-                "workshop" => await RunWorkshopAsync(args[1..], cts.Token),
-                _ => UnknownCommand(args[0]),
-            };
+            return await RunCommandAsync(args, cts.Token);
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
@@ -88,89 +76,33 @@ internal static partial class Program
         }
     }
 
-    private static async Task<int> RunDepotCommandAsync(string command, string[] args, CancellationToken cancellationToken)
+    private static async Task<int> RunCommandAsync(string[] args, CancellationToken cancellationToken)
     {
-        // stdout carries the results
-        Log.UseStdoutForResults();
+        var command = CommandTable.Find(args[0]);
 
-        var arguments = command == "dd" ? DepotDownloaderArguments.Parse(args) : DepotArgumentParser.ParseArguments(command, args);
-
-        if (arguments == null)
+        if (command?.Bind == null)
         {
-            return ExitCodes.ForUsageError(command);
+            return UnknownCommand(args[0]);
         }
 
-        if (arguments.Command is "workshop get" or "workshop ls")
+        if (command.ResultsOnStdout)
         {
-            var items = arguments.Targets
-                .Select(static t => new WorkshopTarget(t, ulong.Parse(t, CultureInfo.InvariantCulture), null))
-                .ToList();
-            var workshopArguments = new WorkshopArguments(arguments.Command, arguments.Options, items, arguments.Patterns);
-
-            return await WorkshopCommands.RunAsync(workshopArguments, cancellationToken);
+            Log.UseStdoutForResults();
         }
 
-        return arguments.Command switch
+        Invocation invocation;
+
+        try
         {
-            "get" or "ls" => await GetCommand.RunAsync(arguments, cancellationToken),
-            "download" => await DownloadCommand.RunAsync(arguments, cancellationToken),
-            _ => await DepotsCommand.ListDepotsAsync(arguments, cancellationToken),
-        };
-    }
-
-    private static async Task<int> RunWorkshopAsync(string[] args, CancellationToken cancellationToken)
-    {
-        // stdout carries the results
-        Log.UseStdoutForResults();
-
-        var arguments = WorkshopArgumentParser.Parse(args);
-
-        if (arguments == null)
+            invocation = command.Bind(command.Name, args[1..]);
+        }
+        catch (UsageException e)
         {
-            return ExitCodes.ForUsageError("workshop");
+            Log.Error(e.Message);
+            return command.UsageErrorExitCode;
         }
 
-        return arguments.Command switch
-        {
-            "workshop search" => await WorkshopCommands.SearchAsync(arguments, cancellationToken),
-            "workshop ls" or "workshop get" => await WorkshopCommands.RunAsync(arguments, cancellationToken),
-            _ => await WorkshopCommands.InfoAsync(arguments, cancellationToken),
-        };
-    }
-
-    private static async Task<int> RunLoginAsync(string[] args, CancellationToken cancellationToken)
-    {
-        var arguments = LoginCommand.ParseArguments(args);
-
-        if (arguments == null)
-        {
-            return ExitCodes.ForUsageError("login");
-        }
-
-        return arguments.Command switch
-        {
-            "login list" => LoginCommand.List(),
-            "login remove" => await LoginCommand.RemoveAsync(arguments.Usernames, cancellationToken),
-            _ => await LoginCommand.RunAsync(arguments.Login, cancellationToken),
-        };
-    }
-
-    private static int RunConfig(string[] args)
-    {
-        // stdout carries the saved value
-        Log.UseStdoutForResults();
-
-        var arguments = ConfigCommand.ParseArguments(args);
-
-        return arguments == null ? ExitCodes.ForUsageError("config") : ConfigCommand.Run(arguments);
-    }
-
-    // The GameTracking command, which downloads the files in files.json
-    private static async Task<int> RunTrackAsync(string[] args, CancellationToken cancellationToken)
-    {
-        var arguments = TrackCommand.ParseArguments(args);
-
-        return arguments == null ? ExitCodes.ForUsageError("track") : await TrackCommand.RunAsync(arguments, cancellationToken);
+        return await invocation(cancellationToken);
     }
 
     /// <summary>
@@ -208,9 +140,10 @@ internal static partial class Program
         }
         else
         {
-            var didYouMean = ArgumentParser.DidYouMean(argument, [.. Commands, "version", "help"]);
+            var commands = CommandTable.CommandNames;
+            var didYouMean = ArgumentParser.DidYouMean(argument, [.. commands, "version", "help"]);
 
-            hint = $"{didYouMean} Commands are {string.Join(", ", Commands[..^1])} and {Commands[^1]}.";
+            hint = $"{didYouMean} Commands are {string.Join(", ", commands[..^1])} and {commands[^1]}.";
         }
 
         Log.Error($"Unknown command \"{argument}\".{hint} {Help.UsageHint()}");

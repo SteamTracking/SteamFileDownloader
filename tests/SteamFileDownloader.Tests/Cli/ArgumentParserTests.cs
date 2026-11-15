@@ -9,8 +9,7 @@ public class ArgumentParserTests
     {
         var parsed = ArgumentParser.Parse("get", ["730", "2347771", "--output", "out/dir", "--", "server.dll", "--output"]);
 
-        await Assert.That(parsed).IsNotNull();
-        await Assert.That(string.Join(",", parsed!.Positionals)).IsEqualTo("730,2347771");
+        await Assert.That(string.Join(",", parsed.Positionals)).IsEqualTo("730,2347771");
         await Assert.That(string.Join(",", parsed.Patterns)).IsEqualTo("server.dll,--output");
         await Assert.That(parsed.Options.Count).IsEqualTo(1);
         await Assert.That(parsed.Options["output"]).IsEqualTo("out/dir");
@@ -30,8 +29,7 @@ public class ArgumentParserTests
     {
         var parsed = ArgumentParser.Parse("ls", ["--branch", "beta", "730", "--anonymous", "2347771"]);
 
-        await Assert.That(parsed).IsNotNull();
-        await Assert.That(string.Join(",", parsed!.Positionals)).IsEqualTo("730,2347771");
+        await Assert.That(string.Join(",", parsed.Positionals)).IsEqualTo("730,2347771");
         await Assert.That(parsed.Options["branch"]).IsEqualTo("beta");
         await Assert.That(parsed.Options["anonymous"]).IsEqualTo("");
     }
@@ -41,8 +39,7 @@ public class ArgumentParserTests
     {
         var parsed = ArgumentParser.Parse("get", ["--OUTPUT", "out", "--Anonymous"]);
 
-        await Assert.That(parsed).IsNotNull();
-        await Assert.That(parsed!.Options.ContainsKey("output")).IsTrue();
+        await Assert.That(parsed.Options.ContainsKey("output")).IsTrue();
         await Assert.That(parsed.Options.ContainsKey("anonymous")).IsTrue();
     }
 
@@ -61,20 +58,19 @@ public class ArgumentParserTests
     [Arguments("depots", "--json")]
     public async Task UnknownOptionForCommandIsRejected(string command, string option)
     {
-        await Assert.That(ArgumentParser.Parse(command, [option, "x"])).IsNull();
+        await Assert.That(() => ArgumentParser.Parse(command, [option, "x"])).Throws<UsageException>().WithMessageContaining(option);
     }
 
     [Test]
     public async Task UnknownOptionOfACommandWithoutOptionsSaysSo()
     {
-        await Assert.That(ArgumentParser.Parse("login list", ["--username", "x"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("login list takes no options.");
+        await Assert.That(() => ArgumentParser.Parse("login list", ["--username", "x"])).Throws<UsageException>().WithMessageContaining("login list takes no options.");
     }
 
     [Test]
     public async Task ValueOptionWithoutValueIsRejected()
     {
-        await Assert.That(ArgumentParser.Parse("get", ["730", "--output"])).IsNull();
+        await Assert.That(() => ArgumentParser.Parse("get", ["730", "--output"])).Throws<UsageException>().WithMessageContaining("--output needs a value");
     }
 
     [Test]
@@ -83,13 +79,13 @@ public class ArgumentParserTests
     [Arguments("track", "--username", "--save-manifest")]
     public async Task ValueOptionFollowedByAnotherOptionIsRejected(string command, string option, string next)
     {
-        await Assert.That(ArgumentParser.Parse(command, ["730", option, next, "1"])).IsNull();
+        await Assert.That(() => ArgumentParser.Parse(command, ["730", option, next, "1"])).Throws<UsageException>().WithMessageContaining($"{option} needs a value");
     }
 
     [Test]
     public async Task ValueStartingWithOneDashIsAccepted()
     {
-        await Assert.That(ArgumentParser.Parse("get", ["--branch", "-x"])?.Options["branch"]).IsEqualTo("-x");
+        await Assert.That(ArgumentParser.Parse("get", ["--branch", "-x"]).Options["branch"]).IsEqualTo("-x");
     }
 
     [Test]
@@ -97,22 +93,22 @@ public class ArgumentParserTests
     [Arguments("  ")]
     public async Task EmptyOutputPathIsRejected(string path)
     {
-        await Assert.That(ArgumentParser.CheckOutputPath(path, "--output")).IsFalse();
-        await Assert.That(ArgumentParser.Parse("get", ["--output", path])).IsNull();
-        await Assert.That(TrackCommand.ParseArguments(["--appid", "1", "--output", path])).IsNull();
+        await Assert.That(() => ArgumentParser.CheckOutputPath(path, "--output")).Throws<UsageException>().WithMessageContaining("--output needs a folder");
+        await Assert.That(() => ArgumentParser.Parse("get", ["--output", path])).Throws<UsageException>().WithMessageContaining("--output needs a folder");
+        await Assert.That(() => TrackCommand.ParseArguments(["--appid", "1", "--output", path])).Throws<UsageException>().WithMessageContaining("--output needs a folder");
     }
 
     [Test]
     public async Task RepeatedValueOptionIsRejected()
     {
-        await Assert.That(ArgumentParser.Parse("get", ["--branch", "a", "--branch", "b"])).IsNull();
-        await Assert.That(ArgumentParser.Parse("get", ["--branch", "a", "--BRANCH", "b"])).IsNull();
+        await Assert.That(() => ArgumentParser.Parse("get", ["--branch", "a", "--branch", "b"])).Throws<UsageException>().WithMessageContaining("--branch is given more than once");
+        await Assert.That(() => ArgumentParser.Parse("get", ["--branch", "a", "--BRANCH", "b"])).Throws<UsageException>().WithMessageContaining("--BRANCH is given more than once");
     }
 
     [Test]
     public async Task RepeatedFlagIsAccepted()
     {
-        await Assert.That(ArgumentParser.Parse("get", ["--anonymous", "--anonymous"])).IsNotNull();
+        await Assert.That(ArgumentParser.Parse("get", ["--anonymous", "--anonymous"]).Options.ContainsKey("anonymous")).IsTrue();
     }
 
     [Test]
@@ -128,15 +124,22 @@ public class ArgumentParserTests
     [RunOn(OS.Windows)]
     public async Task OutputPathIsChecked(string path, bool accepted)
     {
-        await Assert.That(ArgumentParser.CheckOutputPath(path, "--output")).IsEqualTo(accepted);
-        await Assert.That(ArgumentParser.Parse("get", ["--output", path]) != null).IsEqualTo(accepted);
+        if (accepted)
+        {
+            ArgumentParser.CheckOutputPath(path, "--output");
+            await Assert.That(ArgumentParser.Parse("get", ["--output", path]).Options["output"]).IsEqualTo(path);
+        }
+        else
+        {
+            await Assert.That(() => ArgumentParser.CheckOutputPath(path, "--output")).Throws<UsageException>().WithMessageContaining(path);
+            await Assert.That(() => ArgumentParser.Parse("get", ["--output", path])).Throws<UsageException>().WithMessageContaining(path);
+        }
     }
 
     [Test]
     public async Task SingleDashOptionIsRejected()
     {
-        await Assert.That(ArgumentParser.Parse("get", ["730", "-o", "out"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("Unknown option \"-o\"; options start with --");
+        await Assert.That(() => ArgumentParser.Parse("get", ["730", "-o", "out"])).Throws<UsageException>().WithMessageContaining("Unknown option \"-o\"; options start with --");
     }
 
     [Test]
@@ -144,8 +147,7 @@ public class ArgumentParserTests
     {
         var parsed = ArgumentParser.Parse("get", ["730", "--OUTPUT=out/dir", "--branch=--beta", "--username=a=b", "1"]);
 
-        await Assert.That(parsed).IsNotNull();
-        await Assert.That(parsed!.Options["output"]).IsEqualTo("out/dir");
+        await Assert.That(parsed.Options["output"]).IsEqualTo("out/dir");
         await Assert.That(parsed.Options["branch"]).IsEqualTo("--beta");
         await Assert.That(parsed.Options["username"]).IsEqualTo("a=b");
         await Assert.That(string.Join(",", parsed.Positionals)).IsEqualTo("730,1");
@@ -154,22 +156,19 @@ public class ArgumentParserTests
     [Test]
     public async Task EmptyValueAfterAnEqualsSignIsRejected()
     {
-        await Assert.That(ArgumentParser.Parse("get", ["--branch=", "1"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("--branch needs a value.");
+        await Assert.That(() => ArgumentParser.Parse("get", ["--branch=", "1"])).Throws<UsageException>().WithMessageContaining("--branch needs a value.");
     }
 
     [Test]
     public async Task ValueGivenBothWaysIsGivenMoreThanOnce()
     {
-        await Assert.That(ArgumentParser.Parse("get", ["--branch=a", "--branch", "b"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("--branch is given more than once.");
+        await Assert.That(() => ArgumentParser.Parse("get", ["--branch=a", "--branch", "b"])).Throws<UsageException>().WithMessageContaining("--branch is given more than once.");
     }
 
     [Test]
     public async Task FlagWithAValueIsRejected()
     {
-        await Assert.That(ArgumentParser.Parse("get", ["--anonymous=true"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("--anonymous is a flag and takes no value, got \"--anonymous=true\".");
+        await Assert.That(() => ArgumentParser.Parse("get", ["--anonymous=true"])).Throws<UsageException>().WithMessageContaining("--anonymous is a flag and takes no value, got \"--anonymous=true\".");
     }
 
     [Test]
@@ -179,15 +178,13 @@ public class ArgumentParserTests
     [Arguments("--anon", "--anonymous")]
     public async Task MistypedOptionGetsAHint(string option, string expected)
     {
-        await Assert.That(ArgumentParser.Parse("get", [option, "x"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains($"Unknown option \"{option}\". Did you mean {expected}? Options are");
+        await Assert.That(() => ArgumentParser.Parse("get", [option, "x"])).Throws<UsageException>().WithMessageContaining($"Unknown option \"{option}\". Did you mean {expected}? Options are");
     }
 
     [Test]
     public async Task UnrelatedOptionGetsNoHint()
     {
-        await Assert.That(ArgumentParser.Parse("get", ["--json", "x"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("Unknown option \"--json\". Options are");
+        await Assert.That(() => ArgumentParser.Parse("get", ["--json", "x"])).Throws<UsageException>().WithMessageContaining("Unknown option \"--json\". Options are");
     }
 
     [Test]
@@ -226,8 +223,7 @@ public class ArgumentParserTests
     [Test]
     public async Task AnonymousCannotBeCombinedWithUsername()
     {
-        await Assert.That(ArgumentParser.Parse("get", ["--anonymous", "--username", "me"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("--anonymous and --username can't be combined.");
+        await Assert.That(() => ArgumentParser.Parse("get", ["--anonymous", "--username", "me"])).Throws<UsageException>().WithMessageContaining("--anonymous and --username can't be combined.");
     }
 
     [Test]
@@ -244,7 +240,7 @@ public class ArgumentParserTests
     {
         var parsed = ArgumentParser.Parse(command, ["--username", "me", "--password", "x"]);
 
-        await Assert.That(LoginOptions.From(parsed!.Options)).IsEqualTo(new LoginOptions("me", "x"));
+        await Assert.That(LoginOptions.From(parsed.Options)).IsEqualTo(new LoginOptions("me", "x"));
     }
 
     [Test]
@@ -253,7 +249,6 @@ public class ArgumentParserTests
     [Arguments(new[] { "--username", "Anonymous", "--password", "x" }, "--password can't be combined with --username anonymous.")]
     public async Task PasswordNeedsAUsernameThatIsNotAnonymous(string[] args, string error)
     {
-        await Assert.That(ArgumentParser.Parse("depots", args)).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains(error);
+        await Assert.That(() => ArgumentParser.Parse("depots", args)).Throws<UsageException>().WithMessageContaining(error);
     }
 }

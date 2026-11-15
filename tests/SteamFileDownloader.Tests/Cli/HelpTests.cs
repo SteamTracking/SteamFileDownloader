@@ -9,25 +9,10 @@ public partial class HelpTests
 
     private static string Normalize(string text) => Help.ExeName.Length == 0 ? text : text.Replace(Help.ExeName, "SteamFileDownloader", StringComparison.Ordinal);
 
-    private static string GetHelp(string command) => command switch
-    {
-        "get" => Help.Get,
-        "download" => Help.Download,
-        "ls" => Help.Ls,
-        "depots" => Help.Depots,
-        "login" => Help.Login,
-        "login list" => Help.LoginList,
-        "login remove" => Help.LoginRemove,
-        "track" => Help.Track,
-        "workshop info" => Help.WorkshopInfo,
-        "workshop search" => Help.WorkshopSearch,
-        "workshop ls" => Help.WorkshopLs,
-        "workshop get" => Help.WorkshopGet,
-        "config output" => Help.Config,
-        _ => throw new ArgumentOutOfRangeException(nameof(command)),
-    };
+    private static string GetHelp(string command) => CommandTable.Find(command)!.GetHelp();
 
-    public static IEnumerable<string> Commands() => ArgumentParser.CommandOptions.Keys;
+    // The commands that ArgumentParser parses, which have options to list in their help
+    public static IEnumerable<string> Commands() => CommandTable.All.Where(static c => c.Options != null).Select(static c => c.Name);
 
     [Test]
     public async Task AnonymousRunsAreToldToLogIn()
@@ -67,7 +52,7 @@ public partial class HelpTests
     public async Task HelpMentionsEveryOptionOfTheCommand(string command)
     {
         var help = GetHelp(command);
-        var (values, flags) = ArgumentParser.CommandOptions[command];
+        var (values, flags) = CommandTable.GetOptions(command);
         var missing = values.Concat(flags).Where(o => !help.Contains($"--{o}", StringComparison.Ordinal)).ToList();
 
         await Assert.That(string.Join(",", missing)).IsEqualTo("");
@@ -77,7 +62,7 @@ public partial class HelpTests
     [MethodDataSource(nameof(Commands))]
     public async Task HelpMentionsOnlyOptionsOfTheCommand(string command)
     {
-        var (values, flags) = ArgumentParser.CommandOptions[command];
+        var (values, flags) = CommandTable.GetOptions(command);
         var known = values.Concat(flags).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var help = GetHelp(command);
         // Up to the exit codes section at the end, which commands share and which mentions track's --password
@@ -99,7 +84,7 @@ public partial class HelpTests
     {
         var help = GetHelp(command);
         var head = Head(help);
-        var (values, flags) = ArgumentParser.CommandOptions[command];
+        var (values, flags) = CommandTable.GetOptions(command);
         var expected = values.Concat(flags).Select(static o => $"--{o}");
 
         // login's usage lines are its examples
@@ -235,13 +220,7 @@ public partial class HelpTests
     [Arguments("workshop get 3070715607 -h -- a.vpk", "workshop get")]
     public async Task HelpRequestPrintsTheHelpOfItsCommand(string commandLine, string command)
     {
-        var expected = command switch
-        {
-            "overview" => Help.Overview,
-            "dd" => Help.DepotDownloader,
-            "workshop" => Help.Workshop,
-            _ => GetHelp(command),
-        };
+        var expected = command == "overview" ? Help.Overview : GetHelp(command);
 
         await Assert.That(Help.TryPrint(commandLine.Split(' '))).IsEqualTo(ExitCodes.Ok);
 
@@ -257,25 +236,8 @@ public partial class HelpTests
     [Test]
     public async Task EveryHelpTextLineFitsTheWidth()
     {
-        var texts = new Dictionary<string, string>
-        {
-            ["Overview"] = Help.Overview,
-            ["get"] = Help.Get,
-            ["download"] = Help.Download,
-            ["ls"] = Help.Ls,
-            ["depots"] = Help.Depots,
-            ["dd"] = Help.DepotDownloader,
-            ["login"] = Help.Login,
-            ["login list"] = Help.LoginList,
-            ["login remove"] = Help.LoginRemove,
-            ["track"] = Help.Track,
-            ["workshop"] = Help.Workshop,
-            ["workshop info"] = Help.WorkshopInfo,
-            ["workshop search"] = Help.WorkshopSearch,
-            ["workshop ls"] = Help.WorkshopLs,
-            ["workshop get"] = Help.WorkshopGet,
-            ["config"] = Help.Config,
-        };
+        var texts = CommandTable.All.ToDictionary(static c => c.Name, static c => c.GetHelp());
+        texts["Overview"] = Help.Overview;
 
         var tooLong = new List<string>();
 

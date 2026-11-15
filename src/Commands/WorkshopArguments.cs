@@ -29,7 +29,7 @@ internal static partial class WorkshopArgumentParser
 {
     public const int DefaultLimit = 20;
 
-    public static readonly string[] Subcommands = ArgumentParser.GetSubcommands("workshop");
+    public static readonly string[] Subcommands = CommandTable.GetSubcommands("workshop");
 
     // Item pages, their tabs like changelog, and the Steam client's link to them. Other query parameters can come before or after the id
     [GeneratedRegex(@"^(?:(?:https?://)?(?:www\.)?steamcommunity\.com/(?:sharedfiles|workshop)/filedetails/(?:[a-z]+/(?<id>\d+)/?|\?(?:[^#]*&)?id=(?<id>\d+))|steam://url/CommunityFilePage/(?<id>\d+)/?)(?:[?&#].*)?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
@@ -39,9 +39,9 @@ internal static partial class WorkshopArgumentParser
     private static partial Regex TargetRegex();
 
     /// <summary>
-    /// Parses "&lt;subcommand&gt; [options] ..." after "workshop". Returns null after printing an error.
+    /// Parses "&lt;subcommand&gt; [options] ..." after "workshop".
     /// </summary>
-    public static WorkshopArguments? Parse(string[] args)
+    public static WorkshopArguments Parse(string[] args)
     {
         // An item given where the subcommand goes
         if (args.Length > 0)
@@ -50,37 +50,26 @@ internal static partial class WorkshopArgumentParser
 
             if (isItem)
             {
-                Log.Error($"workshop needs a subcommand before the item, like: {Help.ExeName} workshop info {args[0]} or {Help.ExeName} workshop ls {args[0]}.");
-                return null;
+                throw new UsageException($"workshop needs a subcommand before the item, like: {Help.ExeName} workshop info {args[0]} or {Help.ExeName} workshop ls {args[0]}.");
             }
         }
 
-        var command = ArgumentParser.GetCommandName("workshop", args);
+        var command = CommandTable.GetCommandName("workshop", args);
 
         if (command == "workshop")
         {
-            ArgumentParser.ReportUnknownSubcommand("workshop", "subcommand", args, Subcommands);
-            return null;
+            throw ArgumentParser.UnknownSubcommand("workshop", "subcommand", args, Subcommands);
         }
 
         var parsed = ArgumentParser.Parse(command, args[1..]);
-
-        if (parsed == null)
-        {
-            return null;
-        }
-
         var usage = Help.UsageHint(command);
 
-        if (args[0] is not ("ls" or "get") && !ArgumentParser.NoPatterns(parsed, command))
+        if (args[0] is not ("ls" or "get"))
         {
-            return null;
+            ArgumentParser.NoPatterns(parsed, command);
         }
 
-        if (!ArgumentParser.CheckPatterns(parsed))
-        {
-            return null;
-        }
+        ArgumentParser.CheckPatterns(parsed);
 
         var history = parsed.Options.ContainsKey("history");
         var limit = DefaultLimit;
@@ -89,16 +78,14 @@ internal static partial class WorkshopArgumentParser
         {
             if (args[0] == "info" && !history)
             {
-                Log.Error($"--limit is for --history. {usage}");
-                return null;
+                throw new UsageException($"--limit is for --history. {usage}");
             }
 
             var parsedLimit = ParseLimit(limitText);
 
             if (parsedLimit == null)
             {
-                Log.Error($"--limit needs a positive number or all, got \"{limitText}\".");
-                return null;
+                throw new UsageException($"--limit needs a positive number or all, got \"{limitText}\".");
             }
 
             limit = parsedLimit.Value;
@@ -110,20 +97,17 @@ internal static partial class WorkshopArgumentParser
         {
             if (parsed.Positionals.Count == 0)
             {
-                Log.Error($"workshop search needs an app id and text, like: {Help.ExeName} workshop search 730 de_dust2. {usage}");
-                return null;
+                throw new UsageException($"workshop search needs an app id and text, like: {Help.ExeName} workshop search 730 de_dust2. {usage}");
             }
 
             if (!uint.TryParse(parsed.Positionals[0], NumberStyles.None, CultureInfo.InvariantCulture, out var app) || app == 0)
             {
-                Log.Error($"The app id goes first, like: {Help.ExeName} workshop search {SearchExample(parsed.Positionals)}. {usage}");
-                return null;
+                throw new UsageException($"The app id goes first, like: {Help.ExeName} workshop search {SearchExample(parsed.Positionals)}. {usage}");
             }
 
             if (parsed.Positionals.Count == 1)
             {
-                Log.Error($"workshop search {app} needs text after the app id, like: {Help.ExeName} workshop search {app} de_dust2. {usage}");
-                return null;
+                throw new UsageException($"workshop search {app} needs text after the app id, like: {Help.ExeName} workshop search {app} de_dust2. {usage}");
             }
 
             var text = string.Join(' ', parsed.Positionals.Skip(1));
@@ -133,22 +117,14 @@ internal static partial class WorkshopArgumentParser
 
         if (parsed.Positionals.Count == 0)
         {
-            Log.Error($"{command} needs item ids or URLs, like: {Help.ExeName} {command} 3070715607. \"{Help.ExeName} workshop search <app> <text>\" finds items. {usage}");
-            return null;
+            throw new UsageException($"{command} needs item ids or URLs, like: {Help.ExeName} {command} 3070715607. \"{Help.ExeName} workshop search <app> <text>\" finds items. {usage}");
         }
 
         var targets = new List<WorkshopTarget>();
 
         foreach (var arg in parsed.Positionals)
         {
-            var target = ParseTarget(arg, itemOnly: args[0] == "info");
-
-            if (target == null)
-            {
-                return null;
-            }
-
-            targets.Add(target);
+            targets.Add(ParseTarget(arg, itemOnly: args[0] == "info"));
         }
 
         return new WorkshopArguments(command, options, targets, parsed.Patterns, history, limit);
@@ -173,8 +149,8 @@ internal static partial class WorkshopArgumentParser
         return $"{app ?? "730"} {string.Join(' ', positionals.Where(p => p != app))}";
     }
 
-    // Returns null after printing an error. With itemOnly, items with a manifest are rejected
-    internal static WorkshopTarget? ParseTarget(string arg, bool itemOnly = false)
+    // Throws UsageException for an invalid target. With itemOnly, items with a manifest are rejected
+    internal static WorkshopTarget ParseTarget(string arg, bool itemOnly = false)
     {
         var url = UrlRegex().Match(arg);
 
@@ -182,7 +158,7 @@ internal static partial class WorkshopArgumentParser
         {
             if (!ulong.TryParse(url.Groups["id"].ValueSpan, NumberStyles.None, CultureInfo.InvariantCulture, out var urlID) || urlID == 0)
             {
-                return Invalid();
+                throw Invalid();
             }
 
             return new WorkshopTarget(arg, urlID, null);
@@ -190,20 +166,19 @@ internal static partial class WorkshopArgumentParser
 
         if (arg.Contains("://", StringComparison.Ordinal) || arg.Contains("steamcommunity.com", StringComparison.OrdinalIgnoreCase))
         {
-            Log.Error($"Unrecognized workshop URL \"{arg}\", expected an item's page like https://steamcommunity.com/sharedfiles/filedetails/?id=3070715607, or give the item id.");
-            return null;
+            throw new UsageException($"Unrecognized workshop URL \"{arg}\", expected an item's page like https://steamcommunity.com/sharedfiles/filedetails/?id=3070715607, or give the item id.");
         }
 
         var match = TargetRegex().Match(arg);
 
         if (!match.Success)
         {
-            return Invalid();
+            throw Invalid();
         }
 
         if (!ulong.TryParse(match.Groups["id"].ValueSpan, NumberStyles.None, CultureInfo.InvariantCulture, out var itemID) || itemID == 0)
         {
-            return Invalid();
+            throw Invalid();
         }
 
         var manifest = match.Groups["manifest"].Value;
@@ -215,29 +190,24 @@ internal static partial class WorkshopArgumentParser
 
         if (!ulong.TryParse(manifest, NumberStyles.None, CultureInfo.InvariantCulture, out var manifestID) || manifestID == 0)
         {
-            return Invalid();
+            throw Invalid();
         }
 
         if (itemOnly)
         {
-            Log.Error($"workshop info takes items without a manifest, got \"{arg}\". Its versions are listed with --history.");
-            return null;
+            throw new UsageException($"workshop info takes items without a manifest, got \"{arg}\". Its versions are listed with --history.");
         }
 
         return new WorkshopTarget(arg, itemID, manifestID);
 
-        WorkshopTarget? Invalid()
+        UsageException Invalid()
         {
             if (itemOnly)
             {
-                Log.Error($"Invalid item \"{arg}\", expected an item id or URL, like 3070715607. \"{Help.ExeName} workshop search <app> <text>\" finds items by text.");
-            }
-            else
-            {
-                Log.Error($"Invalid item \"{arg}\", expected <item>[:<manifest>|:latest] or an item's URL, like 3070715607 or 3070715607:<manifest>. Patterns go after --.");
+                return new UsageException($"Invalid item \"{arg}\", expected an item id or URL, like 3070715607. \"{Help.ExeName} workshop search <app> <text>\" finds items by text.");
             }
 
-            return null;
+            return new UsageException($"Invalid item \"{arg}\", expected <item>[:<manifest>|:latest] or an item's URL, like 3070715607 or 3070715607:<manifest>. Patterns go after --.");
         }
     }
 }

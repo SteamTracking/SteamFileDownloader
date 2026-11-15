@@ -21,69 +21,25 @@ internal static class ArgumentParser
     // Options that can be given more than once
     private static readonly string[] RepeatableOptions = ["include", "exclude"];
 
-    // Options of each command: ones followed by a value, and flags
-    internal static readonly Dictionary<string, (string[] Values, string[] Flags)> CommandOptions = new()
-    {
-        ["get"] = (["output", "branch", "branch-password", "username", "password"], ["anonymous"]),
-        ["download"] = (
-            ["output", "dir", "branch", "branch-password", "os", "osarch", "oscpu", "language", "include", "exclude", "username", "password"],
-            ["lowviolence", "steamdeck", "all-platforms", "all-languages", "anonymous"]),
-        ["ls"] = (["output", "branch", "branch-password", "username", "password"], ["anonymous"]),
-        ["depots"] = (["branch", "branch-password", "username", "password"], ["anonymous"]),
-        ["login"] = (["username", "password"], []),
-        ["login list"] = ([], []),
-        ["login remove"] = ([], []),
-        ["track"] = (["appid", "output", "username", "password", "branch", "branch-password", "manifests"], ["anonymous", "save-manifest", "save-all-manifests"]),
-        ["workshop info"] = (["limit", "username", "password"], ["history", "anonymous"]),
-        ["workshop search"] = (["limit", "username", "password"], ["anonymous"]),
-        ["workshop ls"] = (["output", "username", "password"], ["anonymous"]),
-        ["workshop get"] = (["output", "username", "password"], ["anonymous"]),
-        ["config output"] = ([], ["reset"]),
-    };
-
     /// <summary>
-    /// The command with its subcommand, like "workshop info", when the arguments after it start with one.
+    /// The exception for a command that only groups subcommands, run without one or with one it doesn't have.
     /// </summary>
-    public static string GetCommandName(string command, string[] args)
-    {
-        if (args.Length == 0)
-        {
-            return command;
-        }
-
-        var subcommand = $"{command} {args[0]}";
-
-        return CommandOptions.ContainsKey(subcommand) ? subcommand : command;
-    }
-
-    /// <summary>
-    /// The subcommands of a command, like info and search of workshop.
-    /// </summary>
-    public static string[] GetSubcommands(string command) => [.. CommandOptions.Keys
-        .Where(k => k.StartsWith($"{command} ", StringComparison.Ordinal))
-        .Select(k => k[(command.Length + 1)..])];
-
-    /// <summary>
-    /// The error for a command that only groups subcommands, run without one or with one it doesn't have.
-    /// </summary>
-    public static void ReportUnknownSubcommand(string command, string noun, string[] args, string[] subcommands)
+    public static UsageException UnknownSubcommand(string command, string noun, string[] args, string[] subcommands)
     {
         var expected = string.Join(", ", subcommands);
         var usage = Help.UsageHint(command);
 
         if (args.Length == 0)
         {
-            Log.Error($"{command} needs a {noun}, expected {expected}. {usage}");
+            return new UsageException($"{command} needs a {noun}, expected {expected}. {usage}");
         }
-        else
-        {
-            Log.Error($"Unknown {command} {noun} \"{args[0]}\".{DidYouMean(args[0], subcommands)} Expected {expected}. {usage}");
-        }
+
+        return new UsageException($"Unknown {command} {noun} \"{args[0]}\".{DidYouMean(args[0], subcommands)} Expected {expected}. {usage}");
     }
 
-    public static ParsedArguments? Parse(string command, string[] args)
+    public static ParsedArguments Parse(string command, string[] args)
     {
-        var (valueOptions, flags) = CommandOptions[command];
+        var (valueOptions, flags) = CommandTable.GetOptions(command);
         var options = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var positionals = new List<string>();
         var (optionArgs, patterns) = SplitPatterns(args);
@@ -100,8 +56,7 @@ internal static class ArgumentParser
                 // Options are all double-dash, so a single dash is a mistyped option rather than a target
                 if (arg.Length > 1 && arg[0] == '-')
                 {
-                    Log.Error($"Unknown option \"{arg}\"; options start with --. {optionList} {usage}");
-                    return null;
+                    throw new UsageException($"Unknown option \"{arg}\"; options start with --. {optionList} {usage}");
                 }
 
                 positionals.Add(arg);
@@ -122,8 +77,7 @@ internal static class ArgumentParser
             {
                 if (inlineValue != null)
                 {
-                    Log.Error($"--{name} is a flag and takes no value, got \"{arg}\". {usage}");
-                    return null;
+                    throw new UsageException($"--{name} is a flag and takes no value, got \"{arg}\". {usage}");
                 }
 
                 options[name] = "";
@@ -132,8 +86,7 @@ internal static class ArgumentParser
 
             if (!valueOptions.Contains(name, StringComparer.OrdinalIgnoreCase))
             {
-                Log.Error($"Unknown option \"{arg}\".{DidYouMean(name, valueOptions.Concat(flags), "--")} {optionList} {usage}");
-                return null;
+                throw new UsageException($"Unknown option \"{arg}\".{DidYouMean(name, valueOptions.Concat(flags), "--")} {optionList} {usage}");
             }
 
             var nextIsValue = i + 1 < optionArgs.Length && !optionArgs[i + 1].StartsWith("--", StringComparison.Ordinal);
@@ -145,8 +98,7 @@ internal static class ArgumentParser
             }
             else if (inlineValue != null || !nextIsValue)
             {
-                Log.Error($"--{name} needs a value. {usage}");
-                return null;
+                throw new UsageException($"--{name} needs a value. {usage}");
             }
             else
             {
@@ -155,19 +107,14 @@ internal static class ArgumentParser
 
             if (RepeatableOptions.Contains(name, StringComparer.OrdinalIgnoreCase))
             {
-                if (!AddIds(options, name, value, usage))
-                {
-                    return null;
-                }
-
+                AddIds(options, name, value, usage);
                 continue;
             }
 
             // Keeping only one of them would silently drop the other
             if (!options.TryAdd(name, value))
             {
-                Log.Error($"--{name} is given more than once. {usage}");
-                return null;
+                throw new UsageException($"--{name} is given more than once. {usage}");
             }
         }
 
@@ -175,18 +122,17 @@ internal static class ArgumentParser
 
         if (loginError != null)
         {
-            Log.Error($"{loginError} {usage}");
-            return null;
+            throw new UsageException($"{loginError} {usage}");
         }
 
-        if (options.TryGetValue("output", out var output) && !CheckOutputPath(output, "--output"))
+        if (options.TryGetValue("output", out var output))
         {
-            return null;
+            CheckOutputPath(output, "--output");
         }
 
-        if (options.TryGetValue("dir", out var dir) && !CheckOutputPath(dir, "--dir"))
+        if (options.TryGetValue("dir", out var dir))
         {
-            return null;
+            CheckOutputPath(dir, "--dir");
         }
 
         var install = InstallOptions.From(options);
@@ -194,23 +140,20 @@ internal static class ArgumentParser
 
         if (installError != null)
         {
-            Log.Error($"{installError} {usage}");
-            return null;
+            throw new UsageException($"{installError} {usage}");
         }
 
         return new ParsedArguments(options, positionals, patterns, install);
     }
 
-    // Adds depot or app ids to an option that can be given several times, which keeps them as a comma separated list.
-    // Returns false after printing an error.
-    private static bool AddIds(Dictionary<string, string> options, string name, string value, string usage)
+    // Adds depot or app ids to an option that can be given several times, which keeps them as a comma separated list
+    private static void AddIds(Dictionary<string, string> options, string name, string value, string usage)
     {
         InstallOptions.ParseIds(value, out var invalid);
 
         if (invalid != null)
         {
-            Log.Error($"--{name} needs a depot id or DLC app id, got \"{invalid}\". {usage}");
-            return false;
+            throw new UsageException($"--{name} needs a depot id or DLC app id, got \"{invalid}\". {usage}");
         }
 
         if (options.TryGetValue(name, out var existing))
@@ -219,74 +162,62 @@ internal static class ArgumentParser
         }
 
         options[name] = value;
-        return true;
     }
 
     /// <summary>
-    /// Checks that only patterns follow "--". Returns false after printing an error.
+    /// Checks that only patterns follow "--".
     /// </summary>
-    public static bool CheckPatterns(ParsedArguments parsed)
+    public static void CheckPatterns(ParsedArguments parsed)
     {
         var misplacedOption = parsed.Patterns.FirstOrDefault(static p => p.StartsWith("--", StringComparison.Ordinal));
 
         if (misplacedOption != null)
         {
-            Log.Error($"\"{misplacedOption}\" is after --, which is only for patterns. Put options before --.");
-            return false;
+            throw new UsageException($"\"{misplacedOption}\" is after --, which is only for patterns. Put options before --.");
         }
-
-        return true;
     }
 
     /// <summary>
-    /// Rejects patterns, for commands that take none. Returns false after printing an error.
+    /// Rejects patterns, for commands that take none.
     /// </summary>
-    public static bool NoPatterns(ParsedArguments parsed, string command)
+    public static void NoPatterns(ParsedArguments parsed, string command)
     {
-        if (parsed.Patterns.Count == 0)
+        if (parsed.Patterns.Count > 0)
         {
-            return true;
+            throw new UsageException($"{command} takes no patterns after --. {Help.UsageHint(command)}");
         }
-
-        Log.Error($"{command} takes no patterns after --. {Help.UsageHint(command)}");
-        return false;
     }
 
     /// <summary>
-    /// Rejects positional arguments and patterns, for commands that only take options. Returns false after printing an error.
+    /// Rejects positional arguments and patterns, for commands that only take options.
     /// </summary>
-    public static bool NoPositionals(ParsedArguments parsed, string command)
+    public static void NoPositionals(ParsedArguments parsed, string command)
     {
         if (parsed.Positionals.Count == 0 && parsed.Patterns.Count == 0)
         {
-            return true;
+            return;
         }
 
         var argument = parsed.Positionals.Count > 0 ? parsed.Positionals[0] : "--";
 
-        Log.Error($"Unexpected argument \"{argument}\". {Help.UsageHint(command)}");
-        return false;
+        throw new UsageException($"Unexpected argument \"{argument}\". {Help.UsageHint(command)}");
     }
 
     /// <summary>
     /// Rejects paths like "D:foo" or "\foo", which are relative to a drive's current folder or root. Shells like bash turn
-    /// an unquoted D:\foo\bar into D:foobar, which would silently write somewhere else. Returns false after printing an error.
+    /// an unquoted D:\foo\bar into D:foobar, which would silently write somewhere else.
     /// </summary>
-    public static bool CheckOutputPath(string path, string option)
+    public static void CheckOutputPath(string path, string option)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
-            Log.Error($"{option} needs a folder, got an empty one.");
-            return false;
+            throw new UsageException($"{option} needs a folder, got an empty one.");
         }
 
-        if (!Path.IsPathRooted(path) || Path.IsPathFullyQualified(path))
+        if (Path.IsPathRooted(path) && !Path.IsPathFullyQualified(path))
         {
-            return true;
+            throw new UsageException($"{option} \"{path}\" is relative to the current folder or root of a drive, likely a path whose backslashes the shell removed. Use forward slashes or quotes, like D:/SteamDepots.");
         }
-
-        Log.Error($"{option} \"{path}\" is relative to the current folder or root of a drive, likely a path whose backslashes the shell removed. Use forward slashes or quotes, like D:/SteamDepots.");
-        return false;
     }
 
     /// <summary>

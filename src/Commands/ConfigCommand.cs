@@ -15,31 +15,24 @@ internal sealed record ConfigArguments(string? Value, bool Reset);
 internal static class ConfigCommand
 {
     /// <summary>
-    /// Parses "&lt;setting&gt; [value | --reset]" after "config". Returns null after printing an error.
+    /// Parses "&lt;setting&gt; [value | --reset]" after "config".
     /// </summary>
-    public static ConfigArguments? ParseArguments(string[] args)
+    public static ConfigArguments ParseArguments(string[] args)
     {
-        var command = ArgumentParser.GetCommandName("config", args);
+        var command = CommandTable.GetCommandName("config", args);
 
         if (command == "config")
         {
-            ArgumentParser.ReportUnknownSubcommand("config", "setting", args, ArgumentParser.GetSubcommands("config"));
-            return null;
+            throw ArgumentParser.UnknownSubcommand("config", "setting", args, CommandTable.GetSubcommands("config"));
         }
 
         var parsed = ArgumentParser.Parse(command, args[1..]);
-
-        if (parsed == null)
-        {
-            return null;
-        }
 
         if (parsed.Positionals.Count > 1 || parsed.Patterns.Count > 0)
         {
             var unexpected = parsed.Positionals.Count > 1 ? parsed.Positionals[1] : "--";
 
-            Log.Error($"Unexpected argument \"{unexpected}\"; {command} takes one folder, quoted when it has spaces. {Help.UsageHint(command)}");
-            return null;
+            throw new UsageException($"Unexpected argument \"{unexpected}\"; {command} takes one folder, quoted when it has spaces. {Help.UsageHint(command)}");
         }
 
         var value = parsed.Positionals.FirstOrDefault();
@@ -47,13 +40,12 @@ internal static class ConfigCommand
 
         if (reset && value != null)
         {
-            Log.Error($"--reset clears the saved folder, so it can't be combined with one. {Help.UsageHint(command)}");
-            return null;
+            throw new UsageException($"--reset clears the saved folder, so it can't be combined with one. {Help.UsageHint(command)}");
         }
 
-        if (value != null && !ArgumentParser.CheckOutputPath(value, command))
+        if (value != null)
         {
-            return null;
+            ArgumentParser.CheckOutputPath(value, command);
         }
 
         return new ConfigArguments(value, reset);

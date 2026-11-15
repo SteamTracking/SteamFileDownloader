@@ -2,11 +2,14 @@ namespace SteamFileDownloader.Tests;
 
 public class LoginArgumentsTests
 {
-    private static string? Describe(string commandLine)
-    {
-        var arguments = LoginCommand.ParseArguments(commandLine.Length == 0 ? [] : commandLine.Split(' '));
+    private static LoginArguments Parse(string commandLine) =>
+        LoginCommand.ParseArguments(commandLine.Length == 0 ? [] : commandLine.Split(' '));
 
-        return arguments == null ? null : $"{arguments.Command}|{arguments.Login.Username}|{string.Join(",", arguments.Usernames)}";
+    private static string Describe(string commandLine)
+    {
+        var arguments = Parse(commandLine);
+
+        return $"{arguments.Command}|{arguments.Login.Username}|{string.Join(",", arguments.Usernames)}";
     }
 
     [Test]
@@ -29,15 +32,15 @@ public class LoginArgumentsTests
     [Arguments("remvoe someone", "Unknown login subcommand \"remvoe\". Did you mean remove?")]
     public async Task InvalidCommandLinesAreRejected(string commandLine, string error)
     {
-        await Assert.That(Describe(commandLine)).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains(error);
+        await Assert.That(() => Parse(commandLine)).Throws<UsageException>().WithMessageContaining(error);
     }
 
     [Test]
     public async Task UsernameLikeASubcommandGetsBothHints()
     {
-        await Assert.That(Describe("lisa")).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput().Replace(Help.ExeName, "SFD", StringComparison.Ordinal))
+        var exception = await Assert.That(() => Parse("lisa")).Throws<UsageException>();
+
+        await Assert.That(exception?.Message.Replace(Help.ExeName, "SFD", StringComparison.Ordinal))
             .Contains("Unknown login subcommand \"lisa\". Did you mean list? Expected list, remove. To log in as lisa: SFD login --username lisa. ");
     }
 }

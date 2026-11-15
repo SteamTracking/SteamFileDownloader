@@ -10,8 +10,7 @@ public class DepotArgumentsTests
     {
         var result = DepotArgumentParser.ParseArguments("get", ["730", "2347771", "2347773:latest", "--", "server.dll", "a/b.dll"]);
 
-        await Assert.That(result).IsNotNull();
-        await Assert.That(result!.Command).IsEqualTo("get");
+        await Assert.That(result.Command).IsEqualTo("get");
         await Assert.That(result.Options.App).IsEqualTo(730u);
         await Assert.That(string.Join(",", result.Targets)).IsEqualTo("2347771,2347773:latest");
         await Assert.That(string.Join(",", result.Patterns)).IsEqualTo("server.dll,a/b.dll");
@@ -22,8 +21,7 @@ public class DepotArgumentsTests
     {
         var result = DepotArgumentParser.ParseArguments("get", ["730/2347771", "--", "server.dll"]);
 
-        await Assert.That(result).IsNotNull();
-        await Assert.That(result!.Options.App).IsNull();
+        await Assert.That(result.Options.App).IsNull();
         await Assert.That(string.Join(",", result.Targets)).IsEqualTo("730/2347771");
     }
 
@@ -36,8 +34,7 @@ public class DepotArgumentsTests
     {
         var result = DepotArgumentParser.ParseArguments(command, ["730", .. rest]);
 
-        await Assert.That(result).IsNotNull();
-        await Assert.That(result!.Options.App).IsEqualTo(730u);
+        await Assert.That(result.Options.App).IsEqualTo(730u);
         await Assert.That(result.Targets.Count).IsEqualTo(0);
     }
 
@@ -55,7 +52,7 @@ public class DepotArgumentsTests
     [Test]
     public async Task GetWithoutPatternsTellsHowPatternsPickFiles()
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("get", ["730", "2347771"])).IsNotNull();
+        DepotArgumentParser.ParseArguments("get", ["730", "2347771"]);
 
         var output = TestContext.Current!.GetStandardOutput() + TestContext.Current.GetErrorOutput();
 
@@ -66,7 +63,7 @@ public class DepotArgumentsTests
     [Test]
     public async Task GetWithPatternsHasNoTip()
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("get", ["730", "--", "server.dll"])).IsNotNull();
+        DepotArgumentParser.ParseArguments("get", ["730", "--", "server.dll"]);
 
         var output = TestContext.Current!.GetStandardOutput() + TestContext.Current.GetErrorOutput();
 
@@ -79,15 +76,15 @@ public class DepotArgumentsTests
     [Arguments("ls", new[] { "570/all@beta", "--", "x.dll" }, "\"570/all@beta\" is not a target: without targets, ls takes every depot of the app, like: SFD ls 570 -- x.dll.")]
     public async Task AllIsPointedAtLeavingOutTheTargets(string command, string[] args, string expected)
     {
-        await Assert.That(DepotArgumentParser.ParseArguments(command, args)).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput().Replace(Help.ExeName, "SFD", StringComparison.Ordinal)).Contains(expected);
+        var exception = await Assert.That(() => DepotArgumentParser.ParseArguments(command, args)).Throws<UsageException>();
+
+        await Assert.That(exception?.Message.Replace(Help.ExeName, "SFD", StringComparison.Ordinal)).Contains(expected);
     }
 
     [Test]
     public async Task MisplacedPatternIsMovedAfterTheTargetsOfTheSameApp()
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("get", ["570", "373303", "hammer.dll"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains($"{Help.ExeName} get 570 373303 -- hammer.dll.");
+        await Assert.That(() => DepotArgumentParser.ParseArguments("get", ["570", "373303", "hammer.dll"])).Throws<UsageException>().WithMessageContaining($"{Help.ExeName} get 570 373303 -- hammer.dll.");
     }
 
     [Test]
@@ -96,8 +93,7 @@ public class DepotArgumentsTests
     [Arguments("get", new[] { "x.dll" }, "get <app> -- x.dll")]
     public async Task MisplacedPatternWithoutAppKeepsTheTargetsApps(string command, string[] args, string expected)
     {
-        await Assert.That(DepotArgumentParser.ParseArguments(command, args)).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains($"{Help.ExeName} {expected}.");
+        await Assert.That(() => DepotArgumentParser.ParseArguments(command, args)).Throws<UsageException>().WithMessageContaining($"{Help.ExeName} {expected}.");
     }
 
     [Test]
@@ -117,8 +113,8 @@ public class DepotArgumentsTests
     [Test]
     public async Task AppIdNoTargetUsesIsRejected()
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("get", ["2347771", "730/2347771", "--", "a"])).IsNull();
-        await Assert.That(DepotArgumentParser.ParseArguments("ls", ["2347771", "730/2347771", "570/373303@beta"])).IsNull();
+        await Assert.That(() => DepotArgumentParser.ParseArguments("get", ["2347771", "730/2347771", "--", "a"])).Throws<UsageException>();
+        await Assert.That(() => DepotArgumentParser.ParseArguments("ls", ["2347771", "730/2347771", "570/373303@beta"])).Throws<UsageException>();
     }
 
     [Test]
@@ -126,8 +122,7 @@ public class DepotArgumentsTests
     {
         var result = DepotArgumentParser.ParseArguments("depots", ["730"]);
 
-        await Assert.That(result).IsNotNull();
-        await Assert.That(result!.Options.App).IsEqualTo(730u);
+        await Assert.That(result.Options.App).IsEqualTo(730u);
         await Assert.That(result.Targets.Count).IsEqualTo(0);
     }
 
@@ -136,29 +131,27 @@ public class DepotArgumentsTests
     {
         var result = DepotArgumentParser.ParseArguments("ls", ["730", "2347771", "570/373303"]);
 
-        await Assert.That(result).IsNotNull();
-        await Assert.That(result!.Options.App).IsEqualTo(730u);
+        await Assert.That(result.Options.App).IsEqualTo(730u);
     }
 
     [Test]
     public async Task DepotsNeedsAppIds()
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("depots", [])).IsNull();
-        await Assert.That(DepotArgumentParser.ParseArguments("depots", ["--json"])).IsNull();
-        await Assert.That(DepotArgumentParser.ParseArguments("depots", ["730", "570"])).IsNotNull();
+        await Assert.That(() => DepotArgumentParser.ParseArguments("depots", [])).Throws<UsageException>();
+        await Assert.That(() => DepotArgumentParser.ParseArguments("depots", ["--json"])).Throws<UsageException>();
+        await Assert.That(DepotArgumentParser.ParseArguments("depots", ["730", "570"]).Command).IsEqualTo("depots");
     }
 
     [Test]
     public async Task DepotsHasNoJsonOption()
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("depots", ["730", "--json"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("Unknown option \"--json\"");
+        await Assert.That(() => DepotArgumentParser.ParseArguments("depots", ["730", "--json"])).Throws<UsageException>().WithMessageContaining("Unknown option \"--json\"");
     }
 
     [Test]
     public async Task OptionAfterDoubleDashIsRejected()
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("get", ["730", "1", "--", "a", "--output"])).IsNull();
+        await Assert.That(() => DepotArgumentParser.ParseArguments("get", ["730", "1", "--", "a", "--output"])).Throws<UsageException>();
     }
 
     [Test]
@@ -166,13 +159,11 @@ public class DepotArgumentsTests
     {
         var defaults = DepotArgumentParser.ParseArguments("get", ["730", "1", "--", "a"]);
 
-        await Assert.That(defaults).IsNotNull();
-        await Assert.That(defaults!.Options).IsEqualTo(new DepotOptions(730));
+        await Assert.That(defaults.Options).IsEqualTo(new DepotOptions(730));
 
         var all = DepotArgumentParser.ParseArguments("get", ["730", "1", "--output", "out", "--branch", "beta", "--username", "me"]);
 
-        await Assert.That(all).IsNotNull();
-        await Assert.That(all!.Options).IsEqualTo(new DepotOptions(730, "out", "beta") { Login = new LoginOptions("me") });
+        await Assert.That(all.Options).IsEqualTo(new DepotOptions(730, "out", "beta") { Login = new LoginOptions("me") });
 
         var anonymous = DepotArgumentParser.ParseArguments("get", ["730", "1", "--anonymous"]);
 
@@ -180,7 +171,7 @@ public class DepotArgumentsTests
 
         var install = DepotArgumentParser.ParseArguments("download", ["730", "1", "--dir", "D:/Games/CS2"]);
 
-        await Assert.That(install!.Options.Install.Dir).IsEqualTo("D:/Games/CS2");
+        await Assert.That(install.Options.Install.Dir).IsEqualTo("D:/Games/CS2");
         await Assert.That(install.Options.Output).IsNull();
     }
 
@@ -189,30 +180,27 @@ public class DepotArgumentsTests
     {
         var defaults = DepotArgumentParser.ParseArguments("download", ["730"]);
 
-        await Assert.That(defaults).IsNotNull();
-        await Assert.That(defaults!.Command).IsEqualTo("download");
+        await Assert.That(defaults.Command).IsEqualTo("download");
         await Assert.That(defaults.Options).IsEqualTo(new DepotOptions(730));
 
         var all = DepotArgumentParser.ParseArguments("download", ["730", "1", "2:5", "--os", "Linux", "--osarch", "32", "--language", "French", "--lowviolence", "--branch", "beta"]);
 
-        await Assert.That(all).IsNotNull();
-        await Assert.That(string.Join(",", all!.Targets)).IsEqualTo("1,2:5");
+        await Assert.That(string.Join(",", all.Targets)).IsEqualTo("1,2:5");
         await Assert.That(all.Options).IsEqualTo(new DepotOptions(730, Branch: "beta") { Install = new InstallOptions(Os: "linux", OsArch: "32", Language: "french", LowViolence: true) });
 
         var everything = DepotArgumentParser.ParseArguments("download", ["730", "--all-platforms", "--all-languages"]);
 
-        await Assert.That(everything!.Options.Install).IsEqualTo(new InstallOptions(AllPlatforms: true, AllLanguages: true));
+        await Assert.That(everything.Options.Install).IsEqualTo(new InstallOptions(AllPlatforms: true, AllLanguages: true));
 
         var steamDeck = DepotArgumentParser.ParseArguments("download", ["730", "--steamdeck"]);
 
-        await Assert.That(steamDeck!.Options.Install).IsEqualTo(new InstallOptions(SteamDeck: true));
+        await Assert.That(steamDeck.Options.Install).IsEqualTo(new InstallOptions(SteamDeck: true));
     }
 
     [Test]
     public async Task AllPlatformsCannotBeCombinedWithSteamDeck()
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("download", ["730", "--all-platforms", "--steamdeck"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("--all-platforms can't be combined with --steamdeck.");
+        await Assert.That(() => DepotArgumentParser.ParseArguments("download", ["730", "--all-platforms", "--steamdeck"])).Throws<UsageException>().WithMessageContaining("--all-platforms can't be combined with --steamdeck.");
     }
 
     [Test]
@@ -220,8 +208,7 @@ public class DepotArgumentsTests
     [Arguments("--osarch", "16", "--osarch needs 32 or 64, got \"16\".")]
     public async Task InvalidPlatformValueIsRejected(string option, string value, string expected)
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("download", ["730", option, value])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains(expected);
+        await Assert.That(() => DepotArgumentParser.ParseArguments("download", ["730", option, value])).Throws<UsageException>().WithMessageContaining(expected);
     }
 
     [Test]
@@ -230,8 +217,7 @@ public class DepotArgumentsTests
     [Arguments("--all-languages", "--language", "french", "--all-languages can't be combined with --language.")]
     public async Task ConflictingInstallOptionsAreRejected(string flag, string option, string value, string expected)
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("download", ["730", flag, option, value])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains(expected);
+        await Assert.That(() => DepotArgumentParser.ParseArguments("download", ["730", flag, option, value])).Throws<UsageException>().WithMessageContaining(expected);
     }
 
     [Test]
@@ -239,28 +225,26 @@ public class DepotArgumentsTests
     {
         var parsed = DepotArgumentParser.ParseArguments("download", ["730", "--oscpu", "ARM64"]);
 
-        await Assert.That(parsed!.Options.Install).IsEqualTo(new InstallOptions(OsCpu: "arm64"));
+        await Assert.That(parsed.Options.Install).IsEqualTo(new InstallOptions(OsCpu: "arm64"));
     }
 
     [Test]
     public async Task InvalidOsCpuIsRejected()
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("download", ["730", "--oscpu", "mips"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("--oscpu needs x86 or arm64, got \"mips\".");
+        await Assert.That(() => DepotArgumentParser.ParseArguments("download", ["730", "--oscpu", "mips"])).Throws<UsageException>().WithMessageContaining("--oscpu needs x86 or arm64, got \"mips\".");
     }
 
     [Test]
     public async Task AllPlatformsCannotBeCombinedWithOsCpu()
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("download", ["730", "--all-platforms", "--oscpu", "x86"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("--all-platforms can't be combined with --oscpu.");
+        await Assert.That(() => DepotArgumentParser.ParseArguments("download", ["730", "--all-platforms", "--oscpu", "x86"])).Throws<UsageException>().WithMessageContaining("--all-platforms can't be combined with --oscpu.");
     }
 
     [Test]
     public async Task IncludeAndExcludeCanBeRepeated()
     {
         var parsed = DepotArgumentParser.ParseArguments("download", ["730", "--include", "91", "--exclude", "5", "--include=92,93", "--include", "94"]);
-        var install = parsed!.Options.Install;
+        var install = parsed.Options.Install;
 
         await Assert.That(install.Include).IsEquivalentTo([91u, 92u, 93u, 94u]);
         await Assert.That(install.Exclude).IsEquivalentTo([5u]);
@@ -273,8 +257,7 @@ public class DepotArgumentsTests
     [Arguments("--include", "1,x", "--include needs a depot id or DLC app id, got \"x\".")]
     public async Task InvalidIncludeAndExcludeIdsAreRejected(string option, string value, string expected)
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("download", ["730", option, value])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains(expected);
+        await Assert.That(() => DepotArgumentParser.ParseArguments("download", ["730", option, value])).Throws<UsageException>().WithMessageContaining(expected);
     }
 
     [Test]
@@ -282,22 +265,22 @@ public class DepotArgumentsTests
     [Arguments("--exclude")]
     public async Task IncludeAndExcludeCannotBeCombinedWithDepotTargets(string option)
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("download", ["730", "1", option, "2"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("can't be combined with depots as targets");
+        await Assert.That(() => DepotArgumentParser.ParseArguments("download", ["730", "1", option, "2"])).Throws<UsageException>().WithMessageContaining("can't be combined with depots as targets");
     }
 
     [Test]
     public async Task IncludeIsOnlyForDownload()
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("get", ["730", "1", "--include", "2"])).IsNull();
+        await Assert.That(() => DepotArgumentParser.ParseArguments("get", ["730", "1", "--include", "2"])).Throws<UsageException>();
     }
 
     [Test]
     public async Task DownloadNeedsAnAppFirst()
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("download", [])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput().Replace(Help.ExeName, "SFD", StringComparison.Ordinal)).Contains("download needs an app id, the number in the app's store page URL, like: SFD download <app>.");
-        await Assert.That(DepotArgumentParser.ParseArguments("download", ["1"])).IsNotNull();
+        var exception = await Assert.That(() => DepotArgumentParser.ParseArguments("download", [])).Throws<UsageException>();
+
+        await Assert.That(exception?.Message.Replace(Help.ExeName, "SFD", StringComparison.Ordinal)).Contains("download needs an app id, the number in the app's store page URL, like: SFD download <app>.");
+        await Assert.That(DepotArgumentParser.ParseArguments("download", ["1"]).Command).IsEqualTo("download");
     }
 
     [Test]
@@ -305,21 +288,19 @@ public class DepotArgumentsTests
     [Arguments("373303@beta")]
     public async Task DownloadTargetsAreDepotsOfItsApp(string target)
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("download", ["730", "1", target])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("names an app or branch.");
+        await Assert.That(() => DepotArgumentParser.ParseArguments("download", ["730", "1", target])).Throws<UsageException>().WithMessageContaining("names an app or branch.");
     }
 
     [Test]
     public async Task DownloadHasNoPatterns()
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("download", ["730", "--", "server.dll"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("download takes no patterns after --.");
+        await Assert.That(() => DepotArgumentParser.ParseArguments("download", ["730", "--", "server.dll"])).Throws<UsageException>().WithMessageContaining("download takes no patterns after --.");
     }
 
     [Test]
     public async Task DownloadWithoutPatternsHasNoEveryFileTip()
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("download", ["730", "1"])).IsNotNull();
+        DepotArgumentParser.ParseArguments("download", ["730", "1"]);
 
         var output = TestContext.Current!.GetStandardOutput() + TestContext.Current.GetErrorOutput();
 
@@ -329,9 +310,9 @@ public class DepotArgumentsTests
     [Test]
     public async Task GetHasNoInstallOptions()
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("get", ["730", "1", "--install-dir", "D:/Games/CS2"])).IsNull();
-        await Assert.That(DepotArgumentParser.ParseArguments("get", ["730", "1", "--dir", "D:/Games/CS2"])).IsNull();
-        await Assert.That(DepotArgumentParser.ParseArguments("get", ["730", "1", "--os", "linux"])).IsNull();
+        await Assert.That(() => DepotArgumentParser.ParseArguments("get", ["730", "1", "--install-dir", "D:/Games/CS2"])).Throws<UsageException>();
+        await Assert.That(() => DepotArgumentParser.ParseArguments("get", ["730", "1", "--dir", "D:/Games/CS2"])).Throws<UsageException>();
+        await Assert.That(() => DepotArgumentParser.ParseArguments("get", ["730", "1", "--os", "linux"])).Throws<UsageException>();
     }
 
     [Test]
@@ -341,7 +322,7 @@ public class DepotArgumentsTests
     [Arguments("ls", "--json")]
     public async Task OptionsOfOtherCommandsAreRejected(string command, string option)
     {
-        await Assert.That(DepotArgumentParser.ParseArguments(command, ["730", "1", option])).IsNull();
+        await Assert.That(() => DepotArgumentParser.ParseArguments(command, ["730", "1", option])).Throws<UsageException>();
     }
 
     [Test]
@@ -362,7 +343,14 @@ public class DepotArgumentsTests
     {
         var args = commandLine.Split(' ');
 
-        await Assert.That(DepotArgumentParser.ParseArguments(args[0], args[1..]) != null).IsEqualTo(accepted);
+        if (accepted)
+        {
+            await Assert.That(() => DepotArgumentParser.ParseArguments(args[0], args[1..])).ThrowsNothing();
+        }
+        else
+        {
+            await Assert.That(() => DepotArgumentParser.ParseArguments(args[0], args[1..])).Throws<UsageException>();
+        }
     }
 
     [Test]
@@ -468,35 +456,32 @@ public class DepotArgumentsTests
     [Test]
     public async Task NoAppAndNoTargetsGivesAnExample()
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("ls", [])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("ls needs an app id, ").And.Contains($"{Help.ExeName} ls <app>.");
+        var exception = await Assert.That(() => DepotArgumentParser.ParseArguments("ls", [])).Throws<UsageException>();
+
+        await Assert.That(exception?.Message).Contains("ls needs an app id, ").And.Contains($"{Help.ExeName} ls <app>.");
     }
 
     [Test]
     public async Task PatternsWithoutDoubleDashArePointedOut()
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("get", ["730", "2347771", "server.dll"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("\"server.dll\" is not a target; patterns go after --");
+        await Assert.That(() => DepotArgumentParser.ParseArguments("get", ["730", "2347771", "server.dll"])).Throws<UsageException>().WithMessageContaining("\"server.dll\" is not a target; patterns go after --");
     }
 
     [Test]
     public async Task AppIdNoTargetUsesNamesTheTarget()
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("ls", ["2347771", "730/2347773/55"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("\"730/2347773/55\" reads as app 730 and depot 2347773, so the app id 2347771 is unused");
+        await Assert.That(() => DepotArgumentParser.ParseArguments("ls", ["2347771", "730/2347773/55"])).Throws<UsageException>().WithMessageContaining("\"730/2347773/55\" reads as app 730 and depot 2347773, so the app id 2347771 is unused");
     }
 
     [Test]
     public async Task DepotsNamesTheNonNumericAppId()
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("depots", ["cs2"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("\"cs2\" is not an app id");
+        await Assert.That(() => DepotArgumentParser.ParseArguments("depots", ["cs2"])).Throws<UsageException>().WithMessageContaining("\"cs2\" is not an app id");
     }
 
     [Test]
     public async Task DepotsRejectsPatterns()
     {
-        await Assert.That(DepotArgumentParser.ParseArguments("depots", ["730", "--", "server.dll"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("depots takes no patterns after --");
+        await Assert.That(() => DepotArgumentParser.ParseArguments("depots", ["730", "--", "server.dll"])).Throws<UsageException>().WithMessageContaining("depots takes no patterns after --");
     }
 }

@@ -9,8 +9,7 @@ public class DepotDownloaderArgumentsTests
     {
         var result = DepotDownloaderArguments.Parse(["-app", "730"]);
 
-        await Assert.That(result).IsNotNull();
-        await Assert.That(result!.Command).IsEqualTo("download");
+        await Assert.That(result.Command).IsEqualTo("download");
         await Assert.That(result.Options.App).IsEqualTo(730u);
         await Assert.That(result.Targets.Count).IsEqualTo(0);
         await Assert.That(result.Patterns.Count).IsEqualTo(0);
@@ -21,8 +20,7 @@ public class DepotDownloaderArgumentsTests
     {
         var result = DepotDownloaderArguments.Parse(["-app", "730", "-depot", "1", "-manifest", "11", "-depot", "2", "-depot", "3", "-manifest", "33"]);
 
-        await Assert.That(result).IsNotNull();
-        await Assert.That(string.Join(",", result!.Targets)).IsEqualTo("1:11,2:33,3");
+        await Assert.That(string.Join(",", result.Targets)).IsEqualTo("1:11,2:33,3");
     }
 
     [Test]
@@ -30,15 +28,14 @@ public class DepotDownloaderArgumentsTests
     {
         var result = DepotDownloaderArguments.Parse(["-APP", "730", "-Depot", "1"]);
 
-        await Assert.That(result).IsNotNull();
-        await Assert.That(string.Join(",", result!.Targets)).IsEqualTo("1");
+        await Assert.That(string.Join(",", result.Targets)).IsEqualTo("1");
     }
 
     [Test]
     public async Task MoreManifestsThanDepotsIsAnError()
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-manifest", "5"])).IsNull();
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-depot", "1", "-manifest", "5", "-manifest", "6"])).IsNull();
+        await Assert.That(() => DepotDownloaderArguments.Parse(["-app", "730", "-manifest", "5"])).Throws<UsageException>();
+        await Assert.That(() => DepotDownloaderArguments.Parse(["-app", "730", "-depot", "1", "-manifest", "5", "-manifest", "6"])).Throws<UsageException>();
     }
 
     [Test]
@@ -48,8 +45,7 @@ public class DepotDownloaderArgumentsTests
     {
         var result = DepotDownloaderArguments.Parse(["-pubfile", "3070715607", .. manifestOnly ? new[] { "-manifest-only" } : []]);
 
-        await Assert.That(result).IsNotNull();
-        await Assert.That(result!.Command).IsEqualTo(command);
+        await Assert.That(result.Command).IsEqualTo(command);
         await Assert.That(result.Targets).IsEquivalentTo(["3070715607"]);
     }
 
@@ -58,8 +54,7 @@ public class DepotDownloaderArgumentsTests
     {
         var result = DepotDownloaderArguments.Parse(["-app", "730", "-ugc", "8344780363095656278"]);
 
-        await Assert.That(result).IsNotNull();
-        await Assert.That(result!.Command).IsEqualTo("download");
+        await Assert.That(result.Command).IsEqualTo("download");
         await Assert.That(result.Targets).IsEquivalentTo(["730:8344780363095656278"]);
     }
 
@@ -68,7 +63,7 @@ public class DepotDownloaderArgumentsTests
     {
         var result = DepotDownloaderArguments.Parse(["-app", "730", "-ugc", "8344780363095656278"]);
 
-        await Assert.That(result!.Options.ManifestNotFoundHint).IsEqualTo("If 8344780363095656278 is a workshop item id, use -pubfile instead of -ugc.");
+        await Assert.That(result.Options.ManifestNotFoundHint).IsEqualTo("If 8344780363095656278 is a workshop item id, use -pubfile instead of -ugc.");
         await Assert.That(result.Options.ItemNotFoundHint).IsNull();
     }
 
@@ -77,7 +72,7 @@ public class DepotDownloaderArgumentsTests
     {
         var result = DepotDownloaderArguments.Parse(["-pubfile", "8344780363095656278"]);
 
-        await Assert.That(result!.Options.ItemNotFoundHint).IsEqualTo("If 8344780363095656278 is a UGC id, use -ugc instead of -pubfile.");
+        await Assert.That(result.Options.ItemNotFoundHint).IsEqualTo("If 8344780363095656278 is a UGC id, use -ugc instead of -pubfile.");
         await Assert.That(result.Options.ManifestNotFoundHint).IsNull();
     }
 
@@ -86,7 +81,7 @@ public class DepotDownloaderArgumentsTests
     {
         var result = DepotDownloaderArguments.Parse(["-app", "730", "-depot", "731"]);
 
-        await Assert.That(result!.Options.ItemNotFoundHint).IsNull();
+        await Assert.That(result.Options.ItemNotFoundHint).IsNull();
         await Assert.That(result.Options.ManifestNotFoundHint).IsNull();
     }
 
@@ -99,14 +94,14 @@ public class DepotDownloaderArgumentsTests
     [Arguments("-pubfile 0")]
     public async Task WorkshopOptionsThatConflictAreErrors(string commandLine)
     {
-        await Assert.That(DepotDownloaderArguments.Parse(commandLine.Split(' '))).IsNull();
+        await Assert.That(() => DepotDownloaderArguments.Parse(commandLine.Split(' '))).Throws<UsageException>();
     }
 
     [Test]
     public async Task MissingAppIsAnError()
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["-depot", "1"])).IsNull();
-        await Assert.That(DepotDownloaderArguments.Parse([])).IsNull();
+        await Assert.That(() => DepotDownloaderArguments.Parse(["-depot", "1"])).Throws<UsageException>();
+        await Assert.That(() => DepotDownloaderArguments.Parse([])).Throws<UsageException>();
     }
 
     [Test]
@@ -123,8 +118,8 @@ public class DepotDownloaderArgumentsTests
     [Arguments("-betapassword")]
     public async Task OptionWithoutValueIsAnError(string option)
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", option])).IsNull();
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", option, "-manifest-only"])).IsNull();
+        await Assert.That(() => DepotDownloaderArguments.Parse(["-app", "730", option])).Throws<UsageException>();
+        await Assert.That(() => DepotDownloaderArguments.Parse(["-app", "730", option, "-manifest-only"])).Throws<UsageException>();
     }
 
     [Test]
@@ -138,7 +133,7 @@ public class DepotDownloaderArgumentsTests
     {
         var args = option == "-app" ? new[] { option, value } : ["-app", "730", option, value];
 
-        await Assert.That(DepotDownloaderArguments.Parse(args)).IsNull();
+        await Assert.That(() => DepotDownloaderArguments.Parse(args)).Throws<UsageException>();
     }
 
     [Test]
@@ -146,16 +141,15 @@ public class DepotDownloaderArgumentsTests
     {
         var result = DepotDownloaderArguments.Parse(["-app", "730", "-depot", "1", "-manifest-only"]);
 
-        await Assert.That(result).IsNotNull();
-        await Assert.That(result!.Command).IsEqualTo("ls");
+        await Assert.That(result.Command).IsEqualTo("ls");
     }
 
     [Test]
     public async Task BranchAndBetaSetTheBranch()
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-branch", "dev"])!.Options.Branch).IsEqualTo("dev");
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-beta", "dev"])!.Options.Branch).IsEqualTo("dev");
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730"])!.Options.Branch).IsEqualTo("public");
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-branch", "dev"]).Options.Branch).IsEqualTo("dev");
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-beta", "dev"]).Options.Branch).IsEqualTo("dev");
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730"]).Options.Branch).IsEqualTo("public");
     }
 
     [Test]
@@ -165,23 +159,22 @@ public class DepotDownloaderArgumentsTests
     {
         var result = DepotDownloaderArguments.Parse(["-app", "730", "-branch", "dev", option, "secret"]);
 
-        await Assert.That(result!.Options.BranchPassword).IsEqualTo("secret");
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730"])!.Options.BranchPassword).IsNull();
+        await Assert.That(result.Options.BranchPassword).IsEqualTo("secret");
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730"]).Options.BranchPassword).IsNull();
     }
 
     [Test]
     public async Task UsernameIsKept()
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-username", "me"])!.Options.Login.Username).IsEqualTo("me");
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-user", "me"])!.Options.Login.Username).IsEqualTo("me");
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-username", "me"]).Options.Login.Username).IsEqualTo("me");
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-user", "me"]).Options.Login.Username).IsEqualTo("me");
     }
 
     [Test]
     public async Task PasswordIsKeptWithAUsername()
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-username", "me", "-password", "x"])!.Options.Login).IsEqualTo(new LoginOptions("me", "x"));
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-password", "x"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("-password needs -username.");
+        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-username", "me", "-password", "x"]).Options.Login).IsEqualTo(new LoginOptions("me", "x"));
+        await Assert.That(() => DepotDownloaderArguments.Parse(["-app", "730", "-password", "x"])).Throws<UsageException>().WithMessageContaining("-password needs -username.");
     }
 
     [Test]
@@ -191,42 +184,41 @@ public class DepotDownloaderArgumentsTests
     [Arguments("-cellid")]
     public async Task OtherDepotDownloaderOptionsAreUnsupported(string option)
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", option])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains($"Unsupported option {option}.");
+        await Assert.That(() => DepotDownloaderArguments.Parse(["-app", "730", option])).Throws<UsageException>().WithMessageContaining($"Unsupported option {option}.");
     }
 
     [Test]
     public async Task UnsupportedOptionWithAValueIsAnError()
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-max-downloads", "8"])).IsNull();
+        await Assert.That(() => DepotDownloaderArguments.Parse(["-app", "730", "-max-downloads", "8"])).Throws<UsageException>();
     }
 
     [Test]
     public async Task MistypedOptionSuggestsASupportedOne()
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-mainfest", "5"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("Unsupported option -mainfest. Did you mean -manifest?");
+        await Assert.That(() => DepotDownloaderArguments.Parse(["-app", "730", "-mainfest", "5"])).Throws<UsageException>().WithMessageContaining("Unsupported option -mainfest. Did you mean -manifest?");
     }
 
     [Test]
     public async Task UnsupportedOptionWithoutACloseNameHasNoSuggestion()
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-zzzzzzzz"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("Unsupported option -zzzzzzzz.").And.DoesNotContain("Did you mean");
+        var exception = await Assert.That(() => DepotDownloaderArguments.Parse(["-app", "730", "-zzzzzzzz"])).Throws<UsageException>();
+
+        await Assert.That(exception?.Message).Contains("Unsupported option -zzzzzzzz.").And.DoesNotContain("Did you mean");
     }
 
     [Test]
     public async Task FilelistIsRejectedWithAHintToUseGet()
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-filelist", "files.txt"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("download has no file patterns, so -filelist is not supported.").And.Contains("get <app>/<depot> -- <pattern>...");
+        var exception = await Assert.That(() => DepotDownloaderArguments.Parse(["-app", "730", "-filelist", "files.txt"])).Throws<UsageException>();
+
+        await Assert.That(exception?.Message).Contains("download has no file patterns, so -filelist is not supported.").And.Contains("get <app>/<depot> -- <pattern>...");
     }
 
     [Test]
     public async Task FilelistWithoutAValueIsRejectedToo()
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-filelist"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("-filelist is not supported.");
+        await Assert.That(() => DepotDownloaderArguments.Parse(["-app", "730", "-filelist"])).Throws<UsageException>().WithMessageContaining("-filelist is not supported.");
     }
 
     [Test]
@@ -234,8 +226,7 @@ public class DepotDownloaderArgumentsTests
     {
         var result = DepotDownloaderArguments.Parse(["-app", "730", "-os", "Linux", "-osarch", "32", "-language", "French", "-lowviolence"]);
 
-        await Assert.That(result).IsNotNull();
-        await Assert.That(result!.Command).IsEqualTo("download");
+        await Assert.That(result.Command).IsEqualTo("download");
         await Assert.That(result.Options.Install).IsEqualTo(new InstallOptions(Os: "linux", OsArch: "32", Language: "french", LowViolence: true));
     }
 
@@ -244,8 +235,7 @@ public class DepotDownloaderArgumentsTests
     {
         var result = DepotDownloaderArguments.Parse(["-app", "730", "-all-platforms", "-all-languages", "-depot", "1"]);
 
-        await Assert.That(result).IsNotNull();
-        await Assert.That(result!.Options.Install).IsEqualTo(new InstallOptions(AllPlatforms: true, AllLanguages: true));
+        await Assert.That(result.Options.Install).IsEqualTo(new InstallOptions(AllPlatforms: true, AllLanguages: true));
         await Assert.That(result.Targets).IsEquivalentTo(["1"]);
     }
 
@@ -254,15 +244,13 @@ public class DepotDownloaderArgumentsTests
     [Arguments("-osarch", "16")]
     public async Task InvalidPlatformValueIsAnError(string option, string value)
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", option, value])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains($"{option} needs ");
+        await Assert.That(() => DepotDownloaderArguments.Parse(["-app", "730", option, value])).Throws<UsageException>().WithMessageContaining($"{option} needs ");
     }
 
     [Test]
     public async Task AllPlatformsCannotBeCombinedWithOs()
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-all-platforms", "-os", "linux"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("-all-platforms can't be combined with -os or -osarch.");
+        await Assert.That(() => DepotDownloaderArguments.Parse(["-app", "730", "-all-platforms", "-os", "linux"])).Throws<UsageException>().WithMessageContaining("-all-platforms can't be combined with -os or -osarch.");
     }
 
     [Test]
@@ -271,9 +259,9 @@ public class DepotDownloaderArgumentsTests
         var install = DepotDownloaderArguments.Parse(["-app", "730", "-dir", "out"]);
         var list = DepotDownloaderArguments.Parse(["-app", "730", "-dir", "out", "-manifest-only"]);
 
-        await Assert.That(install!.Options.Install.Dir).IsEqualTo("out");
+        await Assert.That(install.Options.Install.Dir).IsEqualTo("out");
         await Assert.That(install.Options.Output).IsNull();
-        await Assert.That(list!.Command).IsEqualTo("ls");
+        await Assert.That(list.Command).IsEqualTo("ls");
         await Assert.That(list.Options.Output).IsEqualTo("out");
         await Assert.That(list.Options.Install.Dir).IsNull();
     }
@@ -283,7 +271,7 @@ public class DepotDownloaderArgumentsTests
     [Arguments("  ")]
     public async Task EmptyDirIsAnError(string dir)
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-dir", dir])).IsNull();
+        await Assert.That(() => DepotDownloaderArguments.Parse(["-app", "730", "-dir", dir])).Throws<UsageException>();
     }
 
     [Test]
@@ -295,28 +283,28 @@ public class DepotDownloaderArgumentsTests
     [RunOn(OS.Windows)]
     public async Task DirIsCheckedForDriveRelativePaths(string dir, bool accepted)
     {
-        var result = DepotDownloaderArguments.Parse(["-app", "730", "-dir", dir]);
-
-        await Assert.That(result != null).IsEqualTo(accepted);
-
         if (accepted)
         {
-            await Assert.That(result!.Options.Install.Dir).IsEqualTo(dir);
+            var result = DepotDownloaderArguments.Parse(["-app", "730", "-dir", dir]);
+
+            await Assert.That(result.Options.Install.Dir).IsEqualTo(dir);
+        }
+        else
+        {
+            await Assert.That(() => DepotDownloaderArguments.Parse(["-app", "730", "-dir", dir])).Throws<UsageException>().WithMessageContaining(dir);
         }
     }
 
     [Test]
     public async Task DoubleDashArgumentIsRejected()
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["--app", "730"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("dd takes DepotDownloader's single-dash options, like -app 730.");
+        await Assert.That(() => DepotDownloaderArguments.Parse(["--app", "730"])).Throws<UsageException>().WithMessageContaining("dd takes DepotDownloader's single-dash options, like -app 730.");
     }
 
     [Test]
     public async Task BareValueIsRejected()
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["730"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("Unexpected argument \"730\"; dd takes options like -app 730.");
+        await Assert.That(() => DepotDownloaderArguments.Parse(["730"])).Throws<UsageException>().WithMessageContaining("Unexpected argument \"730\"; dd takes options like -app 730.");
     }
 
     [Test]
@@ -324,29 +312,25 @@ public class DepotDownloaderArgumentsTests
     [Arguments("-user")]
     public async Task UsernameNeedsAValue(string option)
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", option])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains($"{option} needs a value.");
+        await Assert.That(() => DepotDownloaderArguments.Parse(["-app", "730", option])).Throws<UsageException>().WithMessageContaining($"{option} needs a value.");
     }
 
     [Test]
     public async Task ZeroDepotIsRejected()
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-depot", "0"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("-depot needs a nonzero depot id, got \"0\".");
+        await Assert.That(() => DepotDownloaderArguments.Parse(["-app", "730", "-depot", "0"])).Throws<UsageException>().WithMessageContaining("-depot needs a nonzero depot id, got \"0\".");
     }
 
     [Test]
     public async Task NonNumericDepotIsRejected()
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-depot", "abc"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("-depot needs a numeric id, got \"abc\".");
+        await Assert.That(() => DepotDownloaderArguments.Parse(["-app", "730", "-depot", "abc"])).Throws<UsageException>().WithMessageContaining("-depot needs a numeric id, got \"abc\".");
     }
 
     [Test]
     public async Task ZeroManifestIsRejected()
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", "-depot", "1", "-manifest", "0"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("-manifest needs a nonzero manifest id, got \"0\".");
+        await Assert.That(() => DepotDownloaderArguments.Parse(["-app", "730", "-depot", "1", "-manifest", "0"])).Throws<UsageException>().WithMessageContaining("-manifest needs a nonzero manifest id, got \"0\".");
     }
 
     [Test]
@@ -354,14 +338,14 @@ public class DepotDownloaderArgumentsTests
     [Arguments("-pubfile", "item")]
     public async Task ZeroWorkshopIdIsRejected(string option, string kind)
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["-app", "730", option, "0"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains($"{option} needs a nonzero {kind} id, got \"0\".");
+        await Assert.That(() => DepotDownloaderArguments.Parse(["-app", "730", option, "0"])).Throws<UsageException>().WithMessageContaining($"{option} needs a nonzero {kind} id, got \"0\".");
     }
 
     [Test]
     public async Task MissingAppShowsAnExample()
     {
-        await Assert.That(DepotDownloaderArguments.Parse(["-depot", "1"])).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("dd needs -app <app>, like: ").And.Contains("dd -app 730 -depot 2347771.");
+        var exception = await Assert.That(() => DepotDownloaderArguments.Parse(["-depot", "1"])).Throws<UsageException>();
+
+        await Assert.That(exception?.Message).Contains("dd needs -app <app>, like: ").And.Contains("dd -app 730 -depot 2347771.");
     }
 }

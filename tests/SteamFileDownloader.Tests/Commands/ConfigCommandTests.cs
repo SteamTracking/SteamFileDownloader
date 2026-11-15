@@ -2,11 +2,14 @@ namespace SteamFileDownloader.Tests;
 
 public class ConfigCommandTests
 {
-    private static string? Describe(string commandLine)
-    {
-        var arguments = ConfigCommand.ParseArguments(commandLine.Length == 0 ? [] : commandLine.Split(' '));
+    private static ConfigArguments Parse(string commandLine) =>
+        ConfigCommand.ParseArguments(commandLine.Length == 0 ? [] : commandLine.Split(' '));
 
-        return arguments == null ? null : $"{arguments.Value}|{arguments.Reset}";
+    private static string Describe(string commandLine)
+    {
+        var arguments = Parse(commandLine);
+
+        return $"{arguments.Value}|{arguments.Reset}";
     }
 
     [Test]
@@ -30,16 +33,14 @@ public class ConfigCommandTests
     [Arguments("output --reset=1", "--reset is a flag and takes no value")]
     public async Task InvalidCommandLinesAreRejected(string commandLine, string error)
     {
-        await Assert.That(Describe(commandLine)).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains(error);
+        await Assert.That(() => Parse(commandLine)).Throws<UsageException>().WithMessageContaining(error);
     }
 
     [Test]
     [RunOn(TUnit.Core.Enums.OS.Windows)]
     public async Task FolderGetsTheChecksOfOutput()
     {
-        await Assert.That(Describe("output C:foo")).IsNull();
-        await Assert.That(TestContext.Current!.GetErrorOutput()).Contains("config output \"C:foo\" is relative to the current folder or root of a drive");
+        await Assert.That(() => Parse("output C:foo")).Throws<UsageException>().WithMessageContaining("config output \"C:foo\" is relative to the current folder or root of a drive");
     }
 
     [Test]

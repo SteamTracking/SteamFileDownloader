@@ -36,9 +36,9 @@ internal static class DepotDownloaderArguments
     ];
 
     /// <summary>
-    /// Returns the arguments of the download or ls command it runs as, or null after printing an error.
+    /// Returns the arguments of the download or ls command it runs as.
     /// </summary>
-    public static DepotArguments? Parse(string[] args)
+    public static DepotArguments Parse(string[] args)
     {
         var depots = new List<string>();
         var manifests = new List<string>();
@@ -61,12 +61,12 @@ internal static class DepotDownloaderArguments
 
             if (args[i].StartsWith("--", StringComparison.Ordinal))
             {
-                return Fail("dd takes DepotDownloader's single-dash options, like -app 730.");
+                throw Fail("dd takes DepotDownloader's single-dash options, like -app 730.");
             }
 
             if (!args[i].StartsWith('-'))
             {
-                return Fail($"Unexpected argument \"{args[i]}\"; dd takes options like -app 730.");
+                throw Fail($"Unexpected argument \"{args[i]}\"; dd takes options like -app 730.");
             }
 
             switch (name)
@@ -84,20 +84,20 @@ internal static class DepotDownloaderArguments
                     install = install with { LowViolence = true };
                     continue;
                 case "-filelist":
-                    return Fail($"download has no file patterns, so -filelist is not supported. To get some files, use {Help.ExeName} get <app>/<depot> -- <pattern>...");
+                    throw Fail($"download has no file patterns, so -filelist is not supported. To get some files, use {Help.ExeName} get <app>/<depot> -- <pattern>...");
                 case "-app" or "-depot" or "-manifest" or "-pubfile" or "-ugc" or "-dir" or "-branch" or "-beta" or "-branchpassword"
                     or "-betapassword" or "-username" or "-user" or "-password" or "-os" or "-osarch" or "-language" when value == null:
-                    return Fail($"{args[i]} needs a value.");
+                    throw Fail($"{args[i]} needs a value.");
                 case "-app":
                     if (!uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var appID))
                     {
-                        return Fail($"-app needs a numeric app id, got \"{value}\".");
+                        throw Fail($"-app needs a numeric app id, got \"{value}\".");
                     }
 
                     app = appID;
                     break;
                 case "-depot" or "-manifest" or "-pubfile" or "-ugc" when InvalidId(name, value) is { } invalid:
-                    return Fail(invalid);
+                    throw Fail(invalid);
                 case "-pubfile":
                     pubfile = value;
                     break;
@@ -111,11 +111,7 @@ internal static class DepotDownloaderArguments
                     manifests.Add(value);
                     break;
                 case "-dir":
-                    if (!ArgumentParser.CheckOutputPath(value, "-dir"))
-                    {
-                        return null;
-                    }
-
+                    ArgumentParser.CheckOutputPath(value, "-dir");
                     dir = value;
                     break;
                 case "-os":
@@ -142,7 +138,7 @@ internal static class DepotDownloaderArguments
                 default:
                     var suggestion = ArgumentParser.DidYouMean(name[1..], SupportedOptions, "-");
 
-                    return Fail($"Unsupported option {args[i]}.{suggestion}");
+                    throw Fail($"Unsupported option {args[i]}.{suggestion}");
             }
 
             i++;
@@ -152,14 +148,14 @@ internal static class DepotDownloaderArguments
 
         if (loginError != null)
         {
-            return Fail(loginError);
+            throw Fail(loginError);
         }
 
         var installError = install.Validate("-");
 
         if (installError != null)
         {
-            return Fail(installError);
+            throw Fail(installError);
         }
 
         var hasItem = pubfile != null || ugc != null;
@@ -169,12 +165,12 @@ internal static class DepotDownloaderArguments
         {
             var itemOption = pubfile != null ? "-pubfile" : "-ugc";
 
-            return Fail($"{itemOption} downloads a workshop item, so it can't be combined with -depot or -manifest.");
+            throw Fail($"{itemOption} downloads a workshop item, so it can't be combined with -depot or -manifest.");
         }
 
         if (pubfile != null && ugc != null)
         {
-            return Fail("-pubfile and -ugc each name a workshop item, give one of them.");
+            throw Fail("-pubfile and -ugc each name a workshop item, give one of them.");
         }
 
         // The item's files go to the workshop folder, like with workshop get, and its app doesn't matter
@@ -187,12 +183,12 @@ internal static class DepotDownloaderArguments
 
         if (app == null)
         {
-            return Fail($"dd needs -app <app>, like: {Help.ExeName} dd -app 730 -depot 2347771.");
+            throw Fail($"dd needs -app <app>, like: {Help.ExeName} dd -app 730 -depot 2347771.");
         }
 
         if (manifests.Count > depots.Count)
         {
-            return Fail("Each -manifest needs a -depot before it.");
+            throw Fail("Each -manifest needs a -depot before it.");
         }
 
         // A UGC id is a manifest of the depot with the app's id. Without -depot, DepotDownloader takes every depot of
@@ -232,11 +228,7 @@ internal static class DepotDownloaderArguments
         };
     }
 
-    private static DepotArguments? Fail(string message)
-    {
-        Log.Error($"{message} {Help.UsageHint("dd")}");
-        return null;
-    }
+    private static UsageException Fail(string message) => new($"{message} {Help.UsageHint("dd")}");
 
     // Why the value of an id option is invalid, or null for a nonzero number that fits the id
     private static string? InvalidId(string option, string value)

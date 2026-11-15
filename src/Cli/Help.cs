@@ -749,39 +749,43 @@ internal static class Help
     {
         if (args.Length == 0 || IsHelp(args[0]) || args[0] == "help")
         {
-            var command = args.Length > 1 && !IsHelp(args[1]) ? GetCommandName(args[1..]) : null;
-            Console.WriteLine(GetCommandHelp(command) ?? Overview);
+            var helpCommand = args.Length > 1 && !IsHelp(args[1]) ? CommandTable.Resolve(args[1..]) : null;
+            Console.WriteLine(helpCommand?.GetHelp() ?? Overview);
             return ExitCodes.Ok;
         }
 
-        var name = GetCommandName(args);
-        var commandHelp = GetCommandHelp(name);
-        var bare = args.Length == name.Count(static c => c == ' ') + 1;
+        var command = CommandTable.Resolve(args);
 
-        // --help anywhere before the patterns, and commands that only group subcommands
+        // --help anywhere before the patterns
         var asksForHelp = Array.Exists(ArgumentParser.SplitPatterns(args).Options, IsHelp);
-        var onlyGroupsSubcommands = bare && name is "workshop" or "config" or "login remove";
 
-        if (asksForHelp || onlyGroupsSubcommands)
+        if (command == null)
         {
-            Console.WriteLine(commandHelp ?? Overview);
+            if (!asksForHelp)
+            {
+                return null;
+            }
+
+            Console.WriteLine(Overview);
             return ExitCodes.Ok;
         }
 
-        if (commandHelp == null || !bare)
+        var bare = args.Length == command.Name.AsSpan().Count(' ') + 1;
+
+        if (asksForHelp || (bare && command.Bare == BareInvocation.PrintHelp))
+        {
+            Console.WriteLine(command.GetHelp());
+            return ExitCodes.Ok;
+        }
+
+        if (!bare || command.Bare == BareInvocation.Run)
         {
             return null;
         }
 
-        // Commands that need no arguments run bare instead
-        if (name is "login" or "login list" or "config output")
-        {
-            return null;
-        }
+        Console.Error.WriteLine(GetShortUsage(command.Name, command.GetHelp()));
 
-        Console.Error.WriteLine(GetShortUsage(name, commandHelp));
-
-        return ExitCodes.ForUsageError(name);
+        return command.UsageErrorExitCode;
     }
 
     // The sections of a command's help that a short usage has
@@ -819,29 +823,6 @@ internal static class Help
 
         return string.Join(Environment.NewLine, shortUsage);
     }
-
-    private static string? GetCommandHelp(string? command) => command switch
-    {
-        "get" => Get,
-        "download" => Download,
-        "ls" => Ls,
-        "depots" => Depots,
-        "dd" => DepotDownloader,
-        "login" => Login,
-        "login list" => LoginList,
-        "login remove" => LoginRemove,
-        "track" => Track,
-        "workshop" => Workshop,
-        "workshop info" => WorkshopInfo,
-        "workshop search" => WorkshopSearch,
-        "workshop ls" => WorkshopLs,
-        "workshop get" => WorkshopGet,
-        "config" or "config output" => Config,
-        _ => null,
-    };
-
-    // The first argument, or the first two for a subcommand
-    private static string GetCommandName(string[] args) => ArgumentParser.GetCommandName(args[0], args[1..]);
 
     private static bool IsHelp(string arg) => arg is "-h" or "--help" or "-?" or "/?";
 }

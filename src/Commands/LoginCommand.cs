@@ -21,30 +21,24 @@ internal sealed record LoginArguments(string Command, LoginOptions Login, List<s
 internal static class LoginCommand
 {
     /// <summary>
-    /// Parses "[list | remove] [options] [usernames]" after "login". Returns null after printing an error.
+    /// Parses "[list | remove] [options] [usernames]" after "login".
     /// </summary>
-    public static LoginArguments? ParseArguments(string[] args)
+    public static LoginArguments ParseArguments(string[] args)
     {
-        var command = ArgumentParser.GetCommandName("login", args);
+        var command = CommandTable.GetCommandName("login", args);
         var parsed = ArgumentParser.Parse(command, command == "login" ? args : args[1..]);
-
-        if (parsed == null)
-        {
-            return null;
-        }
 
         if (command == "login remove")
         {
             if (parsed.Positionals.Count == 0 || parsed.Patterns.Count > 0)
             {
-                Log.Error($"login remove takes usernames, like: {Help.ExeName} login remove <name>. \"{Help.ExeName} login list\" lists them. {Help.UsageHint(command)}");
-                return null;
+                throw new UsageException($"login remove takes usernames, like: {Help.ExeName} login remove <name>. \"{Help.ExeName} login list\" lists them. {Help.UsageHint(command)}");
             }
 
             return new LoginArguments(command, new LoginOptions(), parsed.Positionals);
         }
 
-        var subcommands = ArgumentParser.GetSubcommands("login");
+        var subcommands = CommandTable.GetSubcommands("login");
 
         // A mistyped subcommand, or a lone username given without --username that looks like one
         var startsWithPositional = command == "login" && args.Length > 0 && parsed.Positionals.Count > 0 && args[0] == parsed.Positionals[0];
@@ -53,20 +47,15 @@ internal static class LoginCommand
         if (subcommand != null)
         {
             var asUsername = parsed.Positionals.Count == 1 ? $" To log in as {args[0]}: {Help.ExeName} login --username {args[0]}." : "";
-            Log.Error($"Unknown login subcommand \"{args[0]}\". Did you mean {subcommand}? Expected {string.Join(", ", subcommands)}.{asUsername} {Help.UsageHint(command)}");
-            return null;
+            throw new UsageException($"Unknown login subcommand \"{args[0]}\". Did you mean {subcommand}? Expected {string.Join(", ", subcommands)}.{asUsername} {Help.UsageHint(command)}");
         }
 
         if (command == "login" && parsed.Positionals.Count == 1 && parsed.Patterns.Count == 0)
         {
-            Log.Error($"login takes the name as --username, like: {Help.ExeName} login --username {parsed.Positionals[0]}. {Help.UsageHint(command)}");
-            return null;
+            throw new UsageException($"login takes the name as --username, like: {Help.ExeName} login --username {parsed.Positionals[0]}. {Help.UsageHint(command)}");
         }
 
-        if (!ArgumentParser.NoPositionals(parsed, command))
-        {
-            return null;
-        }
+        ArgumentParser.NoPositionals(parsed, command);
 
         return new LoginArguments(command, LoginOptions.From(parsed.Options), []);
     }
