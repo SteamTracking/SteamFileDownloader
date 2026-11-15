@@ -115,7 +115,7 @@ internal static class DepotsCommand
 
         if (!AppInfo.GetDepots(depots).Any())
         {
-            Log.Error($"App {appID} has no depots. DLC and tools often keep their files in depots of their parent app.");
+            Log.Error(AppInfo.DescribeNoDepots(appID));
             return false;
         }
 

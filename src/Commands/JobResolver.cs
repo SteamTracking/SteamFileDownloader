@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using SteamKit2;
 
 namespace SteamFileDownloader;
@@ -107,6 +108,13 @@ internal static class JobResolver
                 }
 
                 failures.Add($"{target.Source} (no app info for {target.AppID})");
+                continue;
+            }
+
+            if (target.DepotID == null && !AppInfo.GetDepots(depots).Any())
+            {
+                Log.Error(AppInfo.DescribeNoDepots(target.AppID));
+                failures.Add($"{target.Source} (no depots)");
                 continue;
             }
 

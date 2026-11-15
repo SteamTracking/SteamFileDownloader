@@ -140,7 +140,7 @@ internal static class TrackCommand
 
         if (!AppInfo.GetDepots(depots).Any())
         {
-            Log.Error($"App {appID} has no depots.");
+            Log.Error(AppInfo.DescribeNoDepots(appID));
             return ExitCodes.Failed;
         }
 

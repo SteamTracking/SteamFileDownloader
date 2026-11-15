@@ -81,7 +81,7 @@ internal static class DownloadCommand
 
         if (!AppInfo.GetDepots(depots).Any())
         {
-            Log.Error($"App {appID} has no depots. DLC and tools often keep their files in depots of their parent app.");
+            Log.Error(AppInfo.DescribeNoDepots(appID));
             run.Failures.Add($"{source} (no depots)");
             return;
         }

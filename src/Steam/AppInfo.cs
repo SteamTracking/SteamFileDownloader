@@ -12,6 +12,11 @@ namespace SteamFileDownloader;
 internal static class AppInfo
 {
     /// <summary>
+    /// The error for an app whose "depots" section lists no depots.
+    /// </summary>
+    public static string DescribeNoDepots(uint appID) => $"App {appID} has no depots. DLC and tools often keep their files in depots of their parent app.";
+
+    /// <summary>
     /// The depots in an app's "depots" section, skipping its other keys like "branches".
     /// </summary>
     public static IEnumerable<(uint ID, KeyValue Depot)> GetDepots(KeyValue depots)

@@ -112,6 +112,16 @@ public class JobResolverTests
     }
 
     [Test]
+    public async Task WholeAppWithoutDepotsFailsBeforeTheBranchCheck()
+    {
+        var appInfos = new Dictionary<uint, KeyValue> { [AppID] = Parse("\"appinfo\" { \"depots\" { \"branches\" { \"public\" { } } } }") };
+        var resolution = Resolve(MakeTarget(null, null, "nosuchbranch"), appInfos);
+
+        await Assert.That(resolution.Targets).IsEmpty();
+        await Assert.That(resolution.Failures).IsEquivalentTo(["app 1000 (no depots)"]);
+    }
+
+    [Test]
     public async Task UnknownBranchFails()
     {
         var resolution = Resolve(MakeTarget(null, null, "missing"));
