@@ -42,8 +42,8 @@ internal sealed class ManifestFetcher(IManifestSource source, DepotCache depotCa
     }
 
     // Where a job's manifest came from, if it got one, and the problem it shares with the other jobs of its depot, which
-    // is reported once for all of them
-    private readonly record struct ManifestResult(ManifestSource Source, string? SharedProblem = null, bool NoAccess = false);
+    // is reported once for all of them. FileCount is the manifest's entries before unwanted files are removed
+    private readonly record struct ManifestResult(ManifestSource Source, string? SharedProblem = null, bool NoAccess = false, int FileCount = 0);
 
     private readonly record struct DepotKeyResult(byte[]? Key, bool NoAccess, string? Problem);
 
@@ -57,7 +57,11 @@ internal sealed class ManifestFetcher(IManifestSource source, DepotCache depotCa
 
     private readonly Dictionary<(uint DepotID, uint KeyAppID), Task<DepotKeyResult>> DepotKeys = [];
 
-    public async Task GetManifestsAsync(IReadOnlyList<ManifestJob> jobs)
+    /// <summary>
+    /// Gets the manifests of the jobs. With a filter, each manifest keeps only the files the filter can use once it is
+    /// saved, since thousands of whole manifests don't fit in memory.
+    /// </summary>
+    public async Task GetManifestsAsync(IReadOnlyList<ManifestJob> jobs, FileFilter? filter = null)
     {
         if (jobs.Count == 0)
         {
@@ -71,7 +75,7 @@ internal sealed class ManifestFetcher(IManifestSource source, DepotCache depotCa
 
         var options = new ParallelOptions { MaxDegreeOfParallelism = ManifestConcurrency, CancellationToken = cancellationToken };
 
-        await Parallel.ForAsync(0, jobs.Count, options, async (i, _) => results[i] = await GetManifestAsync(jobs[i]));
+        await Parallel.ForAsync(0, jobs.Count, options, async (i, _) => results[i] = await GetManifestAsync(jobs[i], filter));
 
         if (jobs.Count <= MaxManifestLines)
         {
@@ -81,7 +85,7 @@ internal sealed class ManifestFetcher(IManifestSource source, DepotCache depotCa
                 {
                     var manifest = jobs[i].Manifest!;
                     var action = results[i].Source == ManifestSource.Saved ? "Read the saved manifest" : "Downloaded the manifest";
-                    Log.Info($"[{jobs[i]}] {action}: {manifest.CreationTime:yyyy-MM-dd HH:mm:ss}, {manifest.Files?.Count} files.");
+                    Log.Info($"[{jobs[i]}] {action}: {manifest.CreationTime:yyyy-MM-dd HH:mm:ss}, {results[i].FileCount} files.");
                 }
             }
         }
@@ -122,11 +126,25 @@ internal sealed class ManifestFetcher(IManifestSource source, DepotCache depotCa
         }
     }
 
-    private async Task<ManifestResult> GetManifestAsync(ManifestJob job)
+    private async Task<ManifestResult> GetManifestAsync(ManifestJob job, FileFilter? filter)
     {
         try
         {
-            return await GetManifestFromSourceAsync(job);
+            var result = await GetManifestFromSourceAsync(job);
+
+            if (job.Manifest == null)
+            {
+                return result;
+            }
+
+            var fileCount = job.Manifest.Files?.Count ?? 0;
+
+            if (filter != null)
+            {
+                job.RemoveUnwantedFiles(filter);
+            }
+
+            return result with { FileCount = fileCount };
         }
         catch (Exception e) when (IsError(e))
         {

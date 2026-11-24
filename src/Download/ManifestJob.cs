@@ -128,6 +128,17 @@ internal sealed class ManifestJob
         }
     }
 
+    /// <summary>
+    /// Removes the directories and the files that the filter has no use for, to free their memory.
+    /// </summary>
+    public void RemoveUnwantedFiles(FileFilter filter)
+    {
+        var files = Manifest!.Files!;
+
+        files.RemoveAll(file => IsDirectory(file) || !filter.IsWanted(FileFilter.NormalizePath(file.FileName)));
+        files.TrimExcess();
+    }
+
     // A link to a directory has the directory flag too, but is written like any other link
     private static bool IsDirectory(DepotManifest.FileData file) => (file.Flags & EDepotFileFlag.Directory) != 0 && (file.Flags & EDepotFileFlag.Symlink) == 0;
 

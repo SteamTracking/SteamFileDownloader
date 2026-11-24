@@ -60,6 +60,20 @@ internal sealed partial class FileFilter
         return matching ?? [];
     }
 
+    /// <summary>
+    /// Whether a file can be of use to the patterns: one matches it, a VPK pattern reads its entries, or it is a VPK
+    /// archive, which a directory file of another manifest may need.
+    /// </summary>
+    public bool IsWanted(string path)
+    {
+        if (GetMatchingPatterns(path).Count > 0 || GetVpkPatterns(path).Count > 0)
+        {
+            return true;
+        }
+
+        return VpkPatterns.Count > 0 && path.EndsWith(".vpk", StringComparison.OrdinalIgnoreCase);
+    }
+
     [JsonSourceGenerationOptions(AllowTrailingCommas = true, ReadCommentHandling = JsonCommentHandling.Skip)]
     [JsonSerializable(typeof(Dictionary<uint, List<string>>))]
     private sealed partial class FilesJsonContext : JsonSerializerContext

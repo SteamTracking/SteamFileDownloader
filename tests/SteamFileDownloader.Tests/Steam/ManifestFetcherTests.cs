@@ -99,6 +99,63 @@ public class ManifestFetcherTests
     }
 
     [Test]
+    public async Task FilterKeepsWantedFilesAndTheSavedManifestKeepsAll()
+    {
+        using var temp = new TempDirectory();
+        var source = new FakeManifestSource
+        {
+            Download = static (_, job) => new DepotManifest
+            {
+                DepotID = job.DepotID,
+                ManifestGID = job.ManifestID,
+                CreationTime = TestManifests.CreationTime,
+                Files =
+                [
+                    TestManifests.Directory("game"),
+                    TestManifests.File(@"game\bin\a.dll", [1]),
+                    TestManifests.File(@"game\readme.txt", [2]),
+                    TestManifests.File(@"game\pak01_dir.vpk", [3]),
+                    TestManifests.File(@"game\pak01_000.vpk", [4]),
+                    TestManifests.File(@"other\pak02_000.vpk", [5]),
+                ],
+            },
+        };
+        var job = Job(temp);
+        var filter = FileFilter.FromPatterns(["a.dll", "game/pak01_dir.vpk:regex:"]);
+
+        await CreateFetcher(source, temp).GetManifestsAsync([job], filter);
+
+        await Assert.That(job.Manifest!.Files!.Select(static f => f.FileName))
+            .IsEquivalentTo([@"game\bin\a.dll", @"game\pak01_dir.vpk", @"game\pak01_000.vpk", @"other\pak02_000.vpk"]);
+
+        var savedJob = Job(temp);
+        await CreateFetcher(new FakeManifestSource(), temp).GetManifestsAsync([savedJob]);
+
+        await Assert.That(savedJob.Manifest!.Files!).Count().IsEqualTo(6);
+    }
+
+    [Test]
+    public async Task FilterWithoutVpkPatternsDropsArchives()
+    {
+        using var temp = new TempDirectory();
+        var source = new FakeManifestSource
+        {
+            Download = static (_, job) => new DepotManifest
+            {
+                DepotID = job.DepotID,
+                ManifestGID = job.ManifestID,
+                CreationTime = TestManifests.CreationTime,
+                Files = [TestManifests.File("a.dll", [1]), TestManifests.File("pak01_000.vpk", [2])],
+            },
+        };
+        var job = Job(temp);
+
+        await CreateFetcher(source, temp).GetManifestsAsync([job], FileFilter.FromPatterns(["a.dll"]));
+
+        await Assert.That(job.Manifest!.Files!.Select(static f => f.FileName)).IsEquivalentTo(["a.dll"]);
+    }
+
+    [Test]
     public async Task JobsOfOneDepotRequestTheKeyOnce()
     {
         using var temp = new TempDirectory();

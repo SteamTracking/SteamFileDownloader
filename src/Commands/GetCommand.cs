@@ -254,7 +254,10 @@ internal static class GetCommand
             return run.AbortExitCode.Value;
         }
 
-        await session.Manifests.GetManifestsAsync(run.Jobs);
+        // Without patterns every file and directory is wanted
+        var wantsAll = run.Filter.Patterns.Count == 0 && run.Filter.VpkPatterns.Count == 0;
+
+        await session.Manifests.GetManifestsAsync(run.Jobs, wantsAll ? null : run.Filter);
 
         // Depots of all targets that the account can't access are expected, errors are not
         foreach (var job in run.Jobs.Where(static j => j.Manifest == null && !(j.Optional && j.NoAccess)))
