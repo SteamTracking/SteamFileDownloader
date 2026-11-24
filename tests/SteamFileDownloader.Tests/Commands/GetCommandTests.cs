@@ -23,6 +23,8 @@ public class GetCommandTests
     [Test]
     [Arguments("2347771:x", "server.dll", "Invalid target \"2347771:x\"")]
     [Arguments("2347771", "regex:(", "Invalid regex pattern")]
+    [Arguments("2347771", "glob:*.dll", "Unknown pattern prefix \"glob:\"")]
+    [Arguments("2347771", "pak01_dir.vpk:glob:*.txt", "Unknown pattern prefix \"glob:\"")]
     public async Task InvalidTargetOrPatternIsAUsageErrorBeforeLoggingIn(string target, string pattern, string error)
     {
         var arguments = new DepotArguments("get", new DepotOptions(730) { Login = new LoginOptions(Anonymous: true) }, [target], [pattern]);

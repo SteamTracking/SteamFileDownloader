@@ -188,6 +188,14 @@ internal sealed partial class FileFilter
         }
         else
         {
+            // Only regex: is a prefix, so a word and a colon is a mistyped or invented one like glob:
+            var prefix = PrefixRegex().Match(pattern);
+
+            if (prefix.Success)
+            {
+                throw new ArgumentException($"Unknown pattern prefix \"{prefix.Value}\" in \"{pattern}\". Patterns are paths, globs with * ? ** or regex:<pattern>.");
+            }
+
             pattern = NormalizePath(pattern);
 
             var start = pattern.Contains('/', StringComparison.Ordinal) ? "^" : "(^|/)";
@@ -196,6 +204,10 @@ internal sealed partial class FileFilter
 
         return new Regex(regex, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
+
+    // Two letters at least, so a drive letter like C: is left to the Windows path warning
+    [GeneratedRegex(@"^[A-Za-z]{2,}:")]
+    private static partial Regex PrefixRegex();
 
     [GeneratedRegex(@"(\*\*/)+")]
     private static partial Regex RepeatedGlobstarRegex();

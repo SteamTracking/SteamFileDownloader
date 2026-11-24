@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using SteamKit2;
@@ -202,9 +203,14 @@ internal static class GetCommand
         {
             filter = FileFilter.FromPatterns(patterns);
         }
-        catch (ArgumentException e)
+        catch (RegexParseException e)
         {
             Log.Error($"Invalid regex pattern: {e.Message}");
+            return ExitCodes.ForUsageError(command);
+        }
+        catch (ArgumentException e)
+        {
+            Log.Error(e.Message);
             return ExitCodes.ForUsageError(command);
         }
 
